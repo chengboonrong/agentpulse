@@ -36,15 +36,15 @@ and `agentpulse --dump` prints a snapshot as JSON with no window.
 | `agentpulse-cost` | Price table (TOML) and per-response cost | core |
 | `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution, open files of a process | core, libc |
 | `agentpulse-storage` | SQLite schema, migrations, idempotent ingestion, totals | core, rusqlite |
-| `agentpulse-animation` | Original cat sprites and the animation state machine | core |
+| `agentpulse-animation` | Original cat sprites, coats and eye colours (`coats.rs`), and the animation state machine | core |
 | `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion; whole-Mac GPU through IOKit | objc2 |
 | `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, the `agentpulse` binary | all of the above, gpui |
 
 The handoff brief proposed nine crates. One is not created yet because it would be
 empty: `agentpulse-ui`. The UI lives in the app crate: `ui.rs` holds the window, Overview
-and Sessions, and `ui/charts.rs` the Usage screen and the session detail. Charts are drawn
-by hand (divs for bars that carry a tooltip, `canvas` for lines and dense series); there is
-no chart library.
+and Sessions, `ui/charts.rs` the Usage screen and the session detail, and `ui/cats.rs` the
+Cats screen. Charts are drawn by hand (divs for bars that carry a tooltip, `canvas` for lines
+and dense series); there is no chart library.
 
 Outside the Rust workspace, `macos/` holds the Swift widget extension and `scripts/bundle.sh`
 assembles and signs `AgentPulse.app`.
@@ -145,6 +145,14 @@ through a read-only sandbox exception. An app group container was the first choi
 abandoned: without a provisioning profile macOS 27 denies the unsandboxed app access to it
 with no prompt. `macos/README.md` has the details and the App Store caveat.
 
+### Coats are a palette plus a per-pixel pattern
+A `Look` (coat and eye colour) paints a sprite frame into RGBA. Flat coats only swap the
+palette; patterned ones recolour body, shade and belly pixels from the pixel's position and
+the frame's body box, deterministically, so every frame of every state works and nothing
+flickers. Each agent's look is kept in `settings.json` in the data directory (`settings.rs`),
+shared by the window and the widget exporter. The widget payload stays one colour per
+character: pattern colours get extra characters in the rows.
+
 ### Animation follows telemetry, not a clock
 A cat's state comes from session status. Its speed comes from a smoothed rolling token
 rate; a high token rate or, while Active, a busy process tree makes it sprint. Timers run only while something is animating and the window is active; with Reduce
@@ -160,6 +168,10 @@ Override the directory with `AGENTPULSE_DATA_DIR`.
 | `sessions` | id, provider, project path, model, first and last activity, estimated active time, last-error flag, Claude Code's own cost record (USD, as-of time, unknown-model flag) |
 | `usage_events` | one row per API response: model, time, five token buckets, estimated cost |
 | `ingest_files` | byte offset per transcript file |
+
+Next to it, `settings.json` holds each agent's cat coat and eye colour (written on change,
+through a temp file and rename). A missing file means the defaults; a corrupt file or an
+unknown id falls back to the default with a warning.
 
 Schema changes are numbered migrations tracked in `PRAGMA user_version`. A database from a
 newer AgentPulse is refused, not downgraded. Migration 2 added the recorded-cost columns and

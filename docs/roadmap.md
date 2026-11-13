@@ -86,6 +86,30 @@ not been measured.
 - Not verified by a person: the menu-bar icon's actual pixels in the menu bar, a real click
   on it, closing the window and reopening it from the menu or Dock, and the widget placed
   on a desktop. No screen capture was available and synthetic clicks were ruled out.
+- Done: coats. Each agent's cat can wear one of 47 coats (the 46 of the coat catalogue in
+  seven groups, plus "Cloud", the OpenCode default) and one of 7 eye colours or the coat's
+  own, picked on a Cats screen (agent switch, live sit and run preview, grouped swatches).
+  Saved to `settings.json` in the data directory on every change; no file renders exactly
+  as before (tested per pixel against the old palettes; overview captured with animation
+  off and its cat column compared pixel for pixel with the previous build). Patterns are
+  computed per pixel from the sprite position and the frame's body box, the same maths as
+  the catalogue's prototype renderer: all 46 coats' sitting and four running frames and the
+  7 eye swatches match the catalogue PNGs exactly (one-off comparison), and every frame of
+  every state is pinned by checksums from the prototype. The widget's cat wears the coat of
+  the agent behind the overall cat (Claude Code's when none). That is a deliberate change:
+  the widget's cat used to be ginger always, so with default settings a Codex-driven widget
+  now shows Codex's default dark cat. Patterns are baked into the
+  payload rows as extra characters, so the Swift side is unchanged (rendered once through
+  `widget-preview` with the Galaxy coat). The menu-bar cat stays a template image.
+- Built, not verified: keyboard use of the Cats screen (Tab / Shift-Tab between controls,
+  Enter or Space to pick; focus ring) and the VoiceOver labels (tabs, radio buttons named
+  after each coat and eye colour, through GPUI's AccessKit support). No keystrokes or screen
+  reader were driven. Mouse clicks on the screen were not exercised either; the screenshots
+  are rendered with a settings file written beforehand. Enter and Space need no handler of
+  our own: GPUI turns them into a click on the focused element (`gpui/src/elements/div.rs`,
+  keyboard activation, with its own tests).
+- Patterns use sprite coordinates, so when the body moves a row between run frames the
+  patches stay put and the body moves under them, as in the catalogue.
 - Menu-bar cost: a still pose adds nothing measurable. The menu-bar cat is capped at 5 frames
   a second. With the sprint forced on and the window open but inactive, the whole app used
   2.7% of one core at 5 fps against 3.5 to 3.7% at 10 fps. That is still above the 2% goal;

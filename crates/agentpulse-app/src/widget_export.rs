@@ -10,7 +10,7 @@
 //! `scripts/bundle.sh`. The file holds display strings and counts only: no
 //! paths, session ids, prompts or anything else not listed in [`Payload`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -19,12 +19,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use agentpulse_animation::{CPU_SPRINT_ON, CatState, SPRINT_ON, frames, palette};
+use agentpulse_animation::{CPU_SPRINT_ON, CatState, Look, SPRINT_ON, frames};
 use agentpulse_core::{Provider, Reading, SessionStatus, TokenUsage};
 use serde::Serialize;
 
 use crate::collector::Snapshot;
 use crate::format::{self, DASH};
+use crate::settings::{CatSettings, Looks};
 
 pub const VERSION: u32 = 1;
 pub const FILE_NAME: &str = "widget.json";
@@ -80,7 +81,9 @@ pub struct Cat {
     pub state: &'static str,
     pub width: usize,
     pub height: usize,
-    pub rows: Vec<&'static str>,
+    /// One char per pixel: the sprite's own chars, and for pixels a coat
+    /// pattern recolours, extra chars (never `.` or the legend letters).
+    pub rows: Vec<String>,
     /// Sprite char to RGBA, for the chars the rows use (clear pixels excluded).
     pub palette: BTreeMap<String, [u8; 4]>,
 }
@@ -125,22 +128,53 @@ fn cat_name(s: CatState) -> &'static str {
     }
 }
 
-fn cat(state: CatState) -> Cat {
+/// The agent whose session decides the overall cat: the first session with
+/// the status `overall_cat` follows; Claude Code when there is none.
+fn overall_provider(snap: &Snapshot) -> Provider {
+    let (status, ..) = crate::menubar::cat_input(Some(snap), false);
+    snap.sessions
+        .iter()
+        .find(|s| Some(s.status) == status)
+        .map_or(Provider::ClaudeCode, |s| s.provider)
+}
+
+/// The first frame in `look`. Pattern colours are baked in as extra chars, so
+/// the widget keeps drawing one flat colour per char.
+fn cat(state: CatState, look: Look) -> Cat {
     let sprite = &frames(state)[0];
-    let pal = palette(Provider::ClaudeCode);
+    let pal = look.palette();
+    let painted = look.paint(sprite);
+    let mut spare = ('A'..='Z').chain('0'..='9').chain('\u{4E00}'..='\u{9FFF}');
+    let mut extra: HashMap<[u8; 4], char> = HashMap::new();
     let mut colors = BTreeMap::new();
-    for (y, row) in sprite.rows().iter().enumerate() {
-        for (x, c) in row.chars().enumerate() {
-            if let Some(rgba) = pal.color(sprite.ink(x, y)) {
-                colors.insert(c.to_string(), rgba);
-            }
-        }
-    }
+    let rows = sprite
+        .rows()
+        .iter()
+        .enumerate()
+        .map(|(y, row)| {
+            row.chars()
+                .enumerate()
+                .map(|(x, c)| match painted[y * sprite.width() + x] {
+                    None => c,
+                    Some(rgba) if pal.color(sprite.ink(x, y)) == Some(rgba) => {
+                        colors.insert(c.to_string(), rgba);
+                        c
+                    }
+                    Some(rgba) => *extra.entry(rgba).or_insert_with(|| {
+                        // 32x16 pixels never outrun the spare chars.
+                        let c = spare.next().expect("spare char");
+                        colors.insert(c.to_string(), rgba);
+                        c
+                    }),
+                })
+                .collect()
+        })
+        .collect();
     Cat {
         state: cat_name(state),
         width: sprite.width(),
         height: sprite.height(),
-        rows: sprite.rows().to_vec(),
+        rows,
         palette: colors,
     }
 }
@@ -166,7 +200,7 @@ pub fn placeholder() -> Payload {
         codex_limits: None,
         detail: None,
     };
-    let mut p = payload(&empty, false);
+    let mut p = payload(&empty, false, &Looks::default());
     p.today.tokens = DASH.into();
     p.today.cost_note = String::new();
     p.output_rate = DASH.into();
@@ -179,7 +213,7 @@ pub fn print_placeholder() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn payload(snap: &Snapshot, stopped: bool) -> Payload {
+pub fn payload(snap: &Snapshot, stopped: bool, looks: &Looks) -> Payload {
     let count = |st| snap.sessions.iter().filter(|s| s.status == st).count();
     Payload {
         version: VERSION,
@@ -201,7 +235,7 @@ pub fn payload(snap: &Snapshot, stopped: bool) -> Payload {
             unpriced: snap.today_unpriced_events,
         },
         output_rate: format!("{:.1} tok/s", snap.output_rate),
-        cat: cat(overall_cat(snap)),
+        cat: cat(overall_cat(snap), looks.get(overall_provider(snap))),
         sessions: snap
             .sessions
             .iter()
@@ -240,7 +274,8 @@ fn glance(p: &Payload) -> impl PartialEq + '_ {
         .map(|s| (s.project.as_str(), s.status))
         .collect();
     sessions.sort_unstable();
-    (&p.agents, sessions, p.cat.state, p.stopped)
+    // The whole cat: its pose, and its coat when the user picks another.
+    (&p.agents, sessions, &p.cat, p.stopped)
 }
 
 /// WidgetKit budgets reloads, so ask at most once per [`RELOAD_EVERY`] and
@@ -275,6 +310,7 @@ pub fn write_atomic(dir: &Path, p: &Payload, writer: &str) -> std::io::Result<()
 /// Every write happens under this lock.
 struct Shared {
     dir: PathBuf,
+    cats: CatSettings,
     reload: Option<extern "C" fn()>,
     /// The payload on disk.
     last: Option<Payload>,
@@ -329,7 +365,7 @@ pub struct WidgetExporter {
 impl WidgetExporter {
     /// Some only when running from inside AgentPulse.app with widgets set up;
     /// None for `cargo run`.
-    pub fn detect() -> Option<Self> {
+    pub fn detect(cats: CatSettings) -> Option<Self> {
         let exe = std::env::current_exe().ok()?;
         let contents = exe.parent()?.parent()?;
         let app = contents.parent()?;
@@ -352,7 +388,7 @@ impl WidgetExporter {
                 "widget bridge not loaded; widget.json is written but reloads are not requested"
             );
         }
-        let exporter = Self::new(dir, reload);
+        let exporter = Self::new(dir, reload, cats);
         if AT_EXIT.set(exporter.shared.clone()).is_ok() {
             // SAFETY: registers a plain `extern "C" fn()` that only reads AT_EXIT.
             unsafe { libc::atexit(at_exit) };
@@ -361,10 +397,11 @@ impl WidgetExporter {
         Some(exporter)
     }
 
-    fn new(dir: PathBuf, reload: Option<extern "C" fn()>) -> Self {
+    fn new(dir: PathBuf, reload: Option<extern "C" fn()>, cats: CatSettings) -> Self {
         Self {
             shared: Arc::new(Mutex::new(Shared {
                 dir,
+                cats,
                 reload,
                 last: None,
                 quitting: false,
@@ -384,7 +421,7 @@ impl WidgetExporter {
         if sh.quitting {
             return;
         }
-        let new = payload(snap, false);
+        let new = payload(snap, false, &sh.cats.looks());
         let since = |t: &Option<(Instant, Payload)>| t.as_ref().map(|(at, _)| at.elapsed());
         let last = self.written.as_ref().map(|(_, p)| p);
         if should_write(last, &new, since(&self.written)) {
@@ -512,7 +549,7 @@ mod tests {
     #[test]
     fn sessions_are_live_capped_and_anonymous() {
         let s = snap(&[Active, Waiting, Idle, Idle, Idle, Completed], 0.0);
-        let p = payload(&s, false);
+        let p = payload(&s, false, &Looks::default());
         assert_eq!(p.sessions.len(), MAX_SESSIONS);
         assert_eq!(p.sessions[0].project, "p0");
         assert!(p.sessions.iter().all(|x| !x.project.contains('/')));
@@ -531,14 +568,15 @@ mod tests {
         let mut u = snap(&[Active], 0.0);
         u.today_cost_usd = Reading::Unavailable;
         u.sessions[0].project_path = None;
-        let p = payload(&u, false);
+        let p = payload(&u, false, &Looks::default());
         assert_eq!(p.today.cost, DASH);
         assert_eq!(p.sessions[0].project, DASH);
     }
 
     #[test]
     fn serializes_documented_fields() {
-        let v = serde_json::to_value(payload(&snap(&[Active], 28.84), false)).unwrap();
+        let v = serde_json::to_value(payload(&snap(&[Active], 28.84), false, &Looks::default()))
+            .unwrap();
         let keys = |v: &serde_json::Value| {
             let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
             k.sort();
@@ -591,7 +629,9 @@ mod tests {
 
     #[test]
     fn cat_follows_agent_mix() {
-        let state = |st: &[SessionStatus], rate| payload(&snap(st, rate), false).cat.state;
+        let state = |st: &[SessionStatus], rate| {
+            payload(&snap(st, rate), false, &Looks::default()).cat.state
+        };
         assert_eq!(state(&[], 0.0), "sleeping");
         assert_eq!(state(&[Completed, Failed], 99.0), "sleeping");
         assert_eq!(state(&[Idle], 0.0), "sitting");
@@ -607,7 +647,7 @@ mod tests {
 
     #[test]
     fn write_decision() {
-        let a = payload(&snap(&[Active], 0.0), false);
+        let a = payload(&snap(&[Active], 0.0), false, &Looks::default());
         let mut later = a.clone();
         later.generated_at_ms += 60_000;
         let mut changed = a.clone();
@@ -628,8 +668,8 @@ mod tests {
 
     #[test]
     fn reload_decision() {
-        let a = payload(&snap(&[Active], 0.0), false);
-        let other = |st: &[SessionStatus], rate| payload(&snap(st, rate), false);
+        let a = payload(&snap(&[Active], 0.0), false, &Looks::default());
+        let other = |st: &[SessionStatus], rate| payload(&snap(st, rate), false, &Looks::default());
         let every = RELOAD_EVERY.as_secs();
         assert_eq!(every, 15 * 60, "at most 4 requests an hour");
 
@@ -704,7 +744,7 @@ mod tests {
     #[test]
     fn writes_atomically_with_private_mode() {
         let dir = temp_dir("atomic");
-        let p = payload(&snap(&[Idle], 0.0), false);
+        let p = payload(&snap(&[Idle], 0.0), false, &Looks::default());
         write_atomic(&dir, &p, "collector").unwrap();
         let mut q = p.clone();
         q.stopped = true;
@@ -728,7 +768,7 @@ mod tests {
     #[test]
     fn stop_marks_last_payload_and_blocks_later_publishes() {
         let dir = temp_dir("stop");
-        let mut w = WidgetExporter::new(dir.clone(), None);
+        let mut w = WidgetExporter::new(dir.clone(), None, CatSettings::load(&dir));
         w.publish(&snap(&[Active], 0.0));
         assert_eq!(read(&dir)["stopped"], false);
 
@@ -749,10 +789,79 @@ mod tests {
     #[test]
     fn stop_before_any_publish_writes_stopped_placeholder() {
         let dir = temp_dir("stop-first");
-        WidgetExporter::new(dir.clone(), None).stop();
+        WidgetExporter::new(dir.clone(), None, CatSettings::load(&dir)).stop();
         let v = read(&dir);
         assert_eq!(v["stopped"], true);
         assert_eq!(v["agents"]["active"], 0);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cat_wears_the_coat_of_the_agent_behind_it() {
+        use agentpulse_animation::{find_coat, find_eye};
+        let calico = Look {
+            coat: find_coat("calico").unwrap(),
+            eye: find_eye("blue"),
+        };
+        let tuxedo = Look {
+            coat: find_coat("tuxedo").unwrap(),
+            eye: None,
+        };
+        let dir = temp_dir("coats");
+        let cats = CatSettings::load(&dir);
+        cats.set(Provider::ClaudeCode, calico);
+        cats.set(Provider::Codex, tuxedo);
+        let looks = cats.looks();
+        let mut s = snap(&[Idle, Active, Active], 0.0);
+        s.sessions[1].provider = Provider::Codex;
+        // The first Active session drives the running cat: Codex's.
+        let p = payload(&s, false, &looks);
+        assert_eq!(p.cat, cat(CatState::Running, tuxedo));
+        // Only Idle sessions: the Claude Code one sits.
+        s.sessions.truncate(1);
+        assert_eq!(
+            payload(&s, false, &looks).cat,
+            cat(CatState::Sitting, calico)
+        );
+        // No session: Claude Code's coat.
+        assert_eq!(
+            payload(&snap(&[], 0.0), false, &looks).cat,
+            cat(CatState::Sleeping, calico)
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn patterned_coat_is_baked_into_rows_and_palette() {
+        use agentpulse_animation::{COATS, find_coat};
+        for coat in COATS {
+            let look = Look { coat, eye: None };
+            for state in [CatState::Sitting, CatState::Sprinting] {
+                let c = cat(state, look);
+                let sprite = &frames(state)[0];
+                let decoded: Vec<Option<[u8; 4]>> = c
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.chars().map(|ch| c.palette.get(&ch.to_string()).copied()))
+                    .collect();
+                assert_eq!(decoded, look.paint(sprite), "{}", coat.id);
+                assert!(c.rows.iter().all(|r| r.chars().count() == c.width));
+                // The silhouette cuts out `e`: eyes keep their char.
+                for (row, orig) in c.rows.iter().zip(sprite.rows()) {
+                    for (a, b) in row.chars().zip(orig.chars()) {
+                        assert_eq!(a == 'e', b == 'e', "{}", coat.id);
+                    }
+                }
+            }
+        }
+        // A flat coat ships the sprite rows unchanged.
+        let ginger = Look {
+            coat: find_coat("ginger-tabby").unwrap(),
+            eye: None,
+        };
+        assert_eq!(
+            cat(CatState::Sitting, ginger).rows,
+            frames(CatState::Sitting)[0].rows()
+        );
     }
 }

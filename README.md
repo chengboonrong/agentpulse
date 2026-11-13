@@ -4,8 +4,9 @@ Watch your agents work. A native macOS app that shows what the AI coding agents 
 Mac are doing right now: tokens, estimated cost, runtime, CPU and memory, with a pixel cat
 per agent whose behaviour follows the agent's real activity.
 
-This is an early build: **Claude Code** and **Codex CLI** sessions, three screens (Overview,
-Sessions with a per-session detail, and Usage), a menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
+This is an early build: **Claude Code** and **Codex CLI** sessions, four screens (Overview,
+Sessions with a per-session detail, Usage and Cats), a menu-bar cat, and desktop widgets. See
+[docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 
 ![Overview, dark](docs/screenshots/dark/overview.png)
 
@@ -79,12 +80,16 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
   caching saved, today's sessions on a timeline, and Codex's plan limit. Clicking a session
   shows its context size per request and its cumulative estimated cost. Days with no stored
   data are drawn as such, never as zero.
+- Lets you dress each agent's cat: 47 coats (tabbies, calico, colourpoints, a galaxy…)
+  and 7 eye colours, on the Cats screen. The widget follows; the menu-bar cat stays monochrome.
 - Animates one cat per live agent: sitting when idle, looking around when waiting, running
   when working, and a cartoon-style sprint (spinning legs, speed lines, dust) under heavy
   output.
 - Lives in the menu bar: a cat that follows overall activity, the number of active agents,
   and a menu with today's figures. Closing the window keeps it running.
-- Small and medium desktop widgets (see [macos/README.md](macos/README.md)).
+- Small and medium desktop widgets (see [macos/README.md](macos/README.md)). The widget's cat
+  wears the coat of the agent it follows, so with default settings a widget driven by Codex
+  shows Codex's dark cat, not the ginger one.
 
 Everything stays on this machine. AgentPulse makes no network calls and never reads or
 stores prompt, response or file content. Values it cannot measure are shown as unavailable,
@@ -121,6 +126,7 @@ minutes.
 | Animation off | `AGENTPULSE_ANIMATION=off`, or macOS Reduce Motion |
 | Animation speed | `AGENTPULSE_ANIMATION_SPEED=1.5` (0.25 to 3) |
 | Log level | `AGENTPULSE_LOG=debug` |
+| Cat coats | The **Cats** screen: pick an agent, then a coat and an eye colour. Saved at once to `settings.json` in the data directory |
 
 ## Documentation
 

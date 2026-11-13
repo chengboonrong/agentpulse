@@ -2,6 +2,7 @@ mod collector;
 mod format;
 mod hub;
 mod menubar;
+mod settings;
 mod ui;
 mod widget_export;
 
@@ -75,9 +76,10 @@ fn open_collector() -> anyhow::Result<Collector> {
 fn gui(options: ui::Options) -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(1);
     let (detail_tx, detail_rx) = std::sync::mpsc::channel();
-    let widgets = widget_export::WidgetExporter::detect();
+    let cats = settings::CatSettings::load(&data_dir()?);
+    let widgets = widget_export::WidgetExporter::detect(cats.clone());
     collector::spawn(open_collector()?, tx, detail_rx, widgets)?;
-    ui::run(rx, detail_tx, options);
+    ui::run(rx, detail_tx, options, cats);
     Ok(())
 }
 
