@@ -34,7 +34,7 @@ as JSON with no window.
 | `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution | core, libc |
 | `agentpulse-storage` | SQLite schema, migrations, idempotent ingestion, totals | core, rusqlite |
 | `agentpulse-animation` | Original cat sprites and the animation state machine | core |
-| `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion | objc2 |
+| `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion; whole-Mac GPU through IOKit | objc2 |
 | `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, the `agentpulse` binary | all of the above, gpui |
 
 The handoff brief proposed nine crates. One is not created yet because it would be
@@ -131,7 +131,7 @@ with no prompt. `macos/README.md` has the details and the App Store caveat.
 
 ### Animation follows telemetry, not a clock
 A cat's state comes from session status. Its speed comes from a smoothed rolling token
-rate. Timers run only while something is animating and the window is active; with Reduce
+rate; a high token rate or, while Active, a busy process tree makes it sprint. Timers run only while something is animating and the window is active; with Reduce
 Motion or animation disabled the cat changes pose on state changes and nothing else runs.
 
 ## Storage
@@ -141,18 +141,21 @@ Override the directory with `AGENTPULSE_DATA_DIR`.
 
 | Table | Contents |
 |---|---|
-| `sessions` | id, provider, project path, model, first and last activity, estimated active time, last-error flag |
+| `sessions` | id, provider, project path, model, first and last activity, estimated active time, last-error flag, Claude Code's own cost record (USD, as-of time, unknown-model flag) |
 | `usage_events` | one row per API response: model, time, five token buckets, estimated cost |
 | `ingest_files` | byte offset per transcript file |
 
 Schema changes are numbered migrations tracked in `PRAGMA user_version`. A database from a
-newer AgentPulse is refused, not downgraded.
+newer AgentPulse is refused, not downgraded. Migration 2 added the recorded-cost columns and
+cleared `ingest_files`, so an existing install re-reads its recent transcripts once to pick up
+cost records it had already passed (usage upserts are idempotent; about 0.1 s). The recorded
+cost is upserted only by a record with a later as-of time, so re-reading changes nothing.
 
 Not stored: prompts, responses, tool inputs or outputs, file contents, API keys. The parser
 does not deserialize those fields at all.
 
 ## What is deliberately not built yet
 
-Codex and OpenCode adapters, resource history tables, retention pruning, GPU telemetry,
+Codex and OpenCode adapters, resource history tables, retention pruning, per-agent GPU,
 settings UI, alerts, a notarized distributable. Each is listed with its phase in
 `roadmap.md`.

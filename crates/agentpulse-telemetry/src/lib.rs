@@ -2,6 +2,8 @@
 //!
 //! Privacy: the structs below declare only metadata fields. Message content
 //! is never named, so serde skips it; no line text is ever stored or logged.
+//! Of `cost-state` records only the totals are read, plus how many models
+//! `modelUsage` names (its contents are skipped unread).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -10,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agentpulse_core::{
-    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, SessionDelta,
-    TokenUsage, UsageEvent,
+    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, RecordedCost,
+    SessionDelta, TokenUsage, UsageEvent,
 };
 use chrono::{DateTime, NaiveDateTime};
 use serde::Deserialize;
@@ -99,6 +101,19 @@ struct Record {
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
     message: Option<Message>,
+    // `cost-state` records only.
+    #[serde(rename = "totalCostUSD")]
+    total_cost_usd: Option<f64>,
+    #[serde(rename = "startTime")]
+    start_time: Option<f64>,
+    #[serde(rename = "totalDuration")]
+    total_duration: Option<f64>,
+    #[serde(rename = "hasUnknownModelCost")]
+    has_unknown_model_cost: Option<bool>,
+    /// Only whether it is empty matters: a record with no models is a $0
+    /// placeholder, not a figure.
+    #[serde(rename = "modelUsage")]
+    model_usage: Option<HashMap<String, serde::de::IgnoredAny>>,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +155,7 @@ struct Acc {
     /// (timestamp, model) of the newest main-file usage event.
     model: Option<(i64, String)>,
     last_error: Option<bool>,
+    recorded_cost: Option<RecordedCost>,
 }
 
 #[derive(Clone)]
@@ -201,6 +217,24 @@ fn to_event(r: &Record, session_id: &str, ts: i64) -> Option<UsageEvent> {
     })
 }
 
+/// Claude Code's own cumulative cost figure for the run that wrote it,
+/// current at start + duration. Records naming no model carry $0 whatever the
+/// session spent, so they are skipped rather than allowed to win.
+fn to_recorded_cost(r: &Record) -> Option<RecordedCost> {
+    if r.r#type.as_deref() != Some("cost-state")
+        || r.model_usage.as_ref().is_none_or(HashMap::is_empty)
+    {
+        return None;
+    }
+    let usd = r.total_cost_usd.filter(|v| v.is_finite() && *v >= 0.0)?;
+    let as_of = r.start_time? + r.total_duration?;
+    Some(RecordedCost {
+        usd,
+        as_of_ms: as_of.is_finite().then_some(as_of as i64)?,
+        unknown_models: r.has_unknown_model_cost == Some(true),
+    })
+}
+
 fn fold_line(
     line: &[u8],
     file_sid: &str,
@@ -238,6 +272,13 @@ fn fold_line(
     }
     if own && rec.r#type.as_deref() == Some("assistant") {
         acc.last_error = Some(rec.is_api_error == Some(true));
+    }
+    if let Some(c) = to_recorded_cost(&rec)
+        && acc
+            .recorded_cost
+            .is_none_or(|old| c.as_of_ms > old.as_of_ms)
+    {
+        acc.recorded_cost = Some(c);
     }
     let Some(ts) = ts else { return };
     let Some(ev) = to_event(&rec, &sid, ts) else {
@@ -470,6 +511,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     model: acc.model.map(|(_, m)| m),
                     timestamps_ms: acc.timestamps,
                     last_error: acc.last_error,
+                    recorded_cost: acc.recorded_cost,
                 }
             })
             .collect();

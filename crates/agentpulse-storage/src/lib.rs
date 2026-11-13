@@ -5,11 +5,14 @@ use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
-use agentpulse_core::{ACTIVE_GAP_MS, PollBatch, Provider, TokenUsage, UsageEvent, fold_active};
+use agentpulse_core::{
+    ACTIVE_GAP_MS, PollBatch, Provider, RecordedCost, TokenUsage, UsageEvent, fold_active,
+};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE sessions (
   provider TEXT NOT NULL, session_id TEXT NOT NULL,
   project_path TEXT, model TEXT,
@@ -29,7 +32,16 @@ CREATE TABLE usage_events (
 CREATE INDEX usage_events_session ON usage_events (provider, session_id);
 CREATE INDEX usage_events_ts ON usage_events (ts);
 CREATE TABLE ingest_files (path TEXT PRIMARY KEY, offset INTEGER NOT NULL);
-"];
+",
+    "
+ALTER TABLE sessions ADD COLUMN recorded_cost_usd REAL;
+ALTER TABLE sessions ADD COLUMN recorded_cost_as_of INTEGER;
+ALTER TABLE sessions ADD COLUMN recorded_cost_unknown_models INTEGER;
+-- Re-read transcripts so cost records already passed over are picked up.
+-- Everything else in them upserts idempotently.
+DELETE FROM ingest_files;
+",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRow {
@@ -45,6 +57,8 @@ pub struct SessionRow {
     pub cost_usd: f64,
     pub priced_events: u64,
     pub unpriced_events: u64,
+    /// The agent's own latest cost record for the session.
+    pub recorded_cost: Option<RecordedCost>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,10 +192,16 @@ impl Store {
                 .into_iter()
                 .flatten()
                 .min();
+            // An upsert, not a replace, so the recorded cost columns survive.
             tx.execute(
-                "INSERT OR REPLACE INTO sessions (provider, session_id, project_path, model,
+                "INSERT INTO sessions (provider, session_id, project_path, model,
                     started_at, last_activity_at, active_ms, last_error)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT (provider, session_id) DO UPDATE SET
+                    project_path = excluded.project_path, model = excluded.model,
+                    started_at = excluded.started_at,
+                    last_activity_at = excluded.last_activity_at,
+                    active_ms = excluded.active_ms, last_error = excluded.last_error",
                 params![
                     provider,
                     d.session_id,
@@ -193,6 +213,16 @@ impl Store {
                     d.last_error.unwrap_or(error),
                 ],
             )?;
+            // Records are cumulative: the one current at the later time wins.
+            if let Some(c) = &d.recorded_cost {
+                tx.execute(
+                    "UPDATE sessions SET recorded_cost_usd = ?3, recorded_cost_as_of = ?4,
+                        recorded_cost_unknown_models = ?5
+                     WHERE provider = ?1 AND session_id = ?2
+                       AND (recorded_cost_as_of IS NULL OR recorded_cost_as_of < ?4)",
+                    params![provider, d.session_id, c.usd, c.as_of_ms, c.unknown_models],
+                )?;
+            }
         }
 
         for f in &batch.files {
@@ -217,7 +247,8 @@ impl Store {
                     COALESCE(SUM(e.cache_write_5m), 0), COALESCE(SUM(e.cache_write_1h), 0),
                     COALESCE(SUM(e.cache_read), 0),
                     COALESCE(SUM(e.cost_usd), 0.0), COUNT(e.cost_usd),
-                    COUNT(e.event_id) - COUNT(e.cost_usd)
+                    COUNT(e.event_id) - COUNT(e.cost_usd),
+                    s.recorded_cost_usd, s.recorded_cost_as_of, s.recorded_cost_unknown_models
              FROM sessions s
              LEFT JOIN usage_events e
                ON e.provider = s.provider AND e.session_id = s.session_id
@@ -244,6 +275,14 @@ impl Store {
                 cost_usd: r.get(12)?,
                 priced_events: r.get::<_, i64>(13)? as u64,
                 unpriced_events: r.get::<_, i64>(14)? as u64,
+                recorded_cost: match (r.get(15)?, r.get(16)?) {
+                    (Some(usd), Some(as_of_ms)) => Some(RecordedCost {
+                        usd,
+                        as_of_ms,
+                        unknown_models: r.get::<_, Option<bool>>(17)?.unwrap_or(false),
+                    }),
+                    _ => None,
+                },
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -641,6 +680,84 @@ mod tests {
         );
 
         assert!(migrate(&mut conn, &[step1]).is_err());
+    }
+
+    fn cost(usd: f64, as_of_ms: i64, unknown_models: bool) -> RecordedCost {
+        RecordedCost {
+            usd,
+            as_of_ms,
+            unknown_models,
+        }
+    }
+
+    fn costed(session: &str, ts: &[i64], c: RecordedCost) -> SessionDelta {
+        SessionDelta {
+            recorded_cost: Some(c),
+            ..delta(session, ts)
+        }
+    }
+
+    #[test]
+    fn recorded_cost_keeps_the_latest_in_either_order_and_survives_updates() {
+        let early = batch(vec![], vec![costed("s", &[10], cost(1.5, 1_000, true))]);
+        let late = batch(vec![], vec![costed("s", &[20], cost(2.25, 2_000, false))]);
+        for order in [[&early, &late], [&late, &early]] {
+            let mut s = Store::open_in_memory().unwrap();
+            for b in order {
+                s.apply(b, &flat).unwrap();
+                s.apply(b, &flat).unwrap();
+            }
+            let r = &s.sessions_since(P, 0).unwrap()[0];
+            assert_eq!(r.recorded_cost, Some(cost(2.25, 2_000, false)));
+            // Later activity without a cost record leaves it in place.
+            s.apply(&batch(vec![], vec![delta("s", &[30])]), &flat)
+                .unwrap();
+            let r = &s.sessions_since(P, 0).unwrap()[0];
+            assert_eq!(r.recorded_cost, Some(cost(2.25, 2_000, false)));
+            assert_eq!(r.last_activity_at_ms, Some(30));
+        }
+        let mut s = Store::open_in_memory().unwrap();
+        s.apply(&batch(vec![], vec![delta("none", &[1])]), &flat)
+            .unwrap();
+        assert_eq!(s.sessions_since(P, 0).unwrap()[0].recorded_cost, None);
+    }
+
+    #[test]
+    fn recorded_cost_migration_keeps_data_and_rereads_files() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, &MIGRATIONS[..1]).unwrap();
+        let mut old = Store { conn };
+        old.apply(
+            &batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]),
+            &flat,
+        )
+        .unwrap();
+        assert_eq!(old.offsets().unwrap().len(), 1);
+
+        migrate(&mut old.conn, MIGRATIONS).unwrap();
+        assert_eq!(
+            old.conn
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert!(old.offsets().unwrap().is_empty(), "transcripts are re-read");
+        let r = &old.sessions_since(P, 0).unwrap()[0];
+        assert_eq!((r.tokens, r.recorded_cost), (tokens(3, 4), None));
+        // The re-read converges on the same rows, now with the cost record.
+        old.apply(
+            &batch(
+                vec![ev("e", "s", 1, tokens(3, 4))],
+                vec![costed("s", &[1], cost(0.5, 9, false))],
+            ),
+            &flat,
+        )
+        .unwrap();
+        let r = &old.sessions_since(P, 0).unwrap()[0];
+        assert_eq!(r.tokens, tokens(3, 4));
+        assert_eq!(r.active_ms, 0);
+        assert_eq!(r.recorded_cost, Some(cost(0.5, 9, false)));
+        assert_eq!(old.totals_since(0).unwrap().priced_events, 1);
     }
 
     #[test]

@@ -91,8 +91,8 @@ impl Hub {
 
     /// Applies the current snapshot and stopped flag to the cat, title and rows.
     fn follow(&mut self, cx: &mut Context<Self>) {
-        let (status, rate) = menubar::cat_input(self.snapshot.as_ref(), self.stopped);
-        self.cat.set_input(status, rate);
+        let (status, rate, cpu) = menubar::cat_input(self.snapshot.as_ref(), self.stopped);
+        self.cat.set_input(status, rate, cpu);
         self.refresh_text();
         // Starts a pending wind-up or skid now rather than at the next timer;
         // a still pose ends the timer.

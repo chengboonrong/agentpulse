@@ -13,10 +13,11 @@ Claude Code 2.1.322 on macOS 27.0.
 | Live state (busy / idle / waiting) | Measured | Agent's live-session registry |
 | Process CPU, resident memory | Measured | OS process table |
 | Cost | **Estimated** | Tokens × price table |
+| Claude Code's own session cost | Measured | The agent's `cost-state` record (per session, for the run that wrote it) |
 | Active execution time | **Estimated** | Gaps between records ≤ 60 s |
 | Status of a session with no registry entry | **Estimated** | Transcript age (30 s / 5 min) |
 | Token rate | Derived | 30 s rolling window over measured tokens |
-| GPU utilisation | **Unavailable** | Not collected in this build |
+| GPU utilisation, whole Mac | Measured | IORegistry `PerformanceStatistics` (undocumented key) |
 | Per-agent GPU | **Unavailable** | No documented macOS API |
 | Waiting time, idle time as separate totals | **Unavailable** | Only the current state is observable |
 
@@ -43,6 +44,31 @@ One JSON object per line. Fields read:
 | `message.usage.*` | Tokens, `speed`, `inference_geo` |
 
 No other field is deserialized. In particular `message.content` is never parsed into memory.
+
+### Claude Code's cost record
+Claude Code also appends `cost-state` records to the main transcript:
+`{"type":"cost-state","sessionId":…,"totalCostUSD":…,"startTime":…,"totalDuration":…,"hasUnknownModelCost":…,"modelUsage":{…}}`.
+Only `sessionId`, `totalCostUSD`, `startTime`, `totalDuration` and `hasUnknownModelCost` are
+read; `modelUsage` is not.
+
+- It is written at the end of the file when a session ends or saves its state, so a running
+  session often has none yet. On the development machine 123 of 127 transcripts had one.
+- Records are cumulative: a file can hold several with the same `startTime` and growing
+  `totalCostUSD` and `totalDuration`. The figure is current at `startTime + totalDuration`,
+  and the one with the latest such time wins, in storage as well as within one read.
+- It belongs to the session named in the record, like usage records.
+- A record whose `modelUsage` names no model carries $0 whatever the session spent (35 of
+  138 records on the development machine), so it is skipped rather than allowed to win.
+  Only the number of model names is read; their contents are skipped unread.
+- `startTime` is when that Claude Code process started, so the figure covers that run. No
+  local session had records from two runs, so whether a resumed run carries the earlier
+  total over is unverified.
+- It is per session, not per day, so it is shown beside each session's estimate and never
+  added to the "today" totals. `hasUnknownModelCost` means Claude Code had no price for a model the
+  session used, so its figure is short by that amount; the app marks it `+?`.
+- It is the agent's own number and is shown as such ("Claude Code $1.24"), next to
+  AgentPulse's estimate, which stays labelled as an estimate. A session without a record
+  shows "—".
 
 ### Token accounting
 - Claude Code writes one `assistant` record per content block, each repeating the response's
@@ -109,12 +135,31 @@ recorded Sonnet 5.5 figure gave the same value to seven decimal places.
   that maps them, as in Activity Monitor's per-process figure.
 - A process belongs to its nearest agent ancestor. Nested agents do not double count.
 
+## GPU
+
+- Whole Mac only: `IOServiceMatching("IOAccelerator")` → `IORegistryEntryCreateCFProperty(…,
+  "PerformanceStatistics")` → `"Device Utilization %"`, the highest across accelerators that
+  report it (a Mac with two GPUs lists both), rounded and clamped to 0–100.
+  Public IOKit calls, read once per collector tick (about 0.05 ms a read on the
+  development machine).
+- The key is **not a documented contract**. Any missing node, key or unexpected type yields
+  "unavailable", never 0.
+- It is the GPU use of every process on the Mac. It is never attributed to an agent, and it
+  says nothing about remote inference. The UI labels it "whole Mac".
+
 ## Token rate and animation
 
 Output tokens are recorded when a response completes, so they arrive in bursts. The rate
 shown is output tokens over the last 30 s divided by 30. The cat animator smooths it again
 (about 2 s time constant) and applies hysteresis before changing gait. Cumulative totals are
 never used as a speed.
+
+A cat also sprints when its agent is Active and its process tree is busy: the same 2 s
+smoothing of the tree's CPU, on above 100% of one core, off below 60%. Either the token
+latch or the CPU latch makes it sprint; the run speed still follows the token rate. CPU
+counts only while the agent is Active and restarts from zero each time, so an idle agent
+with a busy background process does not sprint, and an unavailable CPU reading never
+triggers it. The menu-bar cat uses the CPU summed over the Active agents that have a reading.
 
 ## Planned adapters
 

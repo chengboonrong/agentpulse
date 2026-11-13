@@ -93,6 +93,8 @@ cargo run --release -p agentpulse-app -- --dump    # one snapshot as JSON, no wi
 cargo run --release -p agentpulse-app -- --bench   # collector overhead over 20 s
 cargo test --workspace
 scripts/bundle.sh                                  # signed AgentPulse.app with widgets
+scripts/bundle.sh --dmg                            # the same, plus a DMG
+scripts/bundle.sh --release                        # Developer ID, notarized DMG (see macos/README.md)
 ```
 
 The first build fetches GPUI from the Zed repository at a pinned commit and takes a few

@@ -170,6 +170,20 @@ pub struct AgentSession {
     /// `None` for sessions with no verified local process.
     pub process: Option<ProcessIdentity>,
     pub resources: Reading<ResourceUsage>,
+    /// The agent's own cost figure for the session, covering the run that last
+    /// wrote it; Unavailable until the agent has written one.
+    pub recorded_cost: Reading<RecordedCost>,
+}
+
+/// A session's cost as the agent itself recorded it (Claude Code's
+/// `cost-state`), cumulative over the session's life.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RecordedCost {
+    pub usd: f64,
+    /// When the figure was current: start time plus total duration.
+    pub as_of_ms: i64,
+    /// The agent had no price for some model, so `usd` is short by that much.
+    pub unknown_models: bool,
 }
 
 impl AgentSession {
@@ -209,6 +223,8 @@ pub struct SessionDelta {
     /// Whether the newest main-conversation response seen was an API error.
     /// `None` if this poll saw no such response.
     pub last_error: Option<bool>,
+    /// The latest (largest `as_of_ms`) cost record seen in this poll.
+    pub recorded_cost: Option<RecordedCost>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -494,6 +510,7 @@ mod tests {
             output_rate: 0.0,
             process: None,
             resources: Reading::Unavailable,
+            recorded_cost: Reading::Unavailable,
         };
         assert_eq!(s.wall_ms(5_000), Some(4_000));
         s.ended_at_ms = Some(3_000);

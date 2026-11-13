@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use agentpulse_animation::{CatState, SPRINT_ON, frames, palette};
+use agentpulse_animation::{CPU_SPRINT_ON, CatState, SPRINT_ON, frames, palette};
 use agentpulse_core::{Provider, Reading, SessionStatus, TokenUsage};
 use serde::Serialize;
 
@@ -96,21 +96,20 @@ pub struct WidgetSession {
     pub cost: String,
 }
 
-/// The single cat the widget shows for the whole snapshot.
+/// The single cat the widget shows for the whole snapshot: the menu bar cat's
+/// inputs, judged on this one snapshot (a widget is a still, so no smoothing).
 pub fn overall_cat(snap: &Snapshot) -> CatState {
-    let has = |st| snap.sessions.iter().any(|s| s.status == st);
-    if has(SessionStatus::Active) {
-        if snap.output_rate > SPRINT_ON {
-            CatState::Sprinting
-        } else {
-            CatState::Running
+    match crate::menubar::cat_input(Some(snap), false) {
+        (Some(SessionStatus::Active), rate, cpu) => {
+            if rate > SPRINT_ON || cpu.is_some_and(|c| c > CPU_SPRINT_ON) {
+                CatState::Sprinting
+            } else {
+                CatState::Running
+            }
         }
-    } else if has(SessionStatus::Waiting) {
-        CatState::LookingAround
-    } else if has(SessionStatus::Idle) {
-        CatState::Sitting
-    } else {
-        CatState::Sleeping
+        (Some(SessionStatus::Waiting), ..) => CatState::LookingAround,
+        (Some(SessionStatus::Idle), ..) => CatState::Sitting,
+        _ => CatState::Sleeping,
     }
 }
 
@@ -160,6 +159,7 @@ pub fn placeholder() -> Payload {
         rate_history: vec![],
         agents_cpu_percent: None,
         agents_rss_bytes: None,
+        system_gpu_percent: Reading::Unavailable,
         indexing: false,
         errors: vec![],
     };
@@ -452,6 +452,7 @@ mod tests {
             output_rate: 0.0,
             process: None,
             resources: Reading::Unavailable,
+            recorded_cost: Reading::Unavailable,
         }
     }
 
@@ -473,12 +474,34 @@ mod tests {
             rate_history: vec![],
             agents_cpu_percent: None,
             agents_rss_bytes: None,
+            system_gpu_percent: Reading::Unavailable,
             indexing: false,
             errors: vec![],
         }
     }
 
     use SessionStatus::*;
+
+    #[test]
+    fn widget_cat_sprints_on_tokens_or_active_cpu() {
+        use agentpulse_core::ResourceUsage;
+        let busy = |s: &mut Snapshot, i: usize, c: f32| {
+            s.sessions[i].resources = Reading::Measured(ResourceUsage {
+                cpu_percent: Some(c),
+                rss_bytes: 1,
+                process_count: 1,
+            });
+        };
+        assert_eq!(overall_cat(&snap(&[Active], 0.0)), CatState::Running);
+        assert_eq!(overall_cat(&snap(&[Active], 40.0)), CatState::Sprinting);
+        let mut s = snap(&[Active, Idle], 0.0);
+        busy(&mut s, 0, 150.0);
+        assert_eq!(overall_cat(&s), CatState::Sprinting);
+        let mut s = snap(&[Idle, Waiting], 0.0);
+        busy(&mut s, 0, 500.0); // not Active: CPU does not count
+        assert_eq!(overall_cat(&s), CatState::LookingAround);
+        assert_eq!(overall_cat(&snap(&[], 0.0)), CatState::Sleeping);
+    }
 
     #[test]
     fn sessions_are_live_capped_and_anonymous() {

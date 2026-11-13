@@ -1,7 +1,9 @@
-//! macOS system APIs (AppKit) that GPUI does not expose. No GPUI dependency.
+//! macOS system APIs (AppKit, IOKit) that GPUI does not expose. No GPUI dependency.
 
+mod gpu;
 mod status_item;
 
+pub use gpu::gpu_utilization;
 pub use objc2::MainThreadMarker;
 pub use status_item::{MenuAction, MenuLine, StatusItem, WIDEST_TITLE};
 
