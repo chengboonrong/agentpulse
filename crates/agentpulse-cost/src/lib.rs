@@ -87,6 +87,31 @@ impl PriceBook {
         self.models.get(base)
     }
 
+    /// Net USD caching saved against sending the same tokens as input, at the
+    /// model's standard rates: what cache reads saved minus what cache writes
+    /// cost above input. None when unpriced.
+    // ponytail: standard rates only; long-context and fast requests differ.
+    pub fn net_cache_saving(
+        &self,
+        model: &str,
+        cache_read: u64,
+        cache_write_5m: u64,
+        cache_write_1h: u64,
+    ) -> Option<f64> {
+        let r = &self.lookup(model)?.rates;
+        Some(
+            (cache_read as f64 * (r.input - r.cache_read)
+                - cache_write_5m as f64 * (r.cache_write_5m - r.input)
+                - cache_write_1h as f64 * (r.cache_write_1h - r.input))
+                / 1e6,
+        )
+    }
+
+    /// Prompt size above which the model's long-context rates apply.
+    pub fn long_context_threshold(&self, model: &str) -> Option<u64> {
+        Some(self.lookup(model)?.long_context.as_ref()?.threshold)
+    }
+
     /// Estimated USD for one response, or None when the model or its service
     /// tier has no price.
     pub fn cost(&self, event: &UsageEvent) -> Option<f64> {
@@ -256,6 +281,37 @@ mod tests {
         e.fast = false;
         e.unknown_tier = true;
         assert_eq!(book.cost(&e), None);
+    }
+
+    #[test]
+    fn cache_saving_and_long_context_threshold() {
+        let book = PriceBook::builtin();
+        // 1M reads save input − read; writes cost their premium over input.
+        close(
+            book.net_cache_saving("claude-sonnet-5-5", 1_000_000, 0, 0),
+            2.0 - 0.1,
+        );
+        close(
+            book.net_cache_saving("claude-sonnet-5-5", 1_000_000, 1_000_000, 1_000_000),
+            (2.0 - 0.1) - (2.5 - 2.0) - (4.0 - 2.0),
+        );
+        // Writes alone are a net loss.
+        close(
+            book.net_cache_saving("claude-sonnet-5-5", 0, 2_000_000, 0),
+            -1.0,
+        );
+        close(
+            book.net_cache_saving("gpt-6.1-sol-20261101", 1_000_000, 0, 0),
+            2.0 - 0.1,
+        );
+        assert_eq!(book.net_cache_saving("gpt-5", 1, 1, 1), None);
+        assert_eq!(book.long_context_threshold("gpt-6.1-sol"), Some(272_000));
+        assert_eq!(
+            book.long_context_threshold("claude-haiku-5-5"),
+            Some(100_000)
+        );
+        assert_eq!(book.long_context_threshold("claude-sonnet-5-5"), None);
+        assert_eq!(book.long_context_threshold("gpt-5"), None);
     }
 
     #[test]

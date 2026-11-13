@@ -4,8 +4,8 @@ Watch your agents work. A native macOS app that shows what the AI coding agents 
 Mac are doing right now: tokens, estimated cost, runtime, CPU and memory, with a pixel cat
 per agent whose behaviour follows the agent's real activity.
 
-This is an early build: **Claude Code** and **Codex CLI** sessions, two screens (Overview and Sessions), a
-menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
+This is an early build: **Claude Code** and **Codex CLI** sessions, three screens (Overview,
+Sessions with a per-session detail, and Usage), a menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 
 ![Overview, dark](docs/screenshots/dark/overview.png)
 
@@ -75,6 +75,10 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
 - Shows status from the agent's own state: active, waiting, idle, completed, failed
   (Codex reports only active and idle while running).
 - Keeps history in a local SQLite database.
+- Usage screen: estimated cost per day for 30 days by agent, cache efficiency and what
+  caching saved, today's sessions on a timeline, and Codex's plan limit. Clicking a session
+  shows its context size per request and its cumulative estimated cost. Days with no stored
+  data are drawn as such, never as zero.
 - Animates one cat per live agent: sitting when idle, looking around when waiting, running
   when working, and a cartoon-style sprint (spinning legs, speed lines, dust) under heavy
   output.

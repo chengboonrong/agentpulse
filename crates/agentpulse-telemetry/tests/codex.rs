@@ -110,6 +110,17 @@ fn token_count(ts: &str) -> String {
     )
 }
 
+/// A `token_count` event with plan limits, as Codex 0.164 writes it.
+fn limits(ts: &str, used: f64, secondary: &str) -> String {
+    rec(
+        ts,
+        "event_msg",
+        &format!(
+            r#"{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":999999}}}},"rate_limits":{{"limit_id":"codex","limit_name":null,"primary":{{"used_percent":{used},"window_minutes":10080,"resets_at":1795138706}},"secondary":{secondary},"credits":{{"has_credits":false}},"plan_type":"prolite"}}}}"#
+        ),
+    )
+}
+
 fn write(path: &Path, lines: &[String]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut s = lines.join("\n");
@@ -733,4 +744,103 @@ fn backfill_stops_at_the_read_budget() {
         }
     }
     assert_eq!((events, polls), (3, 4));
+}
+
+#[test]
+fn plan_limits_take_the_newest_reading_and_survive_a_restart() {
+    let f = Fixture::new();
+    let (root, other) = (f.rollout(ROOT_T), f.rollout(OTHER_T));
+    write(
+        &root,
+        &[
+            meta(ROOT_T, ROOT_T),
+            limits(T3, 62.0, "null"),
+            // Written out of order: the earlier record does not win.
+            limits(T2, 50.0, "null"),
+        ],
+    );
+    write(
+        &other,
+        &[
+            meta(OTHER_T, OTHER_T),
+            limits(
+                T1,
+                10.0,
+                r#"{"used_percent":3.5,"window_minutes":300,"resets_at":1795000000}"#,
+            ),
+        ],
+    );
+    let mut a = f.adapter();
+    let b = a.poll(&HashMap::new(), 0).unwrap();
+    let l = b.rate_limits.clone().unwrap();
+    assert_eq!(l.ts_ms, 1_794_535_203_000);
+    assert_eq!(l.plan_type.as_deref(), Some("prolite"));
+    let p = l.primary.unwrap();
+    assert_eq!(
+        (p.used_percent, p.window_minutes, p.resets_at_s),
+        (62.0, Some(10_080), Some(1_795_138_706))
+    );
+    assert_eq!(l.secondary, None);
+    // The cumulative token figures beside the limits are never read as usage.
+    assert!(b.events.is_empty());
+
+    // A newer secondary window is read too.
+    append(
+        &other,
+        &[limits(
+            T4,
+            70.0,
+            r#"{"used_percent":3.5,"window_minutes":300,"resets_at":1795000000}"#,
+        )],
+    );
+    let l = a.poll(&offsets(&b), 0).unwrap().rate_limits.unwrap();
+    assert_eq!(l.primary.unwrap().used_percent, 70.0);
+    assert_eq!(l.secondary.unwrap().window_minutes, Some(300));
+
+    // After a restart, an open rollout read to its end is seeded, limits included.
+    let mut stored = offsets(&b);
+    stored.insert(
+        other.to_string_lossy().into_owned(),
+        fs::metadata(&other).unwrap().len(),
+    );
+    f.hold(3, &[&other]);
+    let mut a = f.adapter();
+    let b2 = a.poll(&stored, 0).unwrap();
+    assert!(b2.is_empty());
+    assert_eq!(b2.rate_limits.unwrap().primary.unwrap().used_percent, 70.0);
+}
+
+#[test]
+fn malformed_rate_limits_never_drop_the_line() {
+    let f = Fixture::new();
+    let bad_limits = rec(
+        T3,
+        "event_msg",
+        r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":"high"},"plan_type":7}}"#,
+    );
+    let bad_usage = usage(T4, "resp_1", ROOT_T, ROOT_T, "turn-1", 100, 0, 5)
+        .replace(r#""usage":"#, r#""rate_limits":["unexpected"],"usage":"#);
+    write(
+        &f.rollout(ROOT_T),
+        &[
+            meta(ROOT_T, ROOT_T),
+            turn(T1, "turn-1", "gpt-6.1-sol"),
+            limits(T2, 40.0, "null"),
+            bad_limits,
+            bad_usage,
+        ],
+    );
+    let b = f.adapter().poll(&HashMap::new(), 0).unwrap();
+    // The usage record still counts.
+    assert_eq!(b.events.len(), 1);
+    assert_eq!(b.events[0].usage.output, 5);
+    // Both lines' timestamps still count as activity.
+    let ts = &session(&b, ROOT_T).timestamps_ms;
+    assert!(ts.contains(&1_794_535_203_000) && ts.contains(&1_794_535_204_000));
+    // The last well-formed reading stands.
+    let l = b.rate_limits.unwrap();
+    assert_eq!(
+        (l.ts_ms, l.primary.unwrap().used_percent),
+        (1_794_535_202_000, 40.0)
+    );
 }

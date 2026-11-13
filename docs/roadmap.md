@@ -8,7 +8,7 @@ exists and compiles but the condition was never produced to watch it work.
 
 | Check | Result |
 |---|---|
-| Automated tests | 158 pass across 8 crates; clippy clean with warnings denied |
+| Automated tests | 178 pass across 8 crates; clippy clean with warnings denied |
 | Token totals vs an independent count | Exact match on all 6 sessions of the last 24 h |
 | Codex token totals vs an independent Python count | All four buckets equal on all 76 Codex sessions the app listed (243 rollouts, 5,224 usage records), including both sessions active in the last 24 h; estimated cost equal within 1e-6, 367 long-context requests, none unpriced |
 | Codex open-rollout scan | Process walk about 9 ms and descriptor scan of 39 `codex` processes about 5 ms, cold; run once every 5 s |
@@ -34,8 +34,8 @@ not been measured.
   following the system, logging, headless `--dump` and `--bench`.
 - Done: layout redesign. The live agents lead the Overview as rows with large cats; totals
   moved to a status line and a Today block in the sidebar; the rate chart has real axes.
-- Not started: Agents, Usage & Cost, Timeline, Insights and Settings screens. Keyboard
-  navigation in the sidebar.
+- Done: Usage screen (see Phase 5).
+- Not started: Agents, Insights and Settings screens. Keyboard navigation in the sidebar.
 
 ## Phase 2 — Agent monitoring: Claude Code and Codex done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
@@ -91,8 +91,19 @@ not been measured.
   2.7% of one core at 5 fps against 3.5 to 3.7% at 10 fps. That is still above the 2% goal;
   the collector alone is about 1.3%.
 
-## Phase 5 — Analytics and distribution: not started
-- Usage by agent, model and project; trends; cache efficiency.
+## Phase 5 — Analytics and distribution: partly done
+- Done: Usage screen. Daily estimated cost for 30 days stacked by agent, with no-data days
+  apart from zero days and unpriced requests counted; cache efficiency per day and an
+  estimated saving from caching; today's sessions on a local-time timeline using the
+  active-time rule; Codex's plan limit (used percent, window, reset, plan) read from
+  `token_count` events, Claude Code shown as having none. Session detail, opened from the
+  Sessions table: context size per request with the long-context threshold, and the
+  cumulative estimated cost. Screenshot mode captures both. The 30-day cost per day and
+  today's per-agent cost matched an independent `sqlite3` query exactly, and the caching
+  saving an independent Python computation, on the development machine.
+- Built, not exercised: the day tooltips (no pointer was used; only stills were captured),
+  a secondary Codex limit window and the out-of-date state (local readings had neither).
+- Next: usage by model and project; trends beyond 30 days.
 - Retention setting and pruning.
 - Settings screen (animation speed and on/off are environment variables today).
 - Alerts and thresholds.

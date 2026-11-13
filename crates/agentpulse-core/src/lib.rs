@@ -245,6 +245,27 @@ pub struct PollBatch {
     pub sessions: Vec<SessionDelta>,
     /// The adapter stopped at its read budget; poll again for the rest.
     pub more: bool,
+    /// The newest plan-limit reading the adapter knows of (Codex only).
+    pub rate_limits: Option<RateLimits>,
+}
+
+/// One usage window of an agent's subscription plan, as the agent reported it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RateWindow {
+    pub used_percent: f64,
+    pub window_minutes: Option<u64>,
+    /// Unix seconds.
+    pub resets_at_s: Option<i64>,
+}
+
+/// A plan-limit reading (Codex `token_count` events). Metadata only.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RateLimits {
+    /// Time of the record that carried it.
+    pub ts_ms: i64,
+    pub plan_type: Option<String>,
+    pub primary: Option<RateWindow>,
+    pub secondary: Option<RateWindow>,
 }
 
 impl PollBatch {

@@ -10,6 +10,7 @@ use agentpulse_core::{
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
 
 const MIGRATIONS: &[&str] = &[
     "
@@ -41,7 +42,21 @@ ALTER TABLE sessions ADD COLUMN recorded_cost_unknown_models INTEGER;
 -- Everything else in them upserts idempotently.
 DELETE FROM ingest_files;
 ",
+    // Per-provider time ranges (daily usage, lanes, first event) without
+    // scanning the provider's whole history.
+    "CREATE INDEX IF NOT EXISTS usage_events_provider_ts ON usage_events (provider, ts);",
 ];
+
+const DAILY_USAGE_SQL: &str = "SELECT date(ts / 1000, 'unixepoch', 'localtime') AS day,
+        COALESCE(SUM(cost_usd), 0.0), COUNT(cost_usd), COUNT(*) - COUNT(cost_usd),
+        SUM(input), SUM(cache_write_5m + cache_write_1h), SUM(cache_read)
+    FROM usage_events WHERE provider = ?1 AND ts >= ?2 AND ts < ?3
+    GROUP BY day ORDER BY day";
+const FIRST_EVENT_SQL: &str = "SELECT MIN(ts) FROM usage_events WHERE provider = ?1";
+const LANES_SQL: &str = "SELECT e.session_id, s.project_path, e.ts FROM usage_events e
+    LEFT JOIN sessions s ON s.provider = e.provider AND s.session_id = e.session_id
+    WHERE e.provider = ?1 AND e.ts >= ?2
+    ORDER BY e.session_id, e.ts";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRow {
@@ -68,6 +83,56 @@ pub struct Totals {
     pub priced_events: u64,
     pub unpriced_events: u64,
     pub sessions: u64,
+}
+
+/// One provider's usage on one local calendar day.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DayUsage {
+    /// Local date, `YYYY-MM-DD`.
+    pub day: String,
+    /// Sum over priced events.
+    pub cost_usd: f64,
+    pub priced_events: u64,
+    pub unpriced_events: u64,
+    pub input: u64,
+    /// Both cache-write buckets.
+    pub cache_write: u64,
+    pub cache_read: u64,
+}
+
+/// Cache use of one model's priced events (cost known, so model and tier
+/// priced), and how many cache-using events were unpriced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelCacheReads {
+    pub model: String,
+    pub cache_read: u64,
+    pub cache_write_5m: u64,
+    pub cache_write_1h: u64,
+    /// Priced events with any cache read or write.
+    pub events: u64,
+    /// Unpriced events with any cache read or write, left out of the sums.
+    pub unpriced_events: u64,
+}
+
+/// One session's usage events in a time range, folded into runs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Lane {
+    pub session_id: String,
+    pub project_path: Option<String>,
+    /// `(first, last)` event time of each run of events at most
+    /// [`ACTIVE_GAP_MS`] apart, oldest first. A lone event is `(t, t)`.
+    pub runs: Vec<(i64, i64)>,
+}
+
+/// One API response of a session.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Request {
+    pub ts_ms: i64,
+    pub model: String,
+    /// Input, cache writes and cache reads: the context sent.
+    pub prompt_tokens: u64,
+    /// None when unpriced.
+    pub cost_usd: Option<f64>,
 }
 
 pub struct Store {
@@ -288,6 +353,103 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Usage of `provider` per local day for events in `[from_ms, to_ms)`,
+    /// oldest first. Days without events are absent.
+    pub fn daily_usage(
+        &self,
+        provider: Provider,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<Vec<DayUsage>> {
+        let mut stmt = self.conn.prepare(DAILY_USAGE_SQL)?;
+        let rows = stmt.query_map(params![provider.as_str(), from_ms, to_ms], |r| {
+            Ok(DayUsage {
+                day: r.get(0)?,
+                cost_usd: r.get(1)?,
+                priced_events: r.get::<_, i64>(2)? as u64,
+                unpriced_events: r.get::<_, i64>(3)? as u64,
+                input: r.get::<_, i64>(4)? as u64,
+                cache_write: r.get::<_, i64>(5)? as u64,
+                cache_read: r.get::<_, i64>(6)? as u64,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Time of `provider`'s oldest stored event.
+    pub fn first_event_ms(&self, provider: Provider) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(FIRST_EVENT_SQL, params![provider.as_str()], |r| r.get(0))?)
+    }
+
+    /// Cache tokens per model, all providers, for events in `[from_ms, to_ms)`
+    /// that read or wrote the cache. Sums cover priced events only, as the
+    /// cost figures do.
+    pub fn cache_reads_by_model(&self, from_ms: i64, to_ms: i64) -> Result<Vec<ModelCacheReads>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT model,
+                    COALESCE(SUM(cache_read) FILTER (WHERE cost_usd IS NOT NULL), 0),
+                    COALESCE(SUM(cache_write_5m) FILTER (WHERE cost_usd IS NOT NULL), 0),
+                    COALESCE(SUM(cache_write_1h) FILTER (WHERE cost_usd IS NOT NULL), 0),
+                    COUNT(cost_usd), COUNT(*) - COUNT(cost_usd)
+             FROM usage_events
+             WHERE ts >= ?1 AND ts < ?2
+               AND cache_read + cache_write_5m + cache_write_1h > 0
+             GROUP BY model ORDER BY model",
+        )?;
+        let rows = stmt.query_map(params![from_ms, to_ms], |r| {
+            Ok(ModelCacheReads {
+                model: r.get(0)?,
+                cache_read: r.get::<_, i64>(1)? as u64,
+                cache_write_5m: r.get::<_, i64>(2)? as u64,
+                cache_write_1h: r.get::<_, i64>(3)? as u64,
+                events: r.get::<_, i64>(4)? as u64,
+                unpriced_events: r.get::<_, i64>(5)? as u64,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// `provider`'s sessions with events at or after `since_ms`, each with its
+    /// runs of activity since then, ordered by first event.
+    pub fn lanes_since(&self, provider: Provider, since_ms: i64) -> Result<Vec<Lane>> {
+        let mut stmt = self.conn.prepare(LANES_SQL)?;
+        let mut lanes: Vec<Lane> = Vec::new();
+        let mut rows = stmt.query(params![provider.as_str(), since_ms])?;
+        while let Some(r) = rows.next()? {
+            let (id, path, ts): (String, Option<String>, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+            match lanes.last_mut() {
+                Some(l) if l.session_id == id => extend_runs(&mut l.runs, ts, ACTIVE_GAP_MS),
+                _ => lanes.push(Lane {
+                    session_id: id,
+                    project_path: path,
+                    runs: vec![(ts, ts)],
+                }),
+            }
+        }
+        lanes.sort_by_key(|l| l.runs[0].0);
+        Ok(lanes)
+    }
+
+    /// Every usage event of one session, oldest first.
+    pub fn session_requests(&self, provider: Provider, session_id: &str) -> Result<Vec<Request>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ts, model, input + cache_write_5m + cache_write_1h + cache_read, cost_usd
+             FROM usage_events WHERE provider = ?1 AND session_id = ?2
+             ORDER BY ts, event_id",
+        )?;
+        let rows = stmt.query_map(params![provider.as_str(), session_id], |r| {
+            Ok(Request {
+                ts_ms: r.get(0)?,
+                model: r.get(1)?,
+                prompt_tokens: r.get::<_, i64>(2)? as u64,
+                cost_usd: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn totals_since(&self, since_ms: i64) -> Result<Totals> {
         Ok(self.conn.query_row(
             "SELECT COALESCE(SUM(input), 0), COALESCE(SUM(output), 0),
@@ -314,6 +476,16 @@ impl Store {
                 })
             },
         )?)
+    }
+}
+
+/// Adds an event at `ts` (not before the last one) to the runs: it joins the
+/// last run when at most `gap_ms` after it, else starts a new one. The same
+/// rule as active time ([`fold_active`]).
+fn extend_runs(runs: &mut Vec<(i64, i64)>, ts: i64, gap_ms: i64) {
+    match runs.last_mut() {
+        Some(last) if ts - last.1 <= gap_ms => last.1 = last.1.max(ts),
+        _ => runs.push((ts, ts)),
     }
 }
 
@@ -363,6 +535,7 @@ mod tests {
             events,
             sessions,
             more: false,
+            rate_limits: None,
         }
     }
 
@@ -770,7 +943,7 @@ mod tests {
             old.conn
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            2
+            MIGRATIONS.len() as i64
         );
         assert!(old.offsets().unwrap().is_empty(), "transcripts are re-read");
         let r = &old.sessions_since(P, 0).unwrap()[0];
@@ -789,6 +962,242 @@ mod tests {
         assert_eq!(r.active_ms, 0);
         assert_eq!(r.recorded_cost, Some(cost(0.5, 9, false)));
         assert_eq!(old.totals_since(0).unwrap().priced_events, 1);
+    }
+
+    /// Local wall-clock time as Unix ms, for day-boundary tests that hold in any time zone.
+    fn local(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(y, m, d, h, min, 0)
+            .earliest()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    fn full(input: u64, cw5: u64, cw1: u64, cr: u64) -> TokenUsage {
+        TokenUsage {
+            input,
+            output: 7,
+            cache_write_5m: cw5,
+            cache_write_1h: cw1,
+            cache_read: cr,
+        }
+    }
+
+    #[test]
+    fn daily_usage_groups_by_local_day_and_keeps_unpriced_apart() {
+        let mut s = Store::open_in_memory().unwrap();
+        let late = local(2026, 11, 10, 23, 30);
+        let early = local(2026, 11, 11, 0, 30);
+        let price = |e: &UsageEvent| (e.event_id != "u").then_some(1.5);
+        s.apply(
+            &batch(
+                vec![
+                    ev("a", "s", late, full(1, 2, 3, 4)),
+                    ev("b", "s", early, full(10, 0, 0, 40)),
+                    ev("u", "s", early + 1, full(100, 0, 0, 0)),
+                    ev("later", "s", local(2026, 11, 12, 12, 0), tokens(1, 0)),
+                ],
+                vec![],
+            ),
+            &price,
+        )
+        .unwrap();
+        let mut codex = batch(vec![ev("c", "s", early, tokens(5, 0))], vec![]);
+        codex.provider = Provider::Codex;
+        s.apply(&codex, &price).unwrap();
+
+        let days = s.daily_usage(P, late, local(2026, 11, 12, 0, 0)).unwrap();
+        assert_eq!(
+            days,
+            [
+                DayUsage {
+                    day: "2026-11-10".into(),
+                    cost_usd: 1.5,
+                    priced_events: 1,
+                    unpriced_events: 0,
+                    input: 1,
+                    cache_write: 5,
+                    cache_read: 4,
+                },
+                DayUsage {
+                    day: "2026-11-11".into(),
+                    cost_usd: 1.5,
+                    priced_events: 1,
+                    unpriced_events: 1,
+                    input: 110,
+                    cache_write: 0,
+                    cache_read: 40,
+                },
+            ]
+        );
+        // The range is half-open and per provider.
+        assert_eq!(
+            s.daily_usage(P, late + 1, early + 1).unwrap()[0].priced_events,
+            1
+        );
+        assert_eq!(
+            s.daily_usage(Provider::Codex, 0, i64::MAX).unwrap().len(),
+            1
+        );
+        assert!(
+            s.daily_usage(Provider::OpenCode, 0, i64::MAX)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(s.first_event_ms(P).unwrap(), Some(late));
+        assert_eq!(s.first_event_ms(Provider::OpenCode).unwrap(), None);
+    }
+
+    #[test]
+    fn cache_use_is_summed_per_model_in_range_over_priced_events() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut b = ev("b", "s", 20, full(0, 0, 0, 200));
+        b.model = "other".into();
+        let price = |e: &UsageEvent| (e.event_id != "u").then_some(1.0);
+        s.apply(
+            &batch(
+                vec![
+                    ev("a", "s", 10, full(0, 7, 0, 100)),
+                    b,
+                    ev("none", "s", 20, full(5, 0, 0, 0)),
+                    ev("w", "s", 25, full(0, 0, 9, 0)),
+                    ev("c", "s", 30, full(0, 0, 0, 300)),
+                    ev("u", "s", 30, full(0, 50, 50, 500)),
+                    ev("out", "s", 40, full(0, 0, 0, 999)),
+                ],
+                vec![],
+            ),
+            &price,
+        )
+        .unwrap();
+        let r = s.cache_reads_by_model(10, 40).unwrap();
+        let got: Vec<_> = r
+            .iter()
+            .map(|m| {
+                (
+                    m.model.as_str(),
+                    m.cache_read,
+                    m.cache_write_5m,
+                    m.cache_write_1h,
+                    m.events,
+                    m.unpriced_events,
+                )
+            })
+            .collect();
+        assert_eq!(got, [("m", 400, 7, 9, 3, 1), ("other", 200, 0, 0, 1, 0)]);
+    }
+
+    #[test]
+    fn per_provider_range_queries_use_the_provider_ts_index() {
+        let s = Store::open_in_memory().unwrap();
+        for sql in [DAILY_USAGE_SQL, FIRST_EVENT_SQL, LANES_SQL] {
+            let mut stmt = s
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let args = ["claude-code", "0", "1"];
+            let n = stmt.parameter_count();
+            let plan: Vec<String> = stmt
+                .query_map(rusqlite::params_from_iter(&args[..n]), |r| r.get(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let first = &plan[0];
+            assert!(
+                first.contains("INDEX usage_events_provider_ts (provider=?"),
+                "{sql}\n{plan:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runs_split_on_gaps_longer_than_active_time_allows() {
+        let mut runs = vec![];
+        for ts in [
+            0,
+            ACTIVE_GAP_MS,
+            ACTIVE_GAP_MS + 1,
+            3 * ACTIVE_GAP_MS + 2,
+            3 * ACTIVE_GAP_MS + 2,
+        ] {
+            extend_runs(&mut runs, ts, ACTIVE_GAP_MS);
+        }
+        assert_eq!(
+            runs,
+            [
+                (0, ACTIVE_GAP_MS + 1),
+                (3 * ACTIVE_GAP_MS + 2, 3 * ACTIVE_GAP_MS + 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn lanes_cover_sessions_with_events_since_and_order_by_first_event() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut d = delta("b", &[0]);
+        d.project_path = Some("/p/b".into());
+        s.apply(
+            &batch(
+                vec![
+                    ev("old", "a", 50, tokens(1, 0)),
+                    ev("a1", "a", 1_000, tokens(1, 0)),
+                    ev("a2", "a", 30_000, tokens(1, 0)),
+                    ev("a3", "a", 500_000, tokens(1, 0)),
+                    ev("b1", "b", 900, tokens(1, 0)),
+                ],
+                vec![d],
+            ),
+            &flat,
+        )
+        .unwrap();
+        let lanes = s.lanes_since(P, 100).unwrap();
+        assert_eq!(
+            lanes,
+            [
+                Lane {
+                    session_id: "b".into(),
+                    project_path: Some("/p/b".into()),
+                    runs: vec![(900, 900)],
+                },
+                Lane {
+                    session_id: "a".into(),
+                    project_path: None,
+                    runs: vec![(1_000, 30_000), (500_000, 500_000)],
+                },
+            ]
+        );
+        assert!(s.lanes_since(Provider::Codex, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_requests_list_context_size_and_cost_in_order() {
+        let mut s = Store::open_in_memory().unwrap();
+        let price = |e: &UsageEvent| (e.event_id != "u").then_some(0.25);
+        s.apply(
+            &batch(
+                vec![
+                    ev("2", "s", 200, full(1, 2, 3, 4)),
+                    ev("u", "s", 300, full(5, 0, 0, 0)),
+                    ev("1", "s", 100, tokens(9, 9)),
+                    ev("x", "other", 150, tokens(1, 1)),
+                ],
+                vec![],
+            ),
+            &price,
+        )
+        .unwrap();
+        let r = s.session_requests(P, "s").unwrap();
+        let got: Vec<_> = r
+            .iter()
+            .map(|q| (q.ts_ms, q.prompt_tokens, q.cost_usd))
+            .collect();
+        assert_eq!(
+            got,
+            [(100, 9, Some(0.25)), (200, 10, Some(0.25)), (300, 5, None)]
+        );
+        assert_eq!(r[0].model, "m");
+        assert!(s.session_requests(Provider::Codex, "s").unwrap().is_empty());
     }
 
     #[test]

@@ -3,18 +3,20 @@
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    ActivityMeter, AgentAdapter, AgentSession, LiveSession, ProcessIdentity, Provider, Reading,
-    SessionStatus, TokenUsage, resolve_status,
+    ActivityMeter, AgentAdapter, AgentSession, LiveSession, ProcessIdentity, Provider, RateLimits,
+    Reading, SessionStatus, TokenUsage, resolve_status,
 };
 use agentpulse_cost::PriceBook;
 use agentpulse_platform_macos::gpu_utilization;
 use agentpulse_process::{ProcTable, Sampler, attribute, verify};
-use agentpulse_storage::{SessionRow, Store, Totals};
-use chrono::{DateTime, Local};
+use agentpulse_storage::{DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals};
+use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
 use crate::widget_export::WidgetExporter;
 
@@ -23,6 +25,12 @@ pub const HISTORY_LEN: usize = 120;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 pub const PROCESS_INTERVAL: Duration = Duration::from_secs(2);
 const REQUERY_INTERVAL: Duration = Duration::from_secs(30);
+/// Days in the Usage charts, today included.
+pub const USAGE_DAYS: usize = 30;
+/// Past days of the Usage charts are queried again at most this often (and at midnight).
+const HISTORY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// After a failed history query, the next try waits at least this long.
+const HISTORY_RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Snapshot {
@@ -49,6 +57,64 @@ pub struct Snapshot {
     pub indexing: bool,
     /// Current adapter, storage and configuration problems; empty when healthy.
     pub errors: Vec<String>,
+    /// None until the history has been indexed and queried.
+    pub usage: Option<UsageCharts>,
+    /// Codex's newest plan-limit reading, in memory only.
+    pub codex_limits: Option<RateLimits>,
+    /// The session the window asked for with [`Collector::show_detail`].
+    #[serde(skip)]
+    pub detail: Option<Arc<SessionDetail>>,
+}
+
+/// What the Usage screen draws.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct UsageCharts {
+    /// The last [`USAGE_DAYS`] local days, oldest first, today last.
+    pub days: Vec<Day>,
+    /// Estimated net USD caching saved over those days: cache reads' saving
+    /// minus cache writes' premium over input. None while a day in the
+    /// window is not covered by a query yet.
+    pub cache_saved_usd: Option<f64>,
+    /// Cache-using requests without a price (model or tier), left out of the saving.
+    pub cache_saved_unpriced: u64,
+    /// Sessions with usage today, each with its agent, ordered by first event.
+    pub today: Vec<(Provider, Lane)>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Day {
+    /// Local midnight that starts the day.
+    pub start_ms: i64,
+    /// Per agent: None before its first stored event (no data); otherwise its
+    /// usage, all zero when it made no requests that day.
+    pub agents: Vec<(Provider, Option<DayUsage>)>,
+}
+
+/// Every request of one session, for its detail view.
+#[derive(Clone, Debug)]
+pub struct SessionDetail {
+    pub key: Key,
+    pub requests: Vec<Request>,
+    /// Distinct long-context thresholds of the models it used, ascending.
+    pub long_context: Vec<u64>,
+}
+
+/// Past days of the Usage charts, which change rarely.
+struct History {
+    at: Instant,
+    midnight: i64,
+    /// Per source: past days' usage and the agent's first stored event.
+    days: Vec<(Vec<DayUsage>, Option<i64>)>,
+    cache_reads: Vec<ModelCacheReads>,
+}
+
+/// Today's part of the Usage charts, queried with the session rows.
+struct Today {
+    /// Local midnight it was queried from.
+    midnight: i64,
+    days: Vec<Vec<DayUsage>>,
+    cache_reads: Vec<ModelCacheReads>,
+    lanes: Vec<(Provider, Lane)>,
 }
 
 /// Cumulative ingestion counters, for `--dump`.
@@ -60,7 +126,7 @@ pub struct IngestStats {
 }
 
 /// A session as the collector keys it: ids are unique per provider only.
-type Key = (Provider, String);
+pub type Key = (Provider, String);
 
 struct Cache {
     at: Instant,
@@ -98,6 +164,13 @@ pub struct Collector {
     rate_history: VecDeque<f32>,
     config_errors: Vec<String>,
     query_error: Option<String>,
+    history_error: Option<(Instant, String)>,
+    detail_error: Option<String>,
+    history: Option<History>,
+    today: Option<Today>,
+    codex_limits: Option<RateLimits>,
+    detail_key: Option<Key>,
+    detail: Option<Arc<SessionDetail>>,
     pub ingested: IngestStats,
 }
 
@@ -135,8 +208,24 @@ impl Collector {
             rate_history: VecDeque::with_capacity(HISTORY_LEN),
             config_errors,
             query_error: None,
+            history_error: None,
+            detail_error: None,
+            history: None,
+            today: None,
+            codex_limits: None,
+            detail_key: None,
+            detail: None,
             ingested: IngestStats::default(),
         })
+    }
+
+    /// Which session's requests the snapshots carry; None for none.
+    pub fn show_detail(&mut self, key: Option<Key>) {
+        if key != self.detail_key {
+            self.detail = None;
+            self.detail_error = None;
+        }
+        self.detail_key = key;
     }
 
     pub fn tick(&mut self) -> Snapshot {
@@ -150,6 +239,15 @@ impl Collector {
                 Ok(batch) => {
                     src.poll_error = None;
                     src.more = batch.more;
+                    if provider == Provider::Codex
+                        && let Some(l) = batch.rate_limits.as_ref().filter(|l| {
+                            self.codex_limits
+                                .as_ref()
+                                .is_none_or(|c| l.ts_ms >= c.ts_ms)
+                        })
+                    {
+                        self.codex_limits = Some(l.clone());
+                    }
                     if !batch.is_empty() {
                         match self.store.apply(&batch, &|e| self.prices.cost(e)) {
                             Ok(()) => {
@@ -243,15 +341,21 @@ impl Collector {
 
         self.metered.retain(|_, m| m.0 > now - RATE_WINDOW_MS);
 
-        if cache_stale(self.cache.as_ref(), changed, &live_ids, midnight) {
+        let indexing = self.sources.iter().any(|s| s.more);
+        let stale = cache_stale(self.cache.as_ref(), changed, &live_ids, midnight);
+        if stale {
             let rows: anyhow::Result<Vec<Vec<SessionRow>>> = self
                 .sources
                 .iter()
                 .map(|s| self.store.sessions_since(s.adapter.provider(), cutoff))
                 .collect();
             let totals = self.store.totals_since(midnight);
-            match rows.and_then(|r| Ok((r, totals?))) {
-                Ok((rows, totals)) => {
+            match rows
+                .and_then(|r| Ok((r, totals?)))
+                .and_then(|(r, t)| Ok((r, t, self.query_today(midnight)?)))
+            {
+                Ok((rows, totals, today)) => {
+                    self.today = Some(today);
                     self.query_error = None;
                     self.cache = Some(Cache {
                         at: Instant::now(),
@@ -264,6 +368,49 @@ impl Collector {
                 Err(e) => {
                     tracing::error!(error = %format!("{e:#}"), "cannot query sessions");
                     self.query_error = Some(format!("Storage: {e:#}"));
+                }
+            }
+        }
+        // History read while backfilling would be partial: wait for the end.
+        if !indexing
+            && history_due(
+                self.history.as_ref(),
+                self.history_error.as_ref().map(|e| e.0),
+                midnight,
+            )
+        {
+            match self.query_history(now, midnight) {
+                Ok(h) => {
+                    self.history = Some(h);
+                    self.history_error = None;
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "cannot query usage history");
+                    self.history_error = Some((Instant::now(), format!("Storage: {e:#}")));
+                }
+            }
+        }
+        if let Some(key) = &self.detail_key
+            && (stale || self.detail.is_none())
+        {
+            match self.store.session_requests(key.0, &key.1) {
+                Ok(requests) => {
+                    let mut long_context: Vec<u64> = requests
+                        .iter()
+                        .filter_map(|r| self.prices.long_context_threshold(&r.model))
+                        .collect();
+                    long_context.sort_unstable();
+                    long_context.dedup();
+                    self.detail = Some(Arc::new(SessionDetail {
+                        key: key.clone(),
+                        requests,
+                        long_context,
+                    }));
+                    self.detail_error = None;
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "cannot query session requests");
+                    self.detail_error = Some(format!("Storage: {e:#}"));
                 }
             }
         }
@@ -309,7 +456,10 @@ impl Collector {
         }
         self.rate_history.push_back(snap.output_rate);
         snap.rate_history = self.rate_history.iter().copied().collect();
-        snap.indexing = self.sources.iter().any(|s| s.more);
+        snap.indexing = indexing;
+        snap.usage = self.usage_charts(now);
+        snap.codex_limits = self.codex_limits.clone();
+        snap.detail = self.detail.clone();
         snap.errors = self
             .config_errors
             .iter()
@@ -321,9 +471,122 @@ impl Collector {
                     .cloned()
             }))
             .chain(self.query_error.clone())
+            .chain(self.history_error.as_ref().map(|e| e.1.clone()))
+            .chain(self.detail_error.clone())
             .collect();
         snap
     }
+
+    fn query_today(&self, midnight: i64) -> anyhow::Result<Today> {
+        let mut t = Today {
+            midnight,
+            days: Vec::new(),
+            cache_reads: self.store.cache_reads_by_model(midnight, i64::MAX)?,
+            lanes: Vec::new(),
+        };
+        for s in &self.sources {
+            let p = s.adapter.provider();
+            t.days.push(self.store.daily_usage(p, midnight, i64::MAX)?);
+            t.lanes.extend(
+                self.store
+                    .lanes_since(p, midnight)?
+                    .into_iter()
+                    .map(|l| (p, l)),
+            );
+        }
+        t.lanes.sort_by_key(|(_, l)| l.runs[0].0);
+        Ok(t)
+    }
+
+    fn query_history(&self, now: i64, midnight: i64) -> anyhow::Result<History> {
+        let from = local_days(now, USAGE_DAYS)[0].1;
+        Ok(History {
+            at: Instant::now(),
+            midnight,
+            days: self
+                .sources
+                .iter()
+                .map(|s| {
+                    let p = s.adapter.provider();
+                    Ok((
+                        self.store.daily_usage(p, from, midnight)?,
+                        self.store.first_event_ms(p)?,
+                    ))
+                })
+                .collect::<anyhow::Result<_>>()?,
+            cache_reads: self.store.cache_reads_by_model(from, midnight)?,
+        })
+    }
+
+    /// Past days and today joined; None until both have been queried. A day
+    /// neither query covers (history not yet re-read after midnight) is no
+    /// data, never zero.
+    fn usage_charts(&self, now: i64) -> Option<UsageCharts> {
+        let (h, t) = (self.history.as_ref()?, self.today.as_ref()?);
+        let calendar = local_days(now, USAGE_DAYS);
+        let covered = |start: i64, end: i64| end <= h.midnight || start >= t.midnight;
+        let days = calendar
+            .iter()
+            .map(|(key, start, end)| Day {
+                start_ms: *start,
+                agents: self
+                    .sources
+                    .iter()
+                    .zip(&h.days)
+                    .zip(&t.days)
+                    .map(|((s, (past, first)), today)| {
+                        // The cached first event may predate today's first rows.
+                        let has_data = first.is_some_and(|f| f < *end)
+                            || today
+                                .first()
+                                .is_some_and(|d| d.day.as_str() <= key.as_str());
+                        let usage = (has_data && covered(*start, *end)).then(|| {
+                            past.iter()
+                                .chain(today)
+                                .find(|d| &d.day == key)
+                                .cloned()
+                                .unwrap_or_else(|| DayUsage {
+                                    day: key.clone(),
+                                    ..DayUsage::default()
+                                })
+                        });
+                        (s.adapter.provider(), usage)
+                    })
+                    .collect(),
+            })
+            .collect();
+        let (saved, unpriced) =
+            cache_saving(h.cache_reads.iter().chain(&t.cache_reads), &self.prices);
+        Some(UsageCharts {
+            days,
+            // History must end where today starts, or a day is missing or counted twice.
+            cache_saved_usd: (h.midnight == t.midnight).then_some(saved),
+            cache_saved_unpriced: unpriced,
+            today: t.lanes.clone(),
+        })
+    }
+}
+
+/// Estimated net USD caching saved, and the cache-using requests left out
+/// because their model or tier has no price.
+fn cache_saving<'a>(
+    rows: impl IntoIterator<Item = &'a ModelCacheReads>,
+    prices: &PriceBook,
+) -> (f64, u64) {
+    rows.into_iter().fold((0.0, 0), |(usd, skipped), m| {
+        let skipped = skipped + m.unpriced_events;
+        match prices.net_cache_saving(&m.model, m.cache_read, m.cache_write_5m, m.cache_write_1h) {
+            Some(saved) => (usd + saved, skipped),
+            None => (usd, skipped + m.events),
+        }
+    })
+}
+
+/// Whether past days must be queried again: none yet, a new local day, or
+/// [`HISTORY_INTERVAL`] old; never sooner than [`HISTORY_RETRY`] after a failure.
+fn history_due(h: Option<&History>, failed_at: Option<Instant>, midnight: i64) -> bool {
+    failed_at.is_none_or(|t| t.elapsed() >= HISTORY_RETRY)
+        && h.is_none_or(|h| h.midnight != midnight || h.at.elapsed() >= HISTORY_INTERVAL)
 }
 
 /// Whether stored rows and totals must be queried again: after new data, a
@@ -482,6 +745,9 @@ pub fn build_snapshot(
         system_gpu_percent: Reading::Unavailable,
         indexing: false,
         errors: Vec::new(),
+        usage: None,
+        codex_limits: None,
+        detail: None,
         sessions,
     }
 }
@@ -499,10 +765,47 @@ fn now_ms() -> i64 {
 }
 
 fn local_midnight_ms(now_ms: i64) -> i64 {
-    DateTime::from_timestamp_millis(now_ms)
-        .map(|t| t.with_timezone(&Local).date_naive())
-        .and_then(|d| d.and_hms_opt(0, 0, 0)?.and_local_timezone(Local).earliest())
-        .map_or(now_ms - DAY_MS, |t| t.timestamp_millis())
+    local_date(now_ms, &Local)
+        .and_then(|d| day_start(d, &Local))
+        .unwrap_or(now_ms - DAY_MS)
+}
+
+fn local_date<Tz: TimeZone>(ms: i64, tz: &Tz) -> Option<NaiveDate> {
+    DateTime::from_timestamp_millis(ms).map(|t| t.with_timezone(tz).date_naive())
+}
+
+/// The first instant of local day `d`: midnight, or where a DST change skips
+/// midnight, the first minute after the gap.
+fn day_start<Tz: TimeZone>(d: NaiveDate, tz: &Tz) -> Option<i64> {
+    let midnight = d.and_hms_opt(0, 0, 0)?;
+    (0..24 * 60).find_map(|m| {
+        (midnight + chrono::Duration::minutes(m))
+            .and_local_timezone(tz.clone())
+            .earliest()
+            .map(|t| t.timestamp_millis())
+    })
+}
+
+/// The last `n` local days, oldest first, today last: date as SQLite's
+/// `date(…, 'localtime')` writes it, and the day's start and end in ms.
+/// Calendar days, so a day is 23 or 25 hours long across a DST change.
+pub fn local_days(now_ms: i64, n: usize) -> Vec<(String, i64, i64)> {
+    days_in(now_ms, n, &Local)
+}
+
+fn days_in<Tz: TimeZone>(now_ms: i64, n: usize, tz: &Tz) -> Vec<(String, i64, i64)> {
+    let Some(today) = local_date(now_ms, tz) else {
+        return Vec::new();
+    };
+    (0..n as u64)
+        .rev()
+        .filter_map(|back| {
+            let d = today.checked_sub_days(chrono::Days::new(back))?;
+            let start = day_start(d, tz)?;
+            let end = day_start(d.succ_opt()?, tz)?;
+            Some((d.format("%Y-%m-%d").to_string(), start, end))
+        })
+        .collect()
 }
 
 /// Runs the collector on its own thread until the receiver is dropped,
@@ -512,6 +815,7 @@ fn local_midnight_ms(now_ms: i64) -> i64 {
 pub fn spawn(
     mut collector: Collector,
     sender: async_channel::Sender<Snapshot>,
+    details: Receiver<Option<Key>>,
     mut widgets: Option<WidgetExporter>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
@@ -529,8 +833,17 @@ pub fn spawn(
                     if sender.send_blocking(snap).is_err() {
                         return;
                     }
-                    if !indexing {
-                        thread::sleep(Duration::from_secs(if live { 1 } else { 5 }));
+                    let wait = if indexing {
+                        Duration::ZERO
+                    } else {
+                        Duration::from_secs(if live { 1 } else { 5 })
+                    };
+                    // A request for a session's details ends the wait at once.
+                    match details.recv_timeout(wait) {
+                        // Only the newest of several queued requests matters.
+                        Ok(key) => collector.show_detail(details.try_iter().last().unwrap_or(key)),
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => thread::sleep(wait),
                     }
                 }
             }));
@@ -625,6 +938,7 @@ mod tests {
             events,
             sessions,
             more: false,
+            rate_limits: None,
         }
     }
 
@@ -1065,6 +1379,285 @@ mod tests {
                 assert_eq!(s.agents_rss_bytes, Some(11 + 1_100));
             }
         }
+    }
+
+    #[test]
+    fn local_days_are_contiguous_calendar_days_ending_today() {
+        let now = now_ms();
+        let days = local_days(now, USAGE_DAYS);
+        assert_eq!(days.len(), USAGE_DAYS);
+        let (today, start, end) = days.last().unwrap();
+        assert!(*start <= now && now < *end);
+        assert_eq!(*start, local_midnight_ms(now));
+        assert_eq!(today, &Local::now().format("%Y-%m-%d").to_string());
+        assert!(days.windows(2).all(|w| w[0].2 == w[1].1 && w[0].0 < w[1].0));
+    }
+
+    #[test]
+    fn cache_saving_is_net_of_write_premium_and_skips_unpriced() {
+        let rows = [
+            ModelCacheReads {
+                model: "claude-sonnet-5-5".into(),
+                cache_read: 1_000_000,
+                cache_write_5m: 1_000_000,
+                cache_write_1h: 0,
+                events: 4,
+                // Unknown tier: not in the sums, only counted.
+                unpriced_events: 2,
+            },
+            ModelCacheReads {
+                model: "no-such-model".into(),
+                cache_read: 5_000_000,
+                cache_write_5m: 0,
+                cache_write_1h: 0,
+                events: 0,
+                unpriced_events: 3,
+            },
+        ];
+        let (usd, skipped) = cache_saving(&rows, &PriceBook::builtin());
+        // Reads save 2.0 − 0.1 per M; 5 m writes cost 2.5 − 2.0 per M more than input.
+        assert!((usd - (1.9 - 0.5)).abs() < 1e-9, "{usd}");
+        assert_eq!(skipped, 5);
+    }
+
+    #[test]
+    fn usage_days_tell_no_data_from_zero_and_keep_the_newest_limits() {
+        let (claude, codex) = (Fake::new(Provider::ClaudeCode), Fake::new(Provider::Codex));
+        let mut c = Collector::new(
+            vec![Box::new(claude.clone()), Box::new(codex.clone())],
+            Store::open_in_memory().unwrap(),
+            PriceBook::builtin(),
+            vec![],
+        )
+        .unwrap();
+        let now = now_ms();
+        let days = local_days(now, USAGE_DAYS);
+        // Noon three days ago, and just after midnight today.
+        let old = days[USAGE_DAYS - 4].1 + 12 * 3_600_000;
+        let today = days[USAGE_DAYS - 1].1 + 1;
+        let mut cached = event("e2", "s1", "claude-sonnet-5-5", today, 0);
+        cached.usage.cache_read = 30;
+        claude.polls.lock().unwrap().push_back(Ok(batch(
+            vec![
+                event("e1", "s1", "claude-sonnet-5-5", old, 1_000_000),
+                cached,
+                event("e3", "s2", "no-such-model", today, 5),
+            ],
+            vec![delta("s1", &[old, today]), delta("s2", &[today])],
+        )));
+        let limits = |ts_ms, used_percent| agentpulse_core::RateLimits {
+            ts_ms,
+            plan_type: Some("prolite".into()),
+            primary: Some(agentpulse_core::RateWindow {
+                used_percent,
+                window_minutes: Some(10_080),
+                resets_at_s: None,
+            }),
+            secondary: None,
+        };
+        let mut b = batch(vec![], vec![]);
+        b.provider = Provider::Codex;
+        b.files.clear();
+        b.rate_limits = Some(limits(200, 62.0));
+        codex.polls.lock().unwrap().push_back(Ok(b.clone()));
+        let s = c.tick();
+        let u = s.usage.as_ref().expect("queried once not indexing");
+        assert_eq!(u.days.len(), USAGE_DAYS);
+        let claude_day = |i: usize| u.days[i].agents[0].1.clone();
+        assert_eq!(u.days[0].agents[0].0, Provider::ClaudeCode);
+        assert_eq!(claude_day(USAGE_DAYS - 5), None, "before the first event");
+        assert!((claude_day(USAGE_DAYS - 4).unwrap().cost_usd - 10.000_02).abs() < 1e-9);
+        let gap = claude_day(USAGE_DAYS - 3).unwrap();
+        assert_eq!(
+            (gap.cost_usd, gap.priced_events),
+            (0.0, 0),
+            "a measured zero"
+        );
+        let t = claude_day(USAGE_DAYS - 1).unwrap();
+        assert_eq!(
+            (t.priced_events, t.unpriced_events, t.cache_read),
+            (1, 1, 30)
+        );
+        // Codex stored nothing: no data on every day, never zero.
+        assert!(u.days.iter().all(|d| d.agents[1].1.is_none()));
+        assert!((u.cache_saved_usd.unwrap() - 30.0 * 1.9 / 1e6).abs() < 1e-12);
+        assert_eq!(u.cache_saved_unpriced, 0);
+        assert_eq!(u.today.len(), 2);
+        assert_eq!(s.codex_limits.as_ref().unwrap().ts_ms, 200);
+
+        // An older reading does not replace a newer one.
+        b.rate_limits = Some(limits(100, 10.0));
+        codex.polls.lock().unwrap().push_back(Ok(b));
+        let s = c.tick();
+        let p = s.codex_limits.unwrap().primary.unwrap();
+        assert_eq!(p.used_percent, 62.0);
+
+        // A session's requests arrive once asked for.
+        c.show_detail(Some((Provider::ClaudeCode, "s1".into())));
+        let d = c.tick().detail.unwrap();
+        assert_eq!(d.requests.len(), 2);
+        assert!(d.long_context.is_empty());
+        c.show_detail(None);
+        assert!(c.tick().detail.is_none());
+    }
+
+    /// A zone whose DST starts at midnight, as America/Santiago's does on
+    /// 2026-09-06: 00:00 at −04:00 becomes 01:00 at −03:00.
+    #[derive(Clone, Copy, Debug)]
+    struct MidnightDst;
+
+    impl MidnightDst {
+        fn gap() -> chrono::NaiveDateTime {
+            NaiveDate::from_ymd_opt(2026, 9, 6)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+        }
+        fn offsets() -> (chrono::FixedOffset, chrono::FixedOffset) {
+            let h = |n| chrono::FixedOffset::west_opt(n * 3600).unwrap();
+            (h(4), h(3))
+        }
+    }
+
+    impl TimeZone for MidnightDst {
+        type Offset = chrono::FixedOffset;
+        fn from_offset(_: &chrono::FixedOffset) -> Self {
+            MidnightDst
+        }
+        fn offset_from_local_date(&self, d: &NaiveDate) -> chrono::MappedLocalTime<Self::Offset> {
+            self.offset_from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_local_datetime(
+            &self,
+            l: &chrono::NaiveDateTime,
+        ) -> chrono::MappedLocalTime<Self::Offset> {
+            let (winter, summer) = Self::offsets();
+            if *l < Self::gap() {
+                chrono::MappedLocalTime::Single(winter)
+            } else if *l < Self::gap() + chrono::Duration::hours(1) {
+                chrono::MappedLocalTime::None
+            } else {
+                chrono::MappedLocalTime::Single(summer)
+            }
+        }
+        fn offset_from_utc_date(&self, d: &NaiveDate) -> Self::Offset {
+            self.offset_from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap())
+        }
+        fn offset_from_utc_datetime(&self, u: &chrono::NaiveDateTime) -> Self::Offset {
+            let (winter, summer) = Self::offsets();
+            // The gap starts at 00:00 −04:00, 04:00 UTC.
+            if *u < Self::gap() + chrono::Duration::hours(4) {
+                winter
+            } else {
+                summer
+            }
+        }
+    }
+
+    #[test]
+    fn a_day_whose_midnight_does_not_exist_starts_after_the_gap() {
+        let switch = MidnightDst::gap().and_utc().timestamp_millis() + 4 * 3_600_000;
+        let now = switch + 30 * 3_600_000;
+        let days = days_in(now, 3, &MidnightDst);
+        let keys: Vec<_> = days.iter().map(|d| d.0.as_str()).collect();
+        assert_eq!(keys, ["2026-09-05", "2026-09-06", "2026-09-07"]);
+        // 01:00 −03:00 is the same instant as the 00:00 −04:00 that never came.
+        assert_eq!(days[1].1, switch);
+        assert_eq!(days[1].2 - days[1].1, 23 * 3_600_000);
+        assert!(days.windows(2).all(|w| w[0].2 == w[1].1));
+        assert!(days[2].1 <= now && now < days[2].2);
+    }
+
+    #[test]
+    fn a_day_history_has_not_covered_yet_is_no_data_not_zero() {
+        let (mut c, fake) = collector();
+        let days = local_days(now_ms(), USAGE_DAYS);
+        let noon = |i: usize| days[i].1 + 12 * 3_600_000;
+        let n = USAGE_DAYS;
+        let mut cached = event("e2", "s1", "claude-sonnet-5-5", noon(n - 2), 0);
+        cached.usage.cache_read = 1_000;
+        fake.polls.lock().unwrap().push_back(Ok(batch(
+            vec![
+                event("e1", "s1", "claude-sonnet-5-5", noon(n - 4), 1_000),
+                cached,
+                event("e3", "s1", "claude-sonnet-5-5", days[n - 1].1 + 1, 1),
+            ],
+            vec![delta("s1", &[noon(n - 4), noon(n - 2), days[n - 1].1 + 1])],
+        )));
+        let u = c.tick().usage.unwrap();
+        assert!(u.days[n - 2].agents[0].1.is_some());
+        assert!(u.cache_saved_usd.is_some());
+
+        // History as last read before midnight: it ends where yesterday starts.
+        let h = c.history.as_mut().unwrap();
+        h.midnight = days[n - 2].1;
+        h.days[0].0.retain(|d| d.day < days[n - 2].0);
+        h.cache_reads.clear();
+        let u = c.usage_charts(now_ms()).unwrap();
+        let claude = |i: usize| u.days[i].agents[0].1.clone();
+        assert!(claude(n - 4).unwrap().cost_usd > 0.0);
+        assert_eq!(claude(n - 3).unwrap().priced_events, 0, "a measured zero");
+        assert_eq!(claude(n - 2), None, "not queried yet");
+        assert_eq!(claude(n - 1).unwrap().priced_events, 1);
+        assert_eq!(u.cache_saved_usd, None, "a day of cache use is missing");
+    }
+
+    #[test]
+    fn first_ever_events_count_before_history_is_read_again() {
+        let (mut c, fake) = collector();
+        // History is read once, with nothing stored.
+        assert!(
+            c.tick()
+                .usage
+                .unwrap()
+                .days
+                .iter()
+                .all(|d| d.agents[0].1.is_none())
+        );
+        let t = now_ms() - 1_000;
+        fake.polls.lock().unwrap().push_back(Ok(batch(
+            vec![event("e1", "s1", "claude-sonnet-5-5", t, 5)],
+            vec![delta("s1", &[t])],
+        )));
+        let u = c.tick().usage.unwrap();
+        assert_eq!(c.history.as_ref().unwrap().days[0].1, None, "not re-read");
+        assert_eq!(
+            u.days[USAGE_DAYS - 1].agents[0]
+                .1
+                .as_ref()
+                .unwrap()
+                .priced_events,
+            1
+        );
+        assert_eq!(u.days[USAGE_DAYS - 2].agents[0].1, None);
+    }
+
+    #[test]
+    fn history_retries_back_off_and_errors_stay_apart() {
+        let h = History {
+            at: Instant::now(),
+            midnight: NOW,
+            days: vec![],
+            cache_reads: vec![],
+        };
+        assert!(!history_due(Some(&h), None, NOW));
+        assert!(history_due(Some(&h), None, NOW + DAY_MS));
+        assert!(history_due(None, None, NOW));
+        assert!(!history_due(None, Some(Instant::now()), NOW), "backing off");
+        let earlier = Instant::now().checked_sub(HISTORY_RETRY + Duration::from_secs(1));
+        assert!(history_due(None, earlier, NOW));
+
+        // A successful sessions query does not clear a history failure.
+        let (mut c, _) = collector();
+        c.tick();
+        c.history_error = Some((Instant::now(), "Storage: synthetic history failure".into()));
+        c.detail_error = Some("Storage: synthetic detail failure".into());
+        let s = c.tick();
+        assert!(s.errors.iter().any(|e| e.contains("history failure")));
+        assert!(s.errors.iter().any(|e| e.contains("detail failure")));
+        // Leaving the detail view drops its error.
+        c.show_detail(Some((P, "s".into())));
+        assert!(c.detail_error.is_none());
     }
 
     #[test]
