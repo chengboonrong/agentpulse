@@ -18,7 +18,8 @@ use agentpulse_process::{ProcTable, Sampler, attribute, verify};
 use agentpulse_storage::{DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
-use crate::widget_export::WidgetExporter;
+use crate::phones::PhoneLink;
+use crate::widget_export::{self, WidgetExporter};
 
 const RATE_WINDOW_MS: i64 = 30_000;
 pub const HISTORY_LEN: usize = 120;
@@ -813,7 +814,8 @@ fn days_in<Tz: TimeZone>(now_ms: i64, n: usize, tz: &Tz) -> Vec<(String, i64, i6
 }
 
 /// Runs the collector on its own thread until the receiver is dropped,
-/// publishing each snapshot to the widgets when `widgets` is set. If the loop
+/// publishing each snapshot to the widgets when `widgets` is set, and the same
+/// widget payload to paired phones through `phones`. If the loop
 /// panics, the widgets are marked stopped and the thread ends, which closes
 /// the channel.
 pub fn spawn(
@@ -821,6 +823,7 @@ pub fn spawn(
     sender: async_channel::Sender<Snapshot>,
     details: Receiver<Option<Key>>,
     mut widgets: Option<WidgetExporter>,
+    phones: Option<PhoneLink>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("agentpulse-collector".into())
@@ -833,6 +836,9 @@ pub fn spawn(
                     let live = snap.sessions.iter().any(|s| s.status.is_live());
                     if let Some(w) = &mut widgets {
                         w.publish(&snap);
+                    }
+                    if let Some(p) = phones.as_ref().filter(|p| p.wants_payload()) {
+                        p.publish(widget_export::payload(&snap, false, &p.looks()));
                     }
                     if sender.send_blocking(snap).is_err() {
                         return;

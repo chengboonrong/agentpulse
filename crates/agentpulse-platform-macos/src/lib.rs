@@ -4,7 +4,7 @@ mod fetch;
 mod gpu;
 mod status_item;
 
-pub use fetch::fetch;
+pub use fetch::{Response, fetch, request};
 pub use gpu::gpu_utilization;
 pub use objc2::MainThreadMarker;
 pub use status_item::{MenuAction, MenuLine, StatusItem, WIDEST_TITLE};
