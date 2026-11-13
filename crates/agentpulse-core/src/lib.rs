@@ -20,7 +20,7 @@ pub const TRANSCRIPT_ACTIVE_MS: i64 = 30_000;
 /// Without a verified process, a session silent for longer than this has ended.
 pub const IDLE_TIMEOUT_MS: i64 = 300_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Provider {
     ClaudeCode,
     Codex,
@@ -210,6 +210,8 @@ pub struct UsageEvent {
     pub fast: bool,
     /// Billed at the US-only inference rate.
     pub us_inference: bool,
+    /// Billed at a service tier the price table does not cover; left unpriced.
+    pub unknown_tier: bool,
 }
 
 /// What one poll learned about a session, besides token usage.
@@ -270,6 +272,9 @@ pub struct LiveSession {
     pub started_at_ms: Option<i64>,
     pub state: LiveState,
     pub project_path: Option<String>,
+    /// The process also hosts other sessions, so its resources are not this
+    /// session's alone: the session is live but shows no process or resources.
+    pub shared_process: bool,
 }
 
 /// One agent product (Claude Code, Codex, ...).

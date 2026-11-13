@@ -102,8 +102,9 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool) -> Vec<MenuLine> {
                 .take(MAX_SESSION_ROWS)
             {
                 out.push(format!(
-                    "{} — {} — {}",
+                    "{} — {} — {} — {}",
                     format::project_name(x.project_path.as_deref()),
+                    x.provider.label(),
                     x.status.label(),
                     x.wall_ms(s.taken_at_ms)
                         .map_or(DASH.into(), format::duration)
@@ -360,11 +361,11 @@ mod tests {
                 "Tokens today  104M",
                 "Est. cost today  ≈ $55.55",
                 "Output  28.8 tok/s",
-                "p0 — Active — 46m 00s",
-                "p1 — Waiting — 46m 00s",
-                "p2 — Idle — 46m 00s",
-                "p3 — Idle — 46m 00s",
-                "p4 — Idle — 46m 00s",
+                "p0 — Claude Code — Active — 46m 00s",
+                "p1 — Claude Code — Waiting — 46m 00s",
+                "p2 — Claude Code — Idle — 46m 00s",
+                "p3 — Claude Code — Idle — 46m 00s",
+                "p4 — Claude Code — Idle — 46m 00s",
             ]
         );
         let mut s = snapshot(&[Completed]);

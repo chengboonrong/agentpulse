@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 agentpulse-core.workspace = true
+agentpulse-process.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true

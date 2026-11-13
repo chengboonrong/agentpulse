@@ -159,6 +159,7 @@ name = "agentpulse-telemetry"
 version = "0.0.2"
 dependencies = [
  "agentpulse-core",
+ "agentpulse-process",
  "anyhow",
  "chrono",
  "serde",

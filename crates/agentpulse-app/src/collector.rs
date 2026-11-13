@@ -1,4 +1,4 @@
-//! The collector loop: polls the adapter, stores what it read, samples agent
+//! The collector loop: polls each adapter, stores what it read, samples agent
 //! processes and turns it all into a [`Snapshot`]. Knows nothing about GPUI.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -27,9 +27,10 @@ const REQUERY_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Snapshot {
     pub taken_at_ms: i64,
-    /// Live first (Active, Waiting, Idle), then ended; each group newest activity first.
+    /// Every agent's sessions. Live first (Active, Waiting, Idle), then ended;
+    /// each group newest activity first.
     pub sessions: Vec<AgentSession>,
-    /// Since local midnight.
+    /// Since local midnight, all agents.
     pub today_tokens: TokenUsage,
     /// Estimated, or Unavailable when there are events but none is priced.
     pub today_cost_usd: Reading<f64>,
@@ -58,34 +59,44 @@ pub struct IngestStats {
     pub events: u64,
 }
 
+/// A session as the collector keys it: ids are unique per provider only.
+type Key = (Provider, String);
+
 struct Cache {
     at: Instant,
     /// Local midnight the totals were queried from.
     midnight: i64,
-    live: BTreeSet<String>,
-    rows: Vec<SessionRow>,
+    live: BTreeSet<Key>,
+    rows: Vec<Vec<SessionRow>>,
     totals: Totals,
 }
 
-pub struct Collector {
+/// One adapter and its own errors, so a broken agent never hides another's data.
+struct Source {
     adapter: Box<dyn AgentAdapter>,
+    /// Its last poll stopped at the read budget.
+    more: bool,
+    live: Vec<LiveSession>,
+    poll_error: Option<String>,
+    live_error: Option<String>,
+    apply_error: Option<String>,
+}
+
+pub struct Collector {
+    sources: Vec<Source>,
     store: Store,
     prices: PriceBook,
     sampler: Sampler,
     offsets: HashMap<String, u64>,
     meter: ActivityMeter,
-    session_meters: HashMap<String, ActivityMeter>,
-    /// Output tokens already fed to the meters per event id (with the event's
+    session_meters: HashMap<Key, ActivityMeter>,
+    /// Output tokens already fed to the meters per event (with the event's
     /// time), so a response re-read with fuller usage adds only the increase.
-    metered: HashMap<String, (i64, u64)>,
+    metered: HashMap<Key, (i64, u64)>,
     table: Option<(Instant, ProcTable)>,
     cache: Option<Cache>,
     rate_history: VecDeque<f32>,
-    indexing: bool,
     config_errors: Vec<String>,
-    poll_error: Option<String>,
-    live_error: Option<String>,
-    apply_error: Option<String>,
     query_error: Option<String>,
     pub ingested: IngestStats,
 }
@@ -94,14 +105,25 @@ impl Collector {
     /// `config_errors` are startup problems (such as an unreadable price
     /// table) that stay listed in every snapshot.
     pub fn new(
-        adapter: Box<dyn AgentAdapter>,
+        adapters: Vec<Box<dyn AgentAdapter>>,
         store: Store,
         prices: PriceBook,
         config_errors: Vec<String>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             offsets: store.offsets()?,
-            adapter,
+            sources: adapters
+                .into_iter()
+                .map(|adapter| Source {
+                    adapter,
+                    // Until the first poll, assume there is history to read.
+                    more: true,
+                    live: Vec::new(),
+                    poll_error: None,
+                    live_error: None,
+                    apply_error: None,
+                })
+                .collect(),
             store,
             prices,
             sampler: Sampler::new(),
@@ -111,11 +133,7 @@ impl Collector {
             table: None,
             cache: None,
             rate_history: VecDeque::with_capacity(HISTORY_LEN),
-            indexing: true,
             config_errors,
-            poll_error: None,
-            live_error: None,
-            apply_error: None,
             query_error: None,
             ingested: IngestStats::default(),
         })
@@ -124,73 +142,76 @@ impl Collector {
     pub fn tick(&mut self) -> Snapshot {
         let now = now_ms();
         let midnight = local_midnight_ms(now);
-        let provider = self.adapter.provider();
         let mut changed = false;
 
-        match self.adapter.poll(&self.offsets, midnight.min(now - DAY_MS)) {
-            Ok(batch) => {
-                self.poll_error = None;
-                self.indexing = batch.more;
-                if !batch.is_empty() {
-                    match self.store.apply(&batch, &|e| self.prices.cost(e)) {
-                        Ok(()) => {
-                            self.apply_error = None;
-                            changed = true;
-                            for f in &batch.files {
-                                let old = self.offsets.insert(f.path.clone(), f.offset);
-                                self.ingested.bytes += f.offset.saturating_sub(old.unwrap_or(0));
-                                self.ingested.files += 1;
-                            }
-                            self.ingested.events += batch.events.len() as u64;
-                            // Backfilled history is older than the window and never counts as live output.
-                            for e in batch
-                                .events
-                                .iter()
-                                .filter(|e| e.ts_ms > now - RATE_WINDOW_MS)
-                            {
-                                let seen = self.metered.get(&e.event_id).map_or(0, |m| m.1);
-                                if e.usage.output <= seen {
-                                    continue;
+        for src in &mut self.sources {
+            let provider = src.adapter.provider();
+            match src.adapter.poll(&self.offsets, midnight.min(now - DAY_MS)) {
+                Ok(batch) => {
+                    src.poll_error = None;
+                    src.more = batch.more;
+                    if !batch.is_empty() {
+                        match self.store.apply(&batch, &|e| self.prices.cost(e)) {
+                            Ok(()) => {
+                                src.apply_error = None;
+                                changed = true;
+                                for f in &batch.files {
+                                    let old = self.offsets.insert(f.path.clone(), f.offset);
+                                    self.ingested.bytes +=
+                                        f.offset.saturating_sub(old.unwrap_or(0));
+                                    self.ingested.files += 1;
                                 }
-                                let added = e.usage.output - seen;
-                                self.metered
-                                    .insert(e.event_id.clone(), (e.ts_ms, e.usage.output));
-                                self.meter.record(e.ts_ms, added);
-                                self.session_meters
-                                    .entry(e.session_id.clone())
-                                    .or_insert_with(|| ActivityMeter::new(RATE_WINDOW_MS))
-                                    .record(e.ts_ms, added);
+                                self.ingested.events += batch.events.len() as u64;
+                                // Backfilled history is older than the window and never counts as live output.
+                                for e in batch
+                                    .events
+                                    .iter()
+                                    .filter(|e| e.ts_ms > now - RATE_WINDOW_MS)
+                                {
+                                    let key = (provider, e.event_id.clone());
+                                    let seen = self.metered.get(&key).map_or(0, |m| m.1);
+                                    if e.usage.output <= seen {
+                                        continue;
+                                    }
+                                    let added = e.usage.output - seen;
+                                    self.metered.insert(key, (e.ts_ms, e.usage.output));
+                                    self.meter.record(e.ts_ms, added);
+                                    self.session_meters
+                                        .entry((provider, e.session_id.clone()))
+                                        .or_insert_with(|| ActivityMeter::new(RATE_WINDOW_MS))
+                                        .record(e.ts_ms, added);
+                                }
                             }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %format!("{e:#}"), "cannot store poll batch");
-                            self.apply_error = Some(format!("Storage: {e:#}"));
-                            // The same batch would be re-read at once; wait for the next tick instead.
-                            self.indexing = false;
+                            Err(e) => {
+                                tracing::error!(error = %format!("{e:#}"), "cannot store poll batch");
+                                src.apply_error = Some(format!("Storage: {e:#}"));
+                                // The same batch would be re-read at once; wait for the next tick instead.
+                                src.more = false;
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"), provider = provider.label(), "adapter poll failed");
+                    src.poll_error = Some(format!("{}: {e:#}", provider.label()));
+                    src.more = false;
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "adapter poll failed");
-                self.poll_error = Some(format!("{}: {e:#}", provider.label()));
-                self.indexing = false;
-            }
+
+            src.live = match src.adapter.live_sessions() {
+                Ok(l) => {
+                    src.live_error = None;
+                    l
+                }
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"), provider = provider.label(), "cannot read live sessions");
+                    src.live_error = Some(format!("{} live sessions: {e:#}", provider.label()));
+                    Vec::new()
+                }
+            };
         }
 
-        let live = match self.adapter.live_sessions() {
-            Ok(l) => {
-                self.live_error = None;
-                l
-            }
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "cannot read live sessions");
-                self.live_error = Some(format!("{} live sessions: {e:#}", provider.label()));
-                Vec::new()
-            }
-        };
-
-        if live.is_empty() {
+        if self.sources.iter().all(|s| s.live.is_empty()) {
             self.table = None;
         } else if self
             .table
@@ -205,20 +226,29 @@ impl Collector {
         }
         let table = self.table.as_ref().map(|(_, t)| t);
 
-        let verified: Vec<&LiveSession> = live
+        let verified: Vec<(Provider, &LiveSession)> = self
+            .sources
             .iter()
-            .filter(|l| table.is_some_and(|t| verify(t, l).is_some()))
+            .flat_map(|s| s.live.iter().map(|l| (s.adapter.provider(), l)))
+            .filter(|(_, l)| table.is_some_and(|t| verify(t, l).is_some()))
             .collect();
-        let live_ids: BTreeSet<String> = verified.iter().map(|l| l.session_id.clone()).collect();
+        let live_ids: BTreeSet<Key> = verified
+            .iter()
+            .map(|(p, l)| (*p, l.session_id.clone()))
+            .collect();
         let cutoff = verified
             .iter()
-            .filter_map(|l| l.started_at_ms)
+            .filter_map(|(_, l)| l.started_at_ms)
             .fold(now - DAY_MS, i64::min);
 
         self.metered.retain(|_, m| m.0 > now - RATE_WINDOW_MS);
 
         if cache_stale(self.cache.as_ref(), changed, &live_ids, midnight) {
-            let rows = self.store.sessions_since(provider, cutoff);
+            let rows: anyhow::Result<Vec<Vec<SessionRow>>> = self
+                .sources
+                .iter()
+                .map(|s| self.store.sessions_since(s.adapter.provider(), cutoff))
+                .collect();
             let totals = self.store.totals_since(midnight);
             match rows.and_then(|r| Ok((r, totals?))) {
                 Ok((rows, totals)) => {
@@ -238,10 +268,10 @@ impl Collector {
             }
         }
 
-        let rates: HashMap<String, f32> = self
+        let rates: HashMap<Key, f32> = self
             .session_meters
             .iter_mut()
-            .map(|(id, m)| (id.clone(), m.rate_per_sec(now) as f32))
+            .map(|(k, m)| (k.clone(), m.rate_per_sec(now) as f32))
             .collect();
         let empty = Totals {
             tokens: TokenUsage::default(),
@@ -250,14 +280,28 @@ impl Collector {
             unpriced_events: 0,
             sessions: 0,
         };
-        let (rows, totals) = self
-            .cache
-            .as_ref()
-            .map_or((&[][..], &empty), |c| (&c.rows[..], &c.totals));
-        let mut snap = build_snapshot(provider, rows, totals, &live, table, &rates, now);
+        let totals = self.cache.as_ref().map_or(&empty, |c| &c.totals);
+        let groups: Vec<Group> = self
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, s)| Group {
+                provider: s.adapter.provider(),
+                rows: self
+                    .cache
+                    .as_ref()
+                    .and_then(|c| c.rows.get(i))
+                    .map_or(&[][..], |r| &r[..]),
+                live: &s.live,
+            })
+            .collect();
+        let mut snap = build_snapshot(&groups, totals, table, &rates, now);
 
-        self.session_meters
-            .retain(|id, _| snap.sessions.iter().any(|s| &s.session_id == id));
+        self.session_meters.retain(|(p, id), _| {
+            snap.sessions
+                .iter()
+                .any(|s| s.provider == *p && &s.session_id == id)
+        });
         snap.output_rate = self.meter.rate_per_sec(now) as f32;
         snap.system_gpu_percent = gpu_utilization().map_or(Reading::Unavailable, Reading::Measured);
         if self.rate_history.len() == HISTORY_LEN {
@@ -265,15 +309,18 @@ impl Collector {
         }
         self.rate_history.push_back(snap.output_rate);
         snap.rate_history = self.rate_history.iter().copied().collect();
-        snap.indexing = self.indexing;
+        snap.indexing = self.sources.iter().any(|s| s.more);
         snap.errors = self
             .config_errors
             .iter()
-            .chain(&self.poll_error)
-            .chain(&self.live_error)
-            .chain(&self.apply_error)
-            .chain(&self.query_error)
             .cloned()
+            .chain(self.sources.iter().flat_map(|s| {
+                [&s.poll_error, &s.live_error, &s.apply_error]
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+            }))
+            .chain(self.query_error.clone())
             .collect();
         snap
     }
@@ -281,101 +328,119 @@ impl Collector {
 
 /// Whether stored rows and totals must be queried again: after new data, a
 /// change in the live set, local midnight, or every [`REQUERY_INTERVAL`].
-fn cache_stale(
-    cache: Option<&Cache>,
-    changed: bool,
-    live: &BTreeSet<String>,
-    midnight: i64,
-) -> bool {
+fn cache_stale(cache: Option<&Cache>, changed: bool, live: &BTreeSet<Key>, midnight: i64) -> bool {
     cache.is_none_or(|c| {
         changed || &c.live != live || c.midnight != midnight || c.at.elapsed() >= REQUERY_INTERVAL
     })
 }
 
+/// One adapter's stored rows and live sessions.
+pub struct Group<'a> {
+    pub provider: Provider,
+    pub rows: &'a [SessionRow],
+    pub live: &'a [LiveSession],
+}
+
 /// Everything in a [`Snapshot`] that follows from stored rows, the live
-/// registry and the process table. Rates, history, indexing and errors are
+/// sessions and the process table. Rates, history, indexing and errors are
 /// left empty for the caller.
+///
+/// Every verified live process is a root of process attribution, including a
+/// process shared by several sessions: its tree is cut out of any agent above
+/// it (nested agents never count twice) but shown for none of its sessions.
 pub fn build_snapshot(
-    provider: Provider,
-    rows: &[SessionRow],
+    groups: &[Group],
     totals: &Totals,
-    live: &[LiveSession],
     table: Option<&ProcTable>,
-    rates: &HashMap<String, f32>,
+    rates: &HashMap<Key, f32>,
     now_ms: i64,
 ) -> Snapshot {
-    let verified: HashMap<&str, (&LiveSession, ProcessIdentity)> = live
+    let verified: Vec<HashMap<&str, (&LiveSession, ProcessIdentity)>> = groups
         .iter()
-        .filter_map(|l| Some((l.session_id.as_str(), (l, verify(table?, l)?))))
+        .map(|g| {
+            g.live
+                .iter()
+                .filter_map(|l| Some((l.session_id.as_str(), (l, verify(table?, l)?))))
+                .collect()
+        })
         .collect();
-    let roots: Vec<ProcessIdentity> = verified.values().map(|(_, p)| *p).collect();
+    let roots: Vec<ProcessIdentity> = verified
+        .iter()
+        .flat_map(|v| v.values().map(|(_, p)| *p))
+        .collect();
     let usage = table.map(|t| attribute(t, &roots)).unwrap_or_default();
 
-    // A live session whose transcript has no rows yet still gets a row.
-    let missing: Vec<SessionRow> = verified
-        .iter()
-        .filter(|(id, _)| !rows.iter().any(|r| r.session_id == **id))
-        .map(|(id, (l, _))| SessionRow {
-            session_id: id.to_string(),
-            project_path: l.project_path.clone(),
-            model: None,
-            started_at_ms: l.started_at_ms,
-            last_activity_at_ms: None,
-            active_ms: 0,
-            last_error: false,
-            tokens: TokenUsage::default(),
-            cost_usd: 0.0,
-            priced_events: 0,
-            unpriced_events: 0,
-            recorded_cost: None,
-        })
-        .collect();
-
-    let mut sessions: Vec<AgentSession> = rows
-        .iter()
-        .filter(|r| {
-            verified.contains_key(r.session_id.as_str())
-                || r.last_activity_at_ms.is_some_and(|t| t >= now_ms - DAY_MS)
-        })
-        .chain(&missing)
-        .map(|r| {
-            let live = verified.get(r.session_id.as_str());
-            let status = resolve_status(
-                live.map(|(l, _)| l.state),
-                r.last_activity_at_ms,
-                r.last_error,
-                now_ms,
-            );
-            let process = live.map(|(_, p)| *p);
-            AgentSession {
-                provider,
-                session_id: r.session_id.clone(),
-                project_path: r
-                    .project_path
-                    .clone()
-                    .or_else(|| live.and_then(|(l, _)| l.project_path.clone())),
-                model: r.model.clone(),
-                status,
-                started_at_ms: r
-                    .started_at_ms
-                    .or_else(|| live.and_then(|(l, _)| l.started_at_ms)),
-                last_activity_at_ms: r.last_activity_at_ms,
-                ended_at_ms: r.last_activity_at_ms.filter(|_| !status.is_live()),
-                active_ms: r.active_ms,
-                tokens: r.tokens,
-                cost_usd: cost_reading(r.cost_usd, r.priced_events, r.unpriced_events),
-                unpriced_events: r.unpriced_events,
-                output_rate: rates.get(&r.session_id).copied().unwrap_or(0.0),
-                process,
-                resources: process
-                    .and_then(|p| usage.get(&p.pid))
-                    .map_or(Reading::Unavailable, |u| Reading::Measured(*u)),
-                recorded_cost: r
-                    .recorded_cost
-                    .map_or(Reading::Unavailable, Reading::Measured),
-            }
-        })
-        .collect();
+    let mut sessions: Vec<AgentSession> = Vec::new();
+    for (g, verified) in groups.iter().zip(&verified) {
+        // A live session whose transcript has no rows yet still gets a row.
+        let missing: Vec<SessionRow> = verified
+            .iter()
+            .filter(|(id, _)| !g.rows.iter().any(|r| r.session_id == **id))
+            .map(|(id, (l, _))| SessionRow {
+                session_id: id.to_string(),
+                project_path: l.project_path.clone(),
+                model: None,
+                started_at_ms: l.started_at_ms,
+                last_activity_at_ms: None,
+                active_ms: 0,
+                last_error: false,
+                tokens: TokenUsage::default(),
+                cost_usd: 0.0,
+                priced_events: 0,
+                unpriced_events: 0,
+                recorded_cost: None,
+            })
+            .collect();
+        sessions.extend(
+            g.rows
+                .iter()
+                .filter(|r| {
+                    verified.contains_key(r.session_id.as_str())
+                        || r.last_activity_at_ms.is_some_and(|t| t >= now_ms - DAY_MS)
+                })
+                .chain(&missing)
+                .map(|r| {
+                    let live = verified.get(r.session_id.as_str());
+                    let status = resolve_status(
+                        live.map(|(l, _)| l.state),
+                        r.last_activity_at_ms,
+                        r.last_error,
+                        now_ms,
+                    );
+                    let process = live.filter(|(l, _)| !l.shared_process).map(|(_, p)| *p);
+                    AgentSession {
+                        provider: g.provider,
+                        session_id: r.session_id.clone(),
+                        project_path: r
+                            .project_path
+                            .clone()
+                            .or_else(|| live.and_then(|(l, _)| l.project_path.clone())),
+                        model: r.model.clone(),
+                        status,
+                        started_at_ms: r
+                            .started_at_ms
+                            .or_else(|| live.and_then(|(l, _)| l.started_at_ms)),
+                        last_activity_at_ms: r.last_activity_at_ms,
+                        ended_at_ms: r.last_activity_at_ms.filter(|_| !status.is_live()),
+                        active_ms: r.active_ms,
+                        tokens: r.tokens,
+                        cost_usd: cost_reading(r.cost_usd, r.priced_events, r.unpriced_events),
+                        unpriced_events: r.unpriced_events,
+                        output_rate: rates
+                            .get(&(g.provider, r.session_id.clone()))
+                            .copied()
+                            .unwrap_or(0.0),
+                        process,
+                        resources: process
+                            .and_then(|p| usage.get(&p.pid))
+                            .map_or(Reading::Unavailable, |u| Reading::Measured(*u)),
+                        recorded_cost: r
+                            .recorded_cost
+                            .map_or(Reading::Unavailable, Reading::Measured),
+                    }
+                }),
+        );
+    }
 
     let rank = |s: SessionStatus| match s {
         SessionStatus::Active => 0,
@@ -389,6 +454,7 @@ pub fn build_snapshot(
             .cmp(&rank(b.status))
             .then_with(|| recency(b).cmp(&recency(a)))
             .then_with(|| a.session_id.cmp(&b.session_id))
+            .then_with(|| a.provider.cmp(&b.provider))
     });
 
     let measured: Vec<_> = sessions
@@ -495,22 +561,32 @@ mod tests {
     const NOW: i64 = 1_800_000_000_000;
     const START_S: u64 = 1_799_990_000;
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct Fake {
+        provider: Provider,
         polls: Arc<Mutex<VecDeque<anyhow::Result<PollBatch>>>>,
+    }
+
+    impl Fake {
+        fn new(provider: Provider) -> Self {
+            Self {
+                provider,
+                polls: Arc::default(),
+            }
+        }
     }
 
     impl AgentAdapter for Fake {
         fn provider(&self) -> Provider {
-            P
+            self.provider
         }
 
         fn poll(&mut self, _: &HashMap<String, u64>, _: i64) -> anyhow::Result<PollBatch> {
-            self.polls
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Ok(batch(vec![], vec![])))
+            self.polls.lock().unwrap().pop_front().unwrap_or_else(|| {
+                let mut b = batch(vec![], vec![]);
+                b.provider = self.provider;
+                Ok(b)
+            })
         }
 
         fn live_sessions(&self) -> anyhow::Result<Vec<LiveSession>> {
@@ -519,15 +595,24 @@ mod tests {
     }
 
     fn collector() -> (Collector, Fake) {
-        let fake = Fake::default();
+        let fake = Fake::new(P);
         let c = Collector::new(
-            Box::new(fake.clone()),
+            vec![Box::new(fake.clone())],
             Store::open_in_memory().unwrap(),
             PriceBook::builtin(),
             vec![],
         )
         .unwrap();
         (c, fake)
+    }
+
+    fn snapshot(rows: &[SessionRow], live: &[LiveSession], t: Option<&ProcTable>) -> Snapshot {
+        let g = [Group {
+            provider: P,
+            rows,
+            live,
+        }];
+        build_snapshot(&g, &totals(), t, &HashMap::new(), NOW)
     }
 
     fn batch(events: Vec<UsageEvent>, sessions: Vec<SessionDelta>) -> PollBatch {
@@ -556,6 +641,7 @@ mod tests {
             },
             fast: false,
             us_inference: false,
+            unknown_tier: false,
         }
     }
 
@@ -596,6 +682,7 @@ mod tests {
             started_at_ms: Some(START_S as i64 * 1000),
             state,
             project_path: Some(format!("/registry/{id}")),
+            shared_process: false,
         }
     }
 
@@ -670,7 +757,7 @@ mod tests {
             live("idle", 300, LiveState::Idle),
         ];
         let t = table(&[100, 200, 300], true);
-        let s = build_snapshot(P, &rows, &totals(), &live, Some(&t), &HashMap::new(), NOW);
+        let s = snapshot(&rows, &live, Some(&t));
         let order: Vec<_> = s.sessions.iter().map(|x| x.session_id.as_str()).collect();
         assert_eq!(order, ["busy", "wait", "idle", "done"]);
         let statuses: Vec<_> = s.sessions.iter().map(|x| x.status).collect();
@@ -700,7 +787,7 @@ mod tests {
         reused.proc_start_s = Some(START_S - 3_600);
         let live = [live("gone", 100, LiveState::Busy), reused];
         let t = table(&[200], true);
-        let s = build_snapshot(P, &rows, &totals(), &live, Some(&t), &HashMap::new(), NOW);
+        let s = snapshot(&rows, &live, Some(&t));
         for id in ["gone", "reused"] {
             let x = get(&s, id);
             assert_eq!(x.process, None);
@@ -717,7 +804,7 @@ mod tests {
     fn live_session_without_transcript_appears() {
         let live = [live("fresh", 100, LiveState::Idle)];
         let t = table(&[100], true);
-        let s = build_snapshot(P, &[], &totals(), &live, Some(&t), &HashMap::new(), NOW);
+        let s = snapshot(&[], &live, Some(&t));
         let x = get(&s, "fresh");
         assert_eq!(x.status, SessionStatus::Idle);
         assert_eq!(x.tokens, TokenUsage::default());
@@ -817,7 +904,7 @@ mod tests {
         assert!(cache_stale(
             Some(&cache),
             false,
-            &["s".to_string()].into(),
+            &[(P, "s".to_string())].into(),
             NOW
         ));
         assert!(cache_stale(None, false, &live, NOW));
@@ -840,7 +927,12 @@ mod tests {
         let mut t = totals();
         t.cost_usd = 1.0;
         t.priced_events = 2;
-        let s = build_snapshot(P, &rows, &t, &[], None, &HashMap::new(), NOW);
+        let g = [Group {
+            provider: P,
+            rows: &rows,
+            live: &[],
+        }];
+        let s = build_snapshot(&g, &t, None, &HashMap::new(), NOW);
         assert_eq!(get(&s, "costed").recorded_cost, Reading::Measured(c));
         assert_eq!(get(&s, "costed").cost_usd, Reading::Estimated(0.5));
         assert_eq!(get(&s, "plain").recorded_cost, Reading::Unavailable);
@@ -848,11 +940,139 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_adapter_keeps_the_other_agents_data() {
+        let (claude, codex) = (Fake::new(Provider::ClaudeCode), Fake::new(Provider::Codex));
+        let mut c = Collector::new(
+            vec![Box::new(claude.clone()), Box::new(codex.clone())],
+            Store::open_in_memory().unwrap(),
+            PriceBook::builtin(),
+            vec![],
+        )
+        .unwrap();
+        let t = now_ms() - 60_000;
+        claude.polls.lock().unwrap().push_back(Ok(batch(
+            vec![event("e1", "s1", "claude-sonnet-5-5", t, 5)],
+            vec![delta("s1", &[t])],
+        )));
+        codex
+            .polls
+            .lock()
+            .unwrap()
+            .push_back(Err(anyhow::anyhow!("synthetic codex failure")));
+        let s = c.tick();
+        assert_eq!(s.sessions.len(), 1);
+        assert_eq!(s.sessions[0].provider, Provider::ClaudeCode);
+        assert_eq!(s.sessions[0].tokens.output, 5);
+        assert_eq!(s.errors.len(), 1);
+        assert!(s.errors[0].starts_with("Codex: synthetic codex failure"));
+        assert!(c.tick().errors.is_empty());
+    }
+
+    #[test]
+    fn same_session_id_under_two_providers_stays_separate() {
+        let (claude, codex) = (Fake::new(Provider::ClaudeCode), Fake::new(Provider::Codex));
+        let mut c = Collector::new(
+            vec![Box::new(claude.clone()), Box::new(codex.clone())],
+            Store::open_in_memory().unwrap(),
+            PriceBook::builtin(),
+            vec![],
+        )
+        .unwrap();
+        let t = now_ms() - 1_000;
+        claude.polls.lock().unwrap().push_back(Ok(batch(
+            vec![event("same-event", "same", "claude-sonnet-5-5", t, 30)],
+            vec![delta("same", &[t])],
+        )));
+        let mut b = batch(
+            vec![event("same-event", "same", "gpt-6.1-sol", t, 60)],
+            vec![delta("same", &[t])],
+        );
+        b.provider = Provider::Codex;
+        b.files[0].path = "/synthetic/codex.jsonl".into();
+        codex.polls.lock().unwrap().push_back(Ok(b));
+        let s = c.tick();
+        assert_eq!(s.sessions.len(), 2);
+        let by = |p: Provider| s.sessions.iter().find(|x| x.provider == p).unwrap();
+        assert_eq!(by(Provider::ClaudeCode).tokens.output, 30);
+        assert_eq!(by(Provider::Codex).tokens.output, 60);
+        assert_eq!(by(Provider::ClaudeCode).output_rate, 1.0);
+        assert_eq!(by(Provider::Codex).output_rate, 2.0);
+        assert_eq!(s.today_tokens.output, 90);
+    }
+
+    #[test]
+    fn shared_codex_process_is_live_but_counted_for_no_one() {
+        let info = |ppid, rss| ProcInfo {
+            ppid: Some(ppid),
+            start_time_s: START_S,
+            cpu_percent: 1.0,
+            rss_bytes: rss,
+        };
+        // Claude 100 → child 101 and codex app-server 200 → its child 201.
+        let t = ProcTable {
+            procs: HashMap::from([
+                (100, info(1, 1)),
+                (101, info(100, 10)),
+                (200, info(100, 100)),
+                (201, info(200, 1_000)),
+            ]),
+            cpu_valid: true,
+        };
+        let claude = [live("c", 100, LiveState::Busy)];
+        let rows = [row("c", NOW - 1_000, 1)];
+        let codex_rows = [row("a", NOW - 1_000, 1), row("b", NOW - 2_000, 1)];
+        // An app-server hosting sessions a and b; then a process hosting only a.
+        let shared = ["a", "b"].map(|id| LiveSession {
+            shared_process: true,
+            ..live(id, 200, LiveState::Idle)
+        });
+        let alone = [live("a", 200, LiveState::Idle)];
+        for codex in [&shared[..], &alone[..]] {
+            let is_shared = codex.len() == 2;
+            let g = [
+                Group {
+                    provider: Provider::ClaudeCode,
+                    rows: &rows,
+                    live: &claude,
+                },
+                Group {
+                    provider: Provider::Codex,
+                    rows: &codex_rows,
+                    live: codex,
+                },
+            ];
+            let s = build_snapshot(&g, &totals(), Some(&t), &HashMap::new(), NOW);
+            let c = get(&s, "c").resources.value().copied().unwrap();
+            // The codex tree is a nested agent either way: never in Claude's.
+            assert_eq!(
+                (c.process_count, c.rss_bytes),
+                (2, 11),
+                "shared={is_shared}"
+            );
+            let a = get(&s, "a");
+            assert_eq!(a.provider, Provider::Codex);
+            assert_eq!(a.status, SessionStatus::Idle, "live either way");
+            if is_shared {
+                for x in [a, get(&s, "b")] {
+                    assert_eq!(x.status, SessionStatus::Idle);
+                    assert_eq!((x.process, x.resources), (None, Reading::Unavailable));
+                }
+                // Counted for no one, so not in the totals either.
+                assert_eq!(s.agents_rss_bytes, Some(11));
+            } else {
+                assert_eq!(a.process.unwrap().pid, 200);
+                assert_eq!(a.resources.value().unwrap().rss_bytes, 1_100);
+                assert_eq!(s.agents_rss_bytes, Some(11 + 1_100));
+            }
+        }
+    }
+
+    #[test]
     fn cpu_unavailable_until_valid_but_rss_summed() {
         let rows = [row("a", NOW - 1_000, 1)];
         let live = [live("a", 100, LiveState::Busy)];
         let t = table(&[100], false);
-        let s = build_snapshot(P, &rows, &totals(), &live, Some(&t), &HashMap::new(), NOW);
+        let s = snapshot(&rows, &live, Some(&t));
         assert_eq!(s.agents_cpu_percent, None);
         assert_eq!(s.agents_rss_bytes, Some(2_000));
     }

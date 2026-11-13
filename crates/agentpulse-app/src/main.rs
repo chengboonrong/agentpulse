@@ -10,9 +10,10 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use agentpulse_core::AgentAdapter;
 use agentpulse_cost::PriceBook;
 use agentpulse_storage::Store;
-use agentpulse_telemetry::ClaudeCodeAdapter;
+use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter};
 use anyhow::{Context, bail};
 use collector::Collector;
 use tracing_subscriber::filter::LevelFilter;
@@ -62,12 +63,13 @@ fn open_collector() -> anyhow::Result<Collector> {
         PriceBook::builtin()
     });
     let root = ClaudeCodeAdapter::default_root().context("cannot locate ~/.claude")?;
-    Collector::new(
-        Box::new(ClaudeCodeAdapter::new(root)),
-        store,
-        prices,
-        errors,
-    )
+    let mut adapters: Vec<Box<dyn AgentAdapter>> = vec![Box::new(ClaudeCodeAdapter::new(root))];
+    // No home directory means no ~/.codex either: nothing to watch, not an error.
+    adapters.extend(
+        CodexAdapter::default_root()
+            .map(|r| Box::new(CodexAdapter::new(r)) as Box<dyn AgentAdapter>),
+    );
+    Collector::new(adapters, store, prices, errors)
 }
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {

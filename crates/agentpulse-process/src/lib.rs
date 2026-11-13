@@ -136,7 +136,7 @@ fn list_pids() -> Vec<u32> {
         .collect()
 }
 
-fn bsd_info(pid: u32) -> Option<(u32, u64)> {
+fn bsd(pid: u32) -> Option<libc::proc_bsdinfo> {
     // SAFETY: proc_bsdinfo is plain data; the kernel fills at most its size.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
@@ -149,7 +149,128 @@ fn bsd_info(pid: u32) -> Option<(u32, u64)> {
             size,
         )
     };
-    (got == size).then_some((info.pbi_ppid, info.pbi_start_tvsec))
+    (got == size).then_some(info)
+}
+
+fn bsd_info(pid: u32) -> Option<(u32, u64)> {
+    bsd(pid).map(|i| (i.pbi_ppid, i.pbi_start_tvsec))
+}
+
+/// A process and the paths of the files it has open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenFiles {
+    pub pid: u32,
+    /// Unix seconds, as reported by the OS.
+    pub start_time_s: u64,
+    pub paths: Vec<String>,
+}
+
+/// Every process whose executable name (the kernel's 16-byte `p_comm`) is
+/// `name`. Walks the whole process table, so callers should not do it every
+/// tick. Processes owned by other users are not visible and are left out.
+pub fn processes_named(name: &str) -> Vec<ProcessIdentity> {
+    list_pids()
+        .into_iter()
+        .filter_map(|pid| {
+            let info = bsd(pid)?;
+            let comm = info
+                .pbi_comm
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8);
+            comm.eq(name.bytes()).then_some(ProcessIdentity {
+                pid,
+                start_time_s: info.pbi_start_tvsec,
+            })
+        })
+        .collect()
+}
+
+/// The open file paths of `p` that `keep` accepts, or None when it has
+/// exited or its PID now belongs to another process.
+pub fn open_files(p: ProcessIdentity, keep: impl Fn(&str) -> bool) -> Option<OpenFiles> {
+    let start = bsd(p.pid)?.pbi_start_tvsec;
+    (start == p.start_time_s).then(|| OpenFiles {
+        pid: p.pid,
+        start_time_s: start,
+        paths: open_paths(p.pid).into_iter().filter(|f| keep(f)).collect(),
+    })
+}
+
+/// `struct proc_fileinfo` from <sys/proc_info.h>; libc does not define it.
+#[repr(C)]
+struct ProcFileInfo {
+    openflags: u32,
+    status: u32,
+    offset: libc::off_t,
+    kind: i32,
+    guardflags: u32,
+}
+
+/// `struct vnode_fdinfowithpath` from <sys/proc_info.h>.
+#[repr(C)]
+struct VnodeFdInfoWithPath {
+    pfi: ProcFileInfo,
+    pvip: libc::vnode_info_path,
+}
+
+/// `PROC_PIDFDVNODEPATHINFO` from <sys/proc_info.h>.
+const PROC_PIDFDVNODEPATHINFO: libc::c_int = 2;
+
+/// Paths of the vnodes (files, directories) `pid` has open.
+fn open_paths(pid: u32) -> Vec<String> {
+    let pid = pid as libc::c_int;
+    let entry = size_of::<libc::proc_fdinfo>();
+    // SAFETY: a null buffer asks for the size the fd list needs.
+    let need =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    if need <= 0 {
+        return vec![];
+    }
+    // Slack for files opened between the two calls.
+    let mut fds: Vec<libc::proc_fdinfo> = Vec::with_capacity(need as usize / entry + 16);
+    let bytes = (fds.capacity() * entry) as libc::c_int;
+    // SAFETY: the buffer has room for `bytes` bytes; the call returns how many it filled.
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            fds.as_mut_ptr().cast(),
+            bytes,
+        )
+    };
+    // SAFETY: the kernel initialised the first `got` bytes, whole entries only.
+    unsafe { fds.set_len(got.max(0) as usize / entry) };
+    fds.iter()
+        .filter(|f| f.proc_fdtype == libc::PROX_FDTYPE_VNODE as u32)
+        .filter_map(|f| {
+            // SAFETY: plain data; the kernel fills at most `size` bytes.
+            let mut info: VnodeFdInfoWithPath = unsafe { std::mem::zeroed() };
+            let size = size_of::<VnodeFdInfoWithPath>() as libc::c_int;
+            let got = unsafe {
+                libc::proc_pidfdinfo(
+                    pid,
+                    f.proc_fd,
+                    PROC_PIDFDVNODEPATHINFO,
+                    (&mut info as *mut VnodeFdInfoWithPath).cast(),
+                    size,
+                )
+            };
+            if got != size {
+                return None;
+            }
+            let raw: Vec<u8> = info
+                .pvip
+                .vip_path
+                .as_flattened()
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect();
+            String::from_utf8(raw).ok()
+        })
+        .collect()
 }
 
 /// (user + system CPU time in mach ticks, resident bytes)
@@ -276,6 +397,7 @@ mod tests {
             started_at_ms,
             state: LiveState::Idle,
             project_path: None,
+            shared_process: false,
         }
     }
 
@@ -384,6 +506,45 @@ mod tests {
         assert!(me.start_time_s <= now && now - me.start_time_s < 3600);
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(s.sample().cpu_valid);
+    }
+
+    #[test]
+    fn open_files_finds_a_file_this_process_holds() {
+        let dir = tempfile_dir();
+        let path = dir.join("rollout-synthetic.jsonl");
+        let _held = std::fs::File::create(&path).unwrap();
+        let real = std::fs::canonicalize(&path).unwrap();
+        let real = real.to_str().unwrap();
+        let me = std::process::id();
+        assert!(open_paths(me).iter().any(|p| p == real));
+
+        let info = bsd(me).unwrap();
+        let comm: String = info
+            .pbi_comm
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8 as char)
+            .collect();
+        let found = processes_named(&comm);
+        let id = *found.iter().find(|p| p.pid == me).unwrap();
+        assert_eq!(id.start_time_s, info.pbi_start_tvsec);
+        let mine = open_files(id, |p| p.ends_with(".jsonl")).unwrap();
+        assert!(mine.paths.iter().any(|p| p == real));
+        assert!(mine.paths.iter().all(|p| p.ends_with(".jsonl")));
+        // A reused PID (different start time) is not the same process.
+        let reused = ProcessIdentity {
+            start_time_s: id.start_time_s - 1,
+            ..id
+        };
+        assert_eq!(open_files(reused, |_| true), None);
+        assert!(processes_named("no-such-process-name").is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn tempfile_dir() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("agentpulse-fd-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
     }
 
     struct Child(std::process::Child);

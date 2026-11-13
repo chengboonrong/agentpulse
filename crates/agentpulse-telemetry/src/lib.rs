@@ -6,75 +6,49 @@
 //! `modelUsage` names (its contents are skipped unread).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use agentpulse_core::{
-    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, RecordedCost,
-    SessionDelta, TokenUsage, UsageEvent,
+    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RecordedCost, SessionDelta,
+    TokenUsage, UsageEvent,
 };
-use chrono::{DateTime, NaiveDateTime};
+use chrono::NaiveDateTime;
 use serde::Deserialize;
 
-const READ_BUDGET: u64 = 64 * 1024 * 1024;
-/// Full directory walk + stat of every transcript at most this often; a new
-/// subagent file of a running session can be noticed this late.
-const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
-/// Files modified within this window at the last full scan are polled every
-/// time; older ones wait for the next full scan (one more rescan interval of delay).
-const HOT_WINDOW: Duration = Duration::from_secs(15 * 60);
+mod codex;
+mod tail;
 
-struct Cached {
-    sid: String,
-    file: TranscriptFile,
-    hot: bool,
-}
-
-struct Scan {
-    taken: Instant,
-    files: Vec<Cached>,
-    sids: HashSet<String>,
-    /// Live session ids the last full scan looked for and did not find.
-    missing: HashSet<String>,
-}
+pub use codex::CodexAdapter;
+use tail::{Groups, Tailer, TranscriptFile, read_lines, ts_ms};
 
 pub struct ClaudeCodeAdapter {
     root: PathBuf,
-    scan: Option<Scan>,
-    /// The previous poll stopped at its budget: keep scanning everything.
-    backfilling: bool,
-    rescan_interval: Duration,
-    read_budget: u64,
-    full_scans: u64,
+    tail: Tailer,
 }
 
 impl ClaudeCodeAdapter {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            scan: None,
-            backfilling: false,
-            rescan_interval: RESCAN_INTERVAL,
-            read_budget: READ_BUDGET,
-            full_scans: 0,
+            tail: Tailer::new(),
         }
     }
 
     pub fn with_rescan_interval(mut self, d: Duration) -> Self {
-        self.rescan_interval = d;
+        self.tail.rescan_interval = d;
         self
     }
 
     pub fn with_read_budget(mut self, bytes: u64) -> Self {
-        self.read_budget = bytes;
+        self.tail.read_budget = bytes;
         self
     }
 
     /// Number of full discovery scans done so far.
     pub fn full_scans(&self) -> u64 {
-        self.full_scans
+        self.tail.full_scans
     }
 
     /// `$CLAUDE_CONFIG_DIR` if set and non-empty, else `~/.claude`.
@@ -158,18 +132,6 @@ struct Acc {
     recorded_cost: Option<RecordedCost>,
 }
 
-#[derive(Clone)]
-struct TranscriptFile {
-    path: PathBuf,
-    is_main: bool,
-}
-
-fn ts_ms(s: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|d| d.timestamp_millis())
-}
-
 fn to_event(r: &Record, session_id: &str, ts: i64) -> Option<UsageEvent> {
     if r.r#type.as_deref() != Some("assistant") {
         return None;
@@ -214,6 +176,7 @@ fn to_event(r: &Record, session_id: &str, ts: i64) -> Option<UsageEvent> {
         usage,
         fast: u.speed.as_deref() == Some("fast"),
         us_inference: u.inference_geo.as_deref() == Some("us"),
+        unknown_tier: false,
     })
 }
 
@@ -295,35 +258,6 @@ fn fold_line(
     }
 }
 
-/// Reads complete lines from `start`; returns the offset past the last one.
-fn read_file(
-    path: &Path,
-    start: u64,
-    session_id: &str,
-    is_main: bool,
-    accs: &mut BTreeMap<String, Acc>,
-    events: &mut HashMap<String, UsageEvent>,
-    skipped: &mut u64,
-) -> std::io::Result<u64> {
-    let mut f = File::open(path)?;
-    f.seek(SeekFrom::Start(start))?;
-    let mut r = BufReader::with_capacity(256 * 1024, f);
-    let mut buf = Vec::new();
-    let mut offset = start;
-    loop {
-        buf.clear();
-        let n = r.read_until(b'\n', &mut buf)?;
-        if n == 0 || buf.last() != Some(&b'\n') {
-            return Ok(offset);
-        }
-        offset += n as u64;
-        let line = buf.trim_ascii();
-        if !line.is_empty() {
-            fold_line(line, session_id, is_main, accs, events, skipped);
-        }
-    }
-}
-
 fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = fs::read_dir(dir) else {
         return vec![];
@@ -335,7 +269,7 @@ fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// session id → its main file followed by its subagent files.
-fn discover(projects: &Path) -> std::io::Result<BTreeMap<String, Vec<TranscriptFile>>> {
+fn discover(projects: &Path) -> std::io::Result<Groups> {
     let mut groups: BTreeMap<String, Vec<TranscriptFile>> = BTreeMap::new();
     for slug in fs::read_dir(projects)?.flatten() {
         let Ok(entries) = fs::read_dir(slug.path()) else {
@@ -367,7 +301,7 @@ fn discover(projects: &Path) -> std::io::Result<BTreeMap<String, Vec<TranscriptF
     for files in groups.values_mut() {
         files.sort_by(|a, b| b.is_main.cmp(&a.is_main).then_with(|| a.path.cmp(&b.path)));
     }
-    Ok(groups)
+    Ok(groups.into_iter().collect())
 }
 
 impl AgentAdapter for ClaudeCodeAdapter {
@@ -391,116 +325,21 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 HashSet::new()
             }
         };
-        if let Some(s) = &mut self.scan {
-            s.missing.retain(|i| live.contains(i));
-        }
-        let full = self.backfilling
-            || self.scan.as_ref().is_none_or(|s| {
-                s.taken.elapsed() >= self.rescan_interval
-                    || live
-                        .iter()
-                        .any(|l| !s.sids.contains(l) && !s.missing.contains(l))
-            });
-        let scan_start = Instant::now();
-        let groups: Vec<(String, Vec<TranscriptFile>)> = if full {
-            match discover(&self.root.join("projects")) {
-                Ok(g) => g.into_iter().collect(),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    self.scan = None;
-                    self.backfilling = false;
-                    return Ok(batch);
-                }
-                Err(e) => return Err(e.into()),
-            }
-        } else {
-            let mut g: Vec<(String, Vec<TranscriptFile>)> = vec![];
-            for c in self.scan.iter().flat_map(|s| &s.files) {
-                if !(c.hot || live.contains(&c.sid)) {
-                    continue;
-                }
-                match g.last_mut() {
-                    Some((sid, files)) if *sid == c.sid => files.push(c.file.clone()),
-                    _ => g.push((c.sid.clone(), vec![c.file.clone()])),
-                }
-            }
-            g
-        };
-        let mut cached = vec![];
         let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
         let mut events = HashMap::new();
-        let (mut skipped, mut bytes) = (0u64, 0u64);
-        for (sid, files) in groups {
-            for f in files {
-                let key = f.path.to_string_lossy().into_owned();
-                let Ok(meta) = fs::metadata(&f.path) else {
-                    tracing::warn!(path = %key, "cannot stat transcript");
-                    continue;
-                };
-                let size = meta.len();
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-                if full {
-                    cached.push(Cached {
-                        sid: sid.clone(),
-                        hot: live.contains(&sid)
-                            || SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .ok()
-                                .zip(mtime)
-                                .is_some_and(|(now, m)| now.saturating_sub(m) <= HOT_WINDOW),
-                        file: f.clone(),
-                    });
-                }
-                let start = match offsets.get(&key) {
-                    Some(&o) if o == size => continue,
-                    Some(&o) if o < size => o,
-                    Some(_) => 0, // truncated or replaced
-                    None => {
-                        let mtime = mtime.map_or(0, |d| d.as_millis() as i64);
-                        if mtime < since_ms && !live.contains(&sid) {
-                            continue;
-                        }
-                        0
-                    }
-                };
-                match read_file(
-                    &f.path,
-                    start,
-                    &sid,
-                    f.is_main,
-                    &mut accs,
-                    &mut events,
-                    &mut skipped,
-                ) {
-                    Ok(end) if end > start => {
-                        bytes += end - start;
-                        batch.files.push(FileCursor {
-                            path: key,
-                            offset: end,
-                        });
-                    }
-                    Ok(_) => {}
-                    Err(_) => tracing::warn!(path = %key, "cannot read transcript"),
-                }
-            }
-            if bytes >= self.read_budget {
-                batch.more = true;
-                break;
-            }
-        }
-        self.backfilling = batch.more;
-        if full {
-            self.full_scans += 1;
-            let sids: HashSet<String> = cached.iter().map(|c| c.sid.clone()).collect();
-            self.scan = Some(Scan {
-                taken: scan_start,
-                missing: live.difference(&sids).cloned().collect(),
-                sids,
-                files: cached,
-            });
-        }
+        let mut skipped = 0u64;
+        let projects = self.root.join("projects");
+        (batch.files, batch.more) = self.tail.poll(
+            &live,
+            offsets,
+            since_ms,
+            || discover(&projects),
+            |sid, f, start| {
+                read_lines(&f.path, start, None, |line| {
+                    fold_line(line, sid, f.is_main, &mut accs, &mut events, &mut skipped)
+                })
+            },
+        )?;
         batch.sessions = accs
             .into_iter()
             .map(|(session_id, mut acc)| {
@@ -574,6 +413,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     _ => LiveState::Unknown,
                 },
                 project_path: r.cwd,
+                shared_process: false,
             });
         }
         Ok(out)

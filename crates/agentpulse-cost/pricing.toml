@@ -1,9 +1,11 @@
+# First-party API list rates, USD per million tokens. Subscription plans and
+# cloud partners bill differently, so every cost AgentPulse shows is an
+# estimate. Each section names its source.
+fast_multiplier = 2.0          # Anthropic fast mode; OpenAI Fast (formerly Priority) tier
+us_inference_multiplier = 1.1  # Anthropic US-only inference
+
+# ---- Anthropic (Claude Code)
 # Source: https://platform.claude.com/docs/en/about-claude/pricing (read 2026-11-13).
-# First-party API rates. Subscription plans and cloud partners bill differently,
-# so every cost AgentPulse shows is an estimate.
-# USD per million tokens.
-fast_multiplier = 2.0          # fast mode
-us_inference_multiplier = 1.1  # US-only inference
 
 [[model]]
 id = "claude-fable-5-2"
@@ -179,3 +181,84 @@ output = 5.0
 cache_write_5m = 1.25
 cache_write_1h = 2.0
 cache_read = 0.1
+
+# ---- OpenAI (Codex)
+# Source: https://developers.openai.com/api/docs/pricing (read 2026-11-13).
+# Standard tier. The long-context rates apply to a request whose prompt (input
+# including cached input) exceeds 272,000 tokens. OpenAI bills cache writes as
+# input, and the Codex adapter counts them there.
+
+[[model]]
+id = "gpt-6-astra"
+input = 10.0
+output = 50.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 1.0
+[model.long_context]
+threshold = 272000
+input = 20.0
+output = 75.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 2.0
+
+[[model]]
+id = "gpt-6.1-sol"
+input = 2.0
+output = 10.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.1
+[model.long_context]
+threshold = 272000
+input = 4.0
+output = 15.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.2
+
+[[model]]
+id = "gpt-6.1-terra"
+input = 1.0
+output = 5.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.05
+[model.long_context]
+threshold = 272000
+input = 2.0
+output = 7.5
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.1
+
+[[model]]
+id = "gpt-6-luna"
+input = 0.1
+output = 0.5
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.01
+[model.long_context]
+threshold = 272000
+input = 0.2
+output = 0.75
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.02
+
+[[model]]
+id = "gpt-6-sol"
+input = 2.0
+output = 10.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.2
+[model.long_context]
+threshold = 272000
+input = 4.0
+output = 15.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+cache_read = 0.4
