@@ -161,7 +161,11 @@ not been measured.
   rule, so it must be:
   - off by default and opt-in;
   - metadata only: the same fields as the widget file, with no prompts, paths optional;
-  - end-to-end encrypted, with pairing by QR code, so the relay sees only ciphertext.
+  - end-to-end encrypted, with pairing by QR code, so the relay sees only ciphertext;
+  - multi-device (owner request, 2026-11-13): one phone pairs with several Macs and shows
+    each Mac's agents under its name, and one Mac pairs with several phones or iPads. Every
+    pairing has its own key, is listed by device name and last seen time on both sides, and
+    can be removed alone, which stops that device at once without touching the others.
   It needs the paid Apple Developer Program for TestFlight or the App Store. Still open:
   who runs the relay (self-hosted or third party) and whether a local-network-only mode is
   enough for a first version.
