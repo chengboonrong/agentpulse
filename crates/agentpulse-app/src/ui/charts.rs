@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use super::{
-    AppView, CONTENT_PAD, DARK, Theme, Tooltip, axis_label, axis_max, heading, secondary,
-    section_label, sp, tabular, ty,
+    AppView, CONTENT_PAD, Theme, Tooltip, axis_label, axis_max, card, heading, secondary,
+    section_label, sp, ty,
 };
 use crate::collector::{Day, Key, Snapshot, USAGE_DAYS, UsageCharts};
 use crate::format::{self, DASH};
@@ -27,14 +27,11 @@ const AXIS_W: f32 = 48.;
 const LANE_LABEL_W: f32 = 176.;
 const LANE_H: f32 = 22.;
 
-/// Series colour per agent, at least 3:1 against the window in both themes.
+/// Series colour per agent, at least 3:1 against the cards in both themes.
 fn agent_color(p: Provider, t: Theme) -> u32 {
-    let dark = t.window == DARK.window;
-    match (p, dark) {
-        (Provider::ClaudeCode, false) => 0xC4621A,
-        (Provider::ClaudeCode, true) => 0xE88C38,
-        (_, false) => 0x5A6478,
-        (_, true) => 0x9AA6BF,
+    match p {
+        Provider::ClaudeCode => t.series_claude,
+        _ => t.series_codex,
     }
 }
 
@@ -46,7 +43,8 @@ fn scroll_page(id: &'static str, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
         .min_h_0()
         .overflow_y_scroll()
         .px(px(CONTENT_PAD))
-        .py(px(sp::XL))
+        .pt(px(sp::M))
+        .pb(px(sp::XL))
         .flex()
         .flex_col()
 }
@@ -102,9 +100,8 @@ fn figure(value: String, note: &str, t: Theme) -> Div {
         .flex_col()
         .child(
             div()
-                .text_size(px(ty::ROW_TITLE))
-                .font_weight(FontWeight::SEMIBOLD)
-                .font_features(tabular())
+                .text_size(px(ty::PLATE))
+                .font_weight(FontWeight::EXTRA_BOLD)
                 .child(value),
         )
         .child(secondary(note, t))
@@ -124,7 +121,6 @@ fn y_axis(top: String, h: f32, t: Theme) -> Div {
         .text_size(px(ty::LABEL))
         .line_height(px(sp::L))
         .text_color(rgb(t.muted))
-        .font_features(tabular())
         .child(top)
         .child("0")
 }
@@ -185,7 +181,7 @@ fn day_columns(
                                 .h(px(h.max(1.)))
                                 .flex_none()
                                 .border_t_1()
-                                .border_color(rgb(t.window))
+                                .border_color(rgb(t.card))
                                 .bg(rgb(color))
                         }),
                 )
@@ -228,17 +224,52 @@ pub(super) fn usage(
                     t,
                 )),
         )
-        .children(notes_gap(notes));
+        .children(notes_gap(notes))
+        .child(today_tokens(s, t).mt(px(sp::L)));
     match &s.usage {
         None => {
             page.child(secondary("Usage appears once history is indexed.", t).mt(px(sp::GROUP)))
         }
         Some(u) => page
-            .child(daily_cost(u, t).mt(px(sp::GROUP)))
-            .child(cache(u, t).mt(px(sp::GROUP)))
-            .child(timeline(u, s.taken_at_ms, t).mt(px(sp::GROUP)))
-            .child(limits(s, t).mt(px(sp::GROUP))),
+            .child(card(t).mt(px(sp::XL)).child(daily_cost(u, t)))
+            .child(card(t).mt(px(sp::L)).child(cache(u, t)))
+            .child(card(t).mt(px(sp::L)).child(timeline(u, s.taken_at_ms, t)))
+            .child(card(t).mt(px(sp::L)).child(limits(s, t))),
     }
+}
+
+/// Today's tokens by kind, all agents: one line under the title.
+fn today_tokens(s: &Snapshot, t: Theme) -> Div {
+    let tk = s.today_tokens;
+    let pair = |label: &'static str, value: u64| {
+        div()
+            .flex()
+            .gap(px(sp::XS))
+            .child(secondary(label, t))
+            .child(
+                div()
+                    .text_size(px(ty::LABEL))
+                    .font_weight(FontWeight::BOLD)
+                    .child(format::tokens(value)),
+            )
+    };
+    div()
+        .flex()
+        .flex_wrap()
+        .items_baseline()
+        .gap_x(px(sp::L))
+        .gap_y(px(sp::XS))
+        .child(section_label("Today", t))
+        .child(pair("Input", tk.input))
+        .child(pair("Output", tk.output))
+        .child(pair("Cache write", tk.cache_write_5m + tk.cache_write_1h))
+        .child(pair("Cache read", tk.cache_read))
+        .children((s.today_unpriced_events > 0).then(|| {
+            secondary(
+                &format!("{} responses unpriced", s.today_unpriced_events),
+                t,
+            )
+        }))
 }
 
 /// Sum over agents with data; None when no agent has data that day.
@@ -420,7 +451,7 @@ fn cache(u: &UsageCharts, t: Theme) -> Div {
                     }
                     match cache_share(d) {
                         Some(share) => (
-                            vec![(t.accent, share as f32 * scale)],
+                            vec![(t.muted, share as f32 * scale)],
                             format!("{date} · {:.0}% of input-side tokens read from cache", share * 100.),
                         ),
                         None => (vec![], format!("{date} · no requests")),
@@ -506,7 +537,6 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
                     .child(
                         div()
                             .flex_none()
-                            .font_features(tabular())
                             .child(format!(" · {}", date_label(lane.runs[0].0, "%H:%M"))),
                     ),
             )
@@ -551,7 +581,6 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
         .border_color(rgb(t.muted))
         .text_size(px(ty::LABEL))
         .text_color(rgb(t.muted))
-        .font_features(tabular())
         .children(
             ticks
                 .into_iter()
@@ -576,7 +605,7 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
 // ------------------------------------------------------------- plan limits
 
 /// "weekly", "5-hour", "daily": the window as people name it.
-fn window_name(minutes: Option<u64>) -> String {
+pub(super) fn window_name(minutes: Option<u64>) -> String {
     match minutes {
         Some(10_080) => "weekly".into(),
         Some(1_440) => "daily".into(),
@@ -613,7 +642,7 @@ fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme)
     } else if pct >= 75. {
         t.waiting
     } else {
-        t.accent
+        t.series_codex
     };
     let mut detail = vec![];
     if let Some(r) = w.resets_at_s {
@@ -634,8 +663,7 @@ fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme)
                 .gap(px(sp::XS))
                 .child(
                     div()
-                        .font_weight(FontWeight::MEDIUM)
-                        .font_features(tabular())
+                        .font_weight(FontWeight::BOLD)
                         .child(format!("{:.0}%", w.used_percent)),
                 )
                 .child(format!("of {} limit used", window_name(w.window_minutes))),
@@ -688,7 +716,7 @@ fn limits(s: &Snapshot, t: Theme) -> Div {
                 .flex()
                 .flex_col()
                 .gap(px(sp::S))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("Codex"))
+                .child(div().font_weight(FontWeight::BOLD).child("Codex"))
                 .child(codex),
         )
         .child(secondary(
@@ -699,48 +727,62 @@ fn limits(s: &Snapshot, t: Theme) -> Div {
 
 // ---------------------------------------------------------- session detail
 
+/// The back link's "‹", drawn so it does not depend on a font's glyph.
+fn chevron_left(color: u32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            let mut path = gpui::PathBuilder::stroke(px(1.75));
+            path.move_to(point(b.right() - px(1.), b.top() + px(1.)));
+            path.line_to(point(b.left() + px(1.), b.top() + b.size.height / 2.));
+            path.line_to(point(b.right() - px(1.), b.bottom() - px(1.)));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, rgb(color));
+            }
+        },
+    )
+    .w(px(7.))
+    .h(px(12.))
+}
+
 pub(super) fn session_detail(
     s: &Snapshot,
     key: &Key,
+    profile: Div,
     notes: Vec<Div>,
     t: Theme,
     view: WeakEntity<AppView>,
     scroll: &ScrollHandle,
 ) -> impl IntoElement {
-    let session = s
-        .sessions
-        .iter()
-        .find(|x| x.provider == key.0 && x.session_id == key.1);
-    let path = session.and_then(|x| x.project_path.as_deref());
     let back = div()
         .id("back")
+        .role(gpui::Role::Link)
+        .tab_index(0)
         .cursor_pointer()
-        .text_color(rgb(t.accent))
-        .child("‹ Sessions")
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_color(rgb(t.text))
+        .font_weight(FontWeight::MEDIUM)
+        .focus_visible(|d| d.underline())
+        .child(chevron_left(t.text))
+        .child("Sessions")
         .on_click(move |_, _, cx| {
             view.update(cx, |v, cx| v.show_detail(None, cx)).ok();
         });
-    let mut sub = vec![
-        key.0.label().to_string(),
-        path.map_or("project path unknown".into(), format::display_path),
-    ];
-    if let Some(m) = session.and_then(|x| x.model.clone()) {
-        sub.push(m);
-    }
     let page = scroll_page("detail", scroll)
         .child(back)
-        .child(heading_owned(format::project_name(path).to_string()).mt(px(sp::S)))
-        .child(secondary(&sub.join(" · "), t))
+        .child(profile.mt(px(sp::M)))
         .children(notes_gap(notes));
     let detail = s.detail.as_ref().filter(|d| &d.key == key);
     let Some(d) = detail else {
-        return page.child(secondary("Loading requests…", t).mt(px(sp::GROUP)));
+        return page.child(secondary("Loading requests…", t).mt(px(sp::XL)));
     };
     if d.requests.is_empty() {
-        return page
-            .child(secondary("No requests recorded for this session.", t).mt(px(sp::GROUP)));
+        return page.child(secondary("No requests recorded for this session.", t).mt(px(sp::XL)));
     }
     let n = d.requests.len();
+    let color = agent_color(key.0, t);
     let first = d.requests[0].ts_ms;
     let last = d.requests[n - 1].ts_ms;
     let x_labels = vec![
@@ -790,7 +832,7 @@ pub(super) fn session_detail(
                     DETAIL_CHART_H,
                     t,
                 ))
-                .child(series_chart(sizes, thresholds, max, false, t)),
+                .child(series_chart(sizes, thresholds, max, false, color, t)),
         )
         .child(x_axis(x_labels.clone(), t));
 
@@ -831,18 +873,11 @@ pub(super) fn session_detail(
                     DETAIL_CHART_H,
                     t,
                 ))
-                .child(series_chart(cumulative, vec![], max, true, t)),
+                .child(series_chart(cumulative, vec![], max, true, color, t)),
         )
         .child(x_axis(x_labels, t));
-    page.child(context.mt(px(sp::GROUP)))
-        .child(cost.mt(px(sp::GROUP)))
-}
-
-fn heading_owned(text: String) -> Div {
-    div()
-        .text_size(px(ty::TITLE))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text)
+    page.child(card(t).mt(px(sp::XL)).child(context))
+        .child(card(t).mt(px(sp::L)).child(cost))
 }
 
 /// The largest value of each of `columns` equal slices of `values`, so a long
@@ -866,9 +901,10 @@ fn series_chart(
     marks: Vec<f32>,
     max: Option<f32>,
     line: bool,
+    color: u32,
     t: Theme,
 ) -> impl IntoElement {
-    let (fg, mark, grid) = (rgb(t.accent), rgb(t.waiting), rgb(t.border));
+    let (fg, mark, grid) = (rgb(color), rgb(t.waiting), rgb(t.border));
     canvas(
         |_, _, _| {},
         move |b, _, window, _| {

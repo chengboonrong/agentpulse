@@ -12,8 +12,9 @@ Sessions with a per-session detail, Usage and Cats), a menu-bar cat, and desktop
 
 ## Screenshots
 
-Rendered by the app and its widget views from live Claude Code sessions. They are not
-screen captures of a real menu bar or desktop.
+The window images are rendered by the app's own screenshot mode from the developer's live
+Claude Code and Codex sessions. The widget images are rendered by the widget views from a
+sample data file. None of them are screen captures of a real menu bar or desktop.
 
 ### Window
 
@@ -22,6 +23,10 @@ screen captures of a real menu bar or desktop.
 | ![Overview, light](docs/screenshots/light/overview.png) | ![Sessions](docs/screenshots/dark/sessions.png) |
 | **Minimum size, 880 × 560.** Fewer columns, no sideways scroll. | **No agents.** The empty state. |
 | ![Overview at minimum size](docs/screenshots/light/overview-min.png) | ![Empty overview](docs/screenshots/light/overview-empty.png) |
+| **Usage.** Daily estimated cost, cache efficiency, today's timeline. | **Session detail.** Context size per request and running cost. |
+| ![Usage](docs/screenshots/light/usage.png) | ![Session detail](docs/screenshots/light/session-detail.png) |
+| **Cats.** A coat and eye colour per agent. | |
+| ![Cats](docs/screenshots/dark/cats.png) | |
 
 ### Menu bar
 

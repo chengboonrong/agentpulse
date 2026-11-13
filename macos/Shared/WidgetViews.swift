@@ -10,9 +10,11 @@ struct AgentPulseWidgetView: View {
     var flatten: Bool? = nil
 
     @Environment(\.widgetRenderingMode) private var renderingMode
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let silhouette = flatten ?? (renderingMode != .fullColor)
+        let palette = Palette(scheme)
         Group {
             switch state {
             case .notRunning:
@@ -24,14 +26,17 @@ struct AgentPulseWidgetView: View {
                 HStack(alignment: .top, spacing: 14) {
                     summary(p, asOf: asOf, silhouette: silhouette)
                         .frame(width: 132)
-                    detail(p)
+                    detail(p, silhouette: silhouette)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             case let .live(p, asOf):
                 summary(p, asOf: asOf, silhouette: silhouette)
             }
         }
-        .containerBackground(.background, for: .widget)
+        .fontDesign(.rounded)
+        .monospacedDigit()
+        .environment(\.widgetPalette, palette)
+        .containerBackground(palette.ground, for: .widget)
         .widgetURL(URL(string: "agentpulse://open"))
     }
 
@@ -43,7 +48,7 @@ struct AgentPulseWidgetView: View {
         if family == .systemMedium {
             HStack(spacing: 14) {
                 if let cat {
-                    CatView(cat: cat, silhouette: silhouette)
+                    Stage(cat: cat, silhouette: silhouette)
                         .frame(width: 132)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -58,7 +63,7 @@ struct AgentPulseWidgetView: View {
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 if let cat {
-                    CatView(cat: cat, silhouette: silhouette)
+                    Stage(cat: cat, silhouette: silhouette)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     Spacer(minLength: 0)
@@ -75,11 +80,18 @@ struct AgentPulseWidgetView: View {
 
     private func summary(_ p: WidgetPayload, asOf: Date?, silhouette: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            CatView(cat: p.cat, silhouette: silhouette)
+            Stage(cat: p.cat, silhouette: silhouette)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Text(Self.headline(p.agents))
-                .font(.headline)
-                .lineLimit(1)
+                .padding(.bottom, 4)
+            HStack(spacing: 6) {
+                Text(Self.headline(p.agents))
+                    .font(.headline.weight(.heavy))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let (status, n) = Self.lead(p.agents) {
+                    Ribbon(status: status, count: n, silhouette: silhouette)
+                }
+            }
             Text("\(p.today.cost) today")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -97,7 +109,7 @@ struct AgentPulseWidgetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    private func detail(_ p: WidgetPayload) -> some View {
+    private func detail(_ p: WidgetPayload, silhouette: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             if p.sessions.isEmpty {
                 Text("No live sessions")
@@ -105,7 +117,7 @@ struct AgentPulseWidgetView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(Array(p.sessions.prefix(3).enumerated()), id: \.offset) { _, s in
-                    SessionRow(session: s)
+                    SessionRow(session: s, silhouette: silhouette)
                 }
             }
             Spacer(minLength: 0)
@@ -118,33 +130,114 @@ struct AgentPulseWidgetView: View {
     }
 
     static func headline(_ a: WidgetPayload.Agents) -> String {
-        if a.active > 0 { return "\(a.active) active" }
-        if a.waiting > 0 { return "\(a.waiting) waiting" }
-        if a.idle > 0 { return "\(a.idle) idle" }
-        return "No agents"
+        switch a.active + a.waiting + a.idle {
+        case 0: "No agents"
+        case 1: "1 agent"
+        case let n: "\(n) agents"
+        }
+    }
+
+    /// The ribbon beside the headline: who needs you leads, as in the app's roster.
+    static func lead(_ a: WidgetPayload.Agents) -> (String, Int)? {
+        if a.waiting > 0 { return ("Waiting", a.waiting) }
+        if a.active > 0 { return ("Active", a.active) }
+        if a.idle > 0 { return ("Idle", a.idle) }
+        return nil
+    }
+}
+
+/// The app's colours: cream ground, lilac stage, one ribbon colour per state.
+struct Palette {
+    let ground, stage, need, work, idle: Color
+
+    init(_ scheme: ColorScheme) {
+        let dark = scheme == .dark
+        ground = Color(hex: dark ? 0x1F1823 : 0xFFF6E8)
+        stage = Color(hex: dark ? 0x30263A : 0xF1EAF3)
+        need = Color(hex: 0xD92D6A)
+        work = Color(hex: 0x2F6FE0)
+        idle = Color(hex: 0x6E737B)
+    }
+
+    func ribbon(_ status: String) -> (Color, String) {
+        switch status {
+        case "Waiting": (need, "needs you")
+        case "Active": (work, "working")
+        default: (idle, status.lowercased())
+        }
+    }
+}
+
+private struct PaletteKey: EnvironmentKey {
+    static let defaultValue = Palette(.light)
+}
+
+extension EnvironmentValues {
+    var widgetPalette: Palette {
+        get { self[PaletteKey.self] }
+        set { self[PaletteKey.self] = newValue }
+    }
+}
+
+private extension Color {
+    init(hex: UInt32) {
+        self.init(.sRGB, red: Double(hex >> 16 & 0xFF) / 255,
+                  green: Double(hex >> 8 & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
+    }
+}
+
+/// The cat on its rounded stage. Flattened modes drop the stage so the
+/// silhouette keeps its shape.
+private struct Stage: View {
+    let cat: WidgetPayload.Cat
+    let silhouette: Bool
+    @Environment(\.widgetPalette) private var palette
+
+    var body: some View {
+        CatView(cat: cat, silhouette: silhouette)
+            .padding(6)
+            .background {
+                if !silhouette {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.stage)
+                }
+            }
+    }
+}
+
+/// A state's ribbon: white on the state colour, or an outline when flattened.
+private struct Ribbon: View {
+    let status: String
+    var count: Int? = nil
+    let silhouette: Bool
+    @Environment(\.widgetPalette) private var palette
+
+    var body: some View {
+        let (fill, label) = palette.ribbon(status)
+        Text(count.map { $0 > 1 && status == "Waiting" ? "\($0) need you" : "\($0) \(label)" } ?? label)
+            .font(.caption2.weight(.bold))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .foregroundStyle(silhouette ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.white))
+            .background {
+                if silhouette {
+                    Capsule().strokeBorder(.primary, lineWidth: 1)
+                } else {
+                    Capsule().fill(fill)
+                }
+            }
     }
 }
 
 private struct SessionRow: View {
     let session: WidgetPayload.Session
-
-    private var color: Color {
-        switch session.status {
-        case "Active": .green
-        case "Waiting": .orange
-        default: .gray
-        }
-    }
+    let silhouette: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 7, height: 7)
-                Text(session.status)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                Ribbon(status: session.status, silhouette: silhouette)
                 Spacer(minLength: 4)
                 if let ms = session.startedAtMs {
                     Text(Date(timeIntervalSince1970: Double(ms) / 1000), style: .timer)
@@ -155,7 +248,7 @@ private struct SessionRow: View {
                 }
             }
             Text(session.project)
-                .font(.caption.weight(.medium))
+                .font(.caption.weight(.heavy))
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
