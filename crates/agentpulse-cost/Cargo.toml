@@ -3,6 +3,7 @@ name = "agentpulse-cost"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 agentpulse-core.workspace = true

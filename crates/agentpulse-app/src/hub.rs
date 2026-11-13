@@ -11,7 +11,8 @@ use crate::collector::Snapshot;
 use crate::menubar::{self, POINTS_HIGH, Pose};
 
 /// Shortest time between menu bar icon frames.
-const MENU_BAR_FRAME: Duration = Duration::from_millis(100);
+/// 5 fps: at 10 fps AppKit's per-frame work put a sprinting cat at 3-3.7% CPU.
+const MENU_BAR_FRAME: Duration = Duration::from_millis(200);
 
 pub struct Hub {
     pub snapshot: Option<Snapshot>,
@@ -147,7 +148,7 @@ impl Hub {
         let Some(next) = self.cat.next_frame_in(self.motion) else {
             return;
         };
-        // A 16 pt icon needs no more than 10 fps. Ticking with the real elapsed
+        // A 16 pt icon needs no more than 5 fps. Ticking with the real elapsed
         // time keeps the animation's speed; faster loops just skip frames.
         let next = next.max(MENU_BAR_FRAME);
         let wait = next.saturating_sub(self.last_tick.elapsed());
