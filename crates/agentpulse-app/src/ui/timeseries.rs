@@ -18,19 +18,34 @@ pub(super) struct Colors {
     pub card: u32,
 }
 
-/// Samples in `[start, end]` as at most one (column, first, second) per pixel column:
-/// the column's min and max, whichever came first leading, so peaks survive whatever
-/// the sample count.
-fn columns(samples: &[(i64, f32)], start: i64, end: i64, cols: usize) -> Vec<(usize, f32, f32)> {
+/// The pixel column of time `at`; the line and the hover marker both use it.
+fn col_of(at: i64, start: i64, end: i64, cols: usize) -> usize {
     let span = (end - start).max(1) as f64;
+    (((at - start) as f64 / span) * cols.saturating_sub(1) as f64).round() as usize
+}
+
+/// Samples in `[start, end]` as at most one (column, first, second, breaks) per pixel
+/// column: the column's min and max, whichever came first leading, so peaks survive
+/// whatever the sample count. `breaks` is set when more than `max_gap_ms` passed since
+/// the previous sample, so nothing is drawn across time that was not measured.
+fn columns(
+    samples: &[(i64, f32)],
+    start: i64,
+    end: i64,
+    cols: usize,
+    max_gap_ms: i64,
+) -> Vec<(usize, f32, f32, bool)> {
     // Per column: min and max with the index of the sample that set each.
-    type Acc = (usize, (f32, usize), (f32, usize));
+    type Acc = (usize, (f32, usize), (f32, usize), bool);
     let mut out: Vec<Acc> = Vec::new();
+    let mut prev: Option<i64> = None;
     let in_range = samples.iter().filter(|&&(at, _)| at >= start && at <= end);
     for (i, &(at, v)) in in_range.enumerate() {
-        let col = (((at - start) as f64 / span) * (cols - 1) as f64).round() as usize;
+        let col = col_of(at, start, end, cols);
+        let gap = prev.is_some_and(|p| at - p > max_gap_ms);
+        prev = Some(at);
         match out.last_mut() {
-            Some((c, lo, hi)) if *c == col => {
+            Some((c, lo, hi, _)) if *c == col => {
                 if v < lo.0 {
                     *lo = (v, i);
                 }
@@ -38,15 +53,15 @@ fn columns(samples: &[(i64, f32)], start: i64, end: i64, cols: usize) -> Vec<(us
                     *hi = (v, i);
                 }
             }
-            _ => out.push((col, (v, i), (v, i))),
+            _ => out.push((col, (v, i), (v, i), gap)),
         }
     }
     out.into_iter()
-        .map(|(c, lo, hi)| {
+        .map(|(c, lo, hi, gap)| {
             if lo.1 <= hi.1 {
-                (c, lo.0, hi.0)
+                (c, lo.0, hi.0, gap)
             } else {
-                (c, hi.0, lo.0)
+                (c, hi.0, lo.0, gap)
             }
         })
         .collect()
@@ -84,11 +99,13 @@ fn shape(window: &Window, text: &str, color: u32) -> gpui::ShapedLine {
 }
 
 /// A baseline, a hairline at the maximum when there is one, and the samples as a 2 px
-/// line over `[end_ms - span_ms, end_ms]`, scaled to `max`. Hovering shows the nearest sample.
+/// line over `[end_ms - span_ms, end_ms]`, scaled to `max` and broken wherever samples
+/// are more than `max_gap_ms` apart. Hovering shows the nearest sample.
 pub(super) fn time_series(
     samples: Vec<(i64, f32)>,
     end_ms: i64,
     span_ms: i64,
+    max_gap_ms: i64,
     max: Option<f32>,
     hover: Option<Point<Pixels>>,
     c: Colors,
@@ -107,27 +124,26 @@ pub(super) fn time_series(
             window.paint_quad(hairline(b.top(), c.grid));
             let start = end_ms - span_ms;
             let cols = (f32::from(b.size.width) as usize).max(2);
-            let cols_v = columns(&samples, start, end_ms, cols);
-            if cols_v.len() < 2 {
-                return;
-            }
+            let cols_v = columns(&samples, start, end_ms, cols, max_gap_ms);
             let height = b.size.height - px(1.5);
             let x_of = |col: usize| b.left() + px(col as f32);
             let y_of = |v: f32| b.bottom() - px(1.) - height * (v / max);
-            let mut path = PathBuilder::stroke(px(2.));
-            for (i, &(col, first, second)) in cols_v.iter().enumerate() {
-                let p = point(x_of(col), y_of(first));
-                if i == 0 {
-                    path.move_to(p);
-                } else {
-                    path.line_to(p);
+            if cols_v.len() >= 2 {
+                let mut path = PathBuilder::stroke(px(2.));
+                for (i, &(col, first, second, breaks)) in cols_v.iter().enumerate() {
+                    let p = point(x_of(col), y_of(first));
+                    if i == 0 || breaks {
+                        path.move_to(p);
+                    } else {
+                        path.line_to(p);
+                    }
+                    if first != second {
+                        path.line_to(point(x_of(col), y_of(second)));
+                    }
                 }
-                if first != second {
-                    path.line_to(point(x_of(col), y_of(second)));
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, rgb(c.line));
                 }
-            }
-            if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(c.line));
             }
 
             let Some(h) = hover.filter(|h| b.contains(h)) else {
@@ -138,7 +154,7 @@ pub(super) fn time_series(
             let Some((t, v)) = nearest(&samples, start, end_ms, at) else {
                 return;
             };
-            let x = b.left() + b.size.width * ((t - start) as f32 / span_ms as f32);
+            let x = x_of(col_of(t, start, end_ms, cols));
             let y = y_of(v);
             window.paint_quad(fill(
                 Bounds::new(point(x, b.top()), size(px(1.), b.size.height)),
@@ -195,19 +211,39 @@ mod tests {
         let s: Vec<(i64, f32)> = (0..1000)
             .map(|i| (i, if i == 500 { 9. } else { 1. }))
             .collect();
-        let c = columns(&s, 0, 999, 100);
+        let c = columns(&s, 0, 999, 100, 10);
         assert!(c.len() <= 100);
         assert!(c.windows(2).all(|w| w[0].0 < w[1].0));
-        assert!(c.iter().any(|&(_, a, b)| a == 9. || b == 9.));
+        assert!(c.iter().any(|&(_, a, b, _)| a == 9. || b == 9.));
+        assert!(c.iter().all(|&(.., breaks)| !breaks));
     }
 
     #[test]
     fn decimation_skips_out_of_range_samples() {
         let s = [(-5, 7.), (0, 1.), (10, 2.), (11, 8.)];
-        let c = columns(&s, 0, 10, 11);
-        assert_eq!(c, [(0, 1., 1.), (10, 2., 2.)]);
+        let c = columns(&s, 0, 10, 11, 100);
+        assert_eq!(c, [(0, 1., 1., false), (10, 2., 2., false)]);
         let s = [(0, 5.), (1, 2.), (2, 8.)];
-        assert_eq!(columns(&s, 0, 2, 1 + 1), [(0, 5., 5.), (1, 2., 8.)]);
+        assert_eq!(
+            columns(&s, 0, 2, 2, 100),
+            [(0, 5., 5., false), (1, 2., 8., false)]
+        );
+    }
+
+    #[test]
+    fn a_gap_in_the_samples_breaks_the_line() {
+        // 1 s apart, then the Mac slept for 90 s.
+        let s = [(0, 1.), (1_000, 2.), (91_000, 3.), (92_000, 4.)];
+        let c = columns(&s, 0, 120_000, 121, 15_000);
+        let breaks: Vec<bool> = c.iter().map(|&(.., b)| b).collect();
+        assert_eq!(breaks, [false, false, true, false]);
+    }
+
+    #[test]
+    fn line_and_marker_share_columns() {
+        assert_eq!(col_of(0, 0, 120_000, 600), 0);
+        assert_eq!(col_of(120_000, 0, 120_000, 600), 599);
+        assert_eq!(col_of(60_000, 0, 120_000, 3), 1);
     }
 
     #[test]

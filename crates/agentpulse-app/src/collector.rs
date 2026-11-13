@@ -451,6 +451,10 @@ impl Collector {
         });
         snap.output_rate = self.meter.rate_per_sec(now) as f32;
         snap.system_gpu_percent = gpu_utilization().map_or(Reading::Unavailable, Reading::Measured);
+        // The clock went back: older samples would land in the future.
+        if self.rate_history.back().is_some_and(|&(at, _)| at > now) {
+            self.rate_history.clear();
+        }
         if self.rate_history.len() == HISTORY_LEN {
             self.rate_history.pop_front();
         }

@@ -1667,6 +1667,8 @@ impl Render for Tooltip {
 
 /// Time span of the output rate chart.
 const RATE_SPAN_MS: i64 = 120_000;
+/// Samples further apart than three idle ticks (5 s) are not joined by a line.
+const RATE_GAP_MS: i64 = 15_000;
 
 /// The output rate: current value and a chart of the last two minutes.
 fn rate(
@@ -1679,7 +1681,7 @@ fn rate(
     let in_span: Vec<f32> = s
         .rate_history
         .iter()
-        .filter(|&&(at, _)| at >= end - RATE_SPAN_MS)
+        .filter(|&&(at, _)| (end - RATE_SPAN_MS..=end).contains(&at))
         .map(|&(_, v)| v)
         .collect();
     let max = axis_max(&in_span);
@@ -1765,6 +1767,7 @@ fn rate(
                                             s.rate_history.clone(),
                                             end,
                                             RATE_SPAN_MS,
+                                            RATE_GAP_MS,
                                             max,
                                             hover,
                                             timeseries::Colors {
