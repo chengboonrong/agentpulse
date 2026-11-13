@@ -167,8 +167,10 @@ not been measured.
   enough for a first version.
 - New updates notice. Tell the user when a newer AgentPulse release exists, in the window
   and the menu-bar menu, with its version, its release notes and a link to download it.
-  AgentPulse makes no network calls today, so this must be:
-  - opt-in, with a manual "Check for updates" that works even when automatic checks are off;
+  AgentPulse makes no network calls today; this is the one exception, so it must be:
+  - on by default, checking every 2 hours (owner decision, 2026-11-13), with a setting to
+    turn automatic checks off and a manual "Check for updates" that works either way;
+  - documented in the README and the telemetry spec as the app's only network request;
   - one request for the latest release on the project's GitHub page, sending nothing about
     the user or their agents;
   - a notice only: it never downloads or installs anything by itself.
@@ -201,8 +203,6 @@ not been measured.
   say which agent a session belongs to.
 
 ## Open decisions for the owner
-- Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.
-- Phase 6 updates notice: automatic checks on or off by default, and how often they run.
-- Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
+- Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.- Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
   only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
   beside the estimate, and distribution is Developer ID rather than the App Store.
