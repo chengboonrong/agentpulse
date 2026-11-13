@@ -1,7 +1,7 @@
 # Telemetry specification
 
 What AgentPulse reads, how each number is derived, and how sure it is. Verified against
-Claude Code 2.1.322 on macOS 27.0.
+Claude Code 2.1.322 and Codex CLI 0.164.0 on macOS 27.0.
 
 ## Measurement classes
 
@@ -10,10 +10,10 @@ Claude Code 2.1.322 on macOS 27.0.
 | Tokens (input, output, cache write 5m/1h, cache read) | Measured | Agent's own usage records |
 | Model | Measured | Agent's records |
 | Session start, last activity | Measured | Record timestamps |
-| Live state (busy / idle / waiting) | Measured | Agent's live-session registry |
+| Live state (busy / idle / waiting) | Measured | Claude Code's live-session registry; for Codex, the rollouts a `codex` process holds open plus its task records (no waiting state) |
 | Process CPU, resident memory | Measured | OS process table |
 | Cost | **Estimated** | Tokens × price table |
-| Claude Code's own session cost | Measured | The agent's `cost-state` record (per session, for the run that wrote it) |
+| Claude Code's own session cost | Measured | The agent's `cost-state` record (per session, for the run that wrote it). Codex has no such record: always "—" |
 | Active execution time | **Estimated** | Gaps between records ≤ 60 s |
 | Status of a session with no registry entry | **Estimated** | Transcript age (30 s / 5 min) |
 | Token rate | Derived | 30 s rolling window over measured tokens |
@@ -97,6 +97,76 @@ read; `modelUsage` is not.
 A registry file is trusted only if the PID exists and the OS start time is within 2 s of
 `procStart`. Stale files from crashed processes fail that check and are ignored.
 
+## Codex CLI
+
+Root: `$CODEX_HOME`, else `~/.codex`. A missing root is not an error; Codex simply shows no
+sessions.
+
+### Rollouts
+- `sessions/YYYY/MM/DD/rollout-<timestamp>-<thread id>.jsonl` and `archived_sessions/…`:
+  one file per thread. The thread id is the last 36 characters of the file name.
+- Moving a rollout to the archive re-reads it under its new path; events are keyed by
+  response id, so the totals do not change.
+- Compressed archives (`.jsonl.zst`) are not read.
+
+Rollout lines carry prompts, responses, reasoning, tool calls and file contents. The record
+type sits in a line's first 256 bytes and is matched there before any parsing. Only these
+records are deserialized, into structs that name only the fields below:
+
+| Record | Fields read | Use |
+|---|---|---|
+| `session_meta` | `timestamp`, `payload.id`, `payload.session_id`, `payload.cwd` | Thread start, its root session, project path |
+| `turn_context` | `payload.turn_id`, `payload.model` | Model per turn |
+| `event_msg` `thread_settings_applied` | `thread_settings.model`, `thread_settings.service_tier` | Fallback model; pricing tier |
+| `event_msg` `task_started`, `task_complete`, `turn_aborted` | type only | Busy or not |
+| `token_usage_record` | `timestamp`, `session_id`, `turn_id`, `response_id`, `usage.*` | Tokens |
+
+Every other line (messages, tool calls and outputs, reasoning, `token_count`, compaction)
+contributes only the timestamp at its start, as activity. A line whose type is not found in
+its first bytes is parsed for the metadata fields above rather than dropped.
+
+### Token accounting
+- One `token_usage_record` per response. Event id is `response_id`; time is the record's
+  timestamp; session is `session_id`, the root session, so subagent threads count toward
+  their parent.
+- `input_tokens` includes cached input. Buckets: cache read = `cached_input_tokens`;
+  input = `input_tokens` − cached, saturating at 0; output = `output_tokens`. Cache writes
+  (`cache_write_input_tokens`) stay in input, as OpenAI bills them as normal input; no
+  cache-write bucket is filled. Every local record had 0 cache writes.
+- `token_count` events are not read. They repeat the same usage cumulatively.
+- Model: the `turn_context` of the record's `turn_id`, else the latest
+  `thread_settings_applied` model. The session's model shown is the root thread's newest.
+- Tailing resumes mid-file, so each rollout's model, tier, session and busy state are kept
+  across polls. A rollout first opened at a stored offset (after a restart) has its earlier
+  lines re-read for that state only; their usage is not counted again.
+
+### Live sessions and status
+- A rollout is live when a process named `codex` holds it open. Open files come from libproc
+  (`proc_pidinfo(PROC_PIDLISTFDS)`, then `proc_pidfdinfo(PROC_PIDFDVNODEPATHINFO)` per
+  descriptor), checked against the process's start time to rule out PID reuse. The whole
+  scan runs at most every 5 s, so a session is seen starting or ending up to 5 s late.
+  Only open rollouts under the adapter's Codex home count; one under another `CODEX_HOME`
+  is ignored.
+- Status of a live session: Active if its latest `task_started` has no later `task_complete`
+  or `turn_aborted`, otherwise Idle. Codex records no waiting-on-you state, so a Codex
+  session is never Waiting.
+- A `codex` process with exactly one root session open is that session's process, with CPU
+  and memory of its tree. A process holding several (the VS Code extension and app-server
+  run many threads in one process) makes each of them live, but none gets its resources:
+  they show unavailable, and the process is counted for no one, including any agent it
+  runs under. Such processes keep rollouts from days ago open, so a session there is live
+  only if any of its rollouts held by that process has a line timestamped within the last
+  hour; otherwise it is treated like any session without an open rollout. A session whose
+  process holds only its rollouts stays live however old they are.
+- Without an open rollout the generic transcript-age rule applies. Codex has no API-error
+  marker that was verified, so a Codex session ends as Completed, never Failed.
+
+### Cost
+Rates are OpenAI API list prices (source and date in `pricing.toml`). A request above
+272,000 prompt tokens uses the long-context rates. `service_tier` `fast` or `priority` is
+billed at 2×; `default` or no tier at standard rates; any other tier is left unpriced. Cache
+writes are priced as input (see Token accounting); the cache-write rate is unused.
+
 ## Session status
 
 Evaluated every collector tick by `agentpulse_core::resolve_status`:
@@ -165,5 +235,4 @@ triggers it. The menu-bar cat uses the CPU summed over the Active agents that ha
 
 | Agent | Source | Notes from the audit |
 |---|---|---|
-| Codex CLI | `$CODEX_HOME/sessions/**/rollout-*.jsonl` | `token_count` events are cumulative; diff `total_token_usage` with reset detection. Cached input is a subset of input |
 | OpenCode | `$XDG_DATA_HOME/opencode/opencode.db` | SQLite `message.data.tokens.*`; count only messages with `time.completed` |

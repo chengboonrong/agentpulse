@@ -4,7 +4,7 @@ Watch your agents work. A native macOS app that shows what the AI coding agents 
 Mac are doing right now: tokens, estimated cost, runtime, CPU and memory, with a pixel cat
 per agent whose behaviour follows the agent's real activity.
 
-This is an early build: **Claude Code** sessions, two screens (Overview and Sessions), a
+This is an early build: **Claude Code** and **Codex CLI** sessions, two screens (Overview and Sessions), a
 menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 
 ![Overview, dark](docs/screenshots/dark/overview.png)
@@ -62,12 +62,18 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
 
 ## What it does
 
-- Finds Claude Code sessions, including subagents, and tails their transcripts.
+- Finds Claude Code and Codex sessions, including subagents, and tails their transcripts.
+  Each row says which agent it is.
 - Counts tokens once per API response (Claude Code logs each response several times).
+  From Codex rollouts it reads only metadata records; message, tool and reasoning lines are
+  skipped without being parsed.
 - Estimates cost from an editable price table. Costs are always labelled as estimates.
-- Maps each running session to its process by PID and start time, and measures the CPU and
-  resident memory of its whole process tree.
-- Shows status from the agent's own state: active, waiting, idle, completed, failed.
+- Maps each running session to its process by PID and start time (for Codex, the process
+  holding its rollout open), and measures the CPU and resident memory of its whole process
+  tree. A Codex process that hosts several sessions is shown as unavailable rather than
+  split between them.
+- Shows status from the agent's own state: active, waiting, idle, completed, failed
+  (Codex reports only active and idle while running).
 - Keeps history in a local SQLite database.
 - Animates one cat per live agent: sitting when idle, looking around when waiting, running
   when working, and a cartoon-style sprint (spinning legs, speed lines, dust) under heavy
@@ -106,6 +112,7 @@ minutes.
 |---|---|
 | Data directory | `AGENTPULSE_DATA_DIR` (default `~/Library/Application Support/AgentPulse`) |
 | Claude Code directory | `CLAUDE_CONFIG_DIR` (default `~/.claude`) |
+| Codex directory | `CODEX_HOME` (default `~/.codex`) |
 | Prices | Put a `pricing.toml` in the data directory; it replaces the built-in table. Format: [crates/agentpulse-cost/pricing.toml](crates/agentpulse-cost/pricing.toml) |
 | Animation off | `AGENTPULSE_ANIMATION=off`, or macOS Reduce Motion |
 | Animation speed | `AGENTPULSE_ANIMATION_SPEED=1.5` (0.25 to 3) |

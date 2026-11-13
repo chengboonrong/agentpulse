@@ -87,8 +87,12 @@ impl PriceBook {
         self.models.get(base)
     }
 
-    /// Estimated USD for one response, or None when the model has no price.
+    /// Estimated USD for one response, or None when the model or its service
+    /// tier has no price.
     pub fn cost(&self, event: &UsageEvent) -> Option<f64> {
+        if event.unknown_tier {
+            return None;
+        }
         let model = self.lookup(&event.model)?;
         let u = &event.usage;
         let r = match &model.long_context {
@@ -125,6 +129,7 @@ mod tests {
             usage,
             fast: false,
             us_inference: false,
+            unknown_tier: false,
         }
     }
 
@@ -202,6 +207,57 @@ mod tests {
         close(book.cost(&e), base * 2.0 * 1.1);
     }
 
+    /// A Codex response as the adapter maps it: `input` excludes cached
+    /// input, so the prompt is input + cache_read, the request's input_tokens.
+    fn codex(model: &str, input_tokens: u64, cached: u64, output: u64) -> UsageEvent {
+        ev(
+            model,
+            TokenUsage {
+                input: input_tokens - cached,
+                cache_read: cached,
+                output,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn codex_long_context_starts_above_272k_prompt_tokens() {
+        let book = PriceBook::builtin();
+        // 272,000 prompt tokens, 200,000 of them cached: standard rates.
+        close(
+            book.cost(&codex("gpt-6.1-sol", 272_000, 200_000, 1_000)),
+            (72_000.0 * 2.0 + 200_000.0 * 0.10 + 1_000.0 * 10.0) / 1e6,
+        );
+        // One more prompt token, cached or not, switches every bucket.
+        close(
+            book.cost(&codex("gpt-6.1-sol", 272_001, 200_001, 1_000)),
+            (72_000.0 * 4.0 + 200_001.0 * 0.20 + 1_000.0 * 15.0) / 1e6,
+        );
+        // Output never counts toward the threshold.
+        close(
+            book.cost(&codex("gpt-6-astra", 272_000, 0, 500_000)),
+            (272_000.0 * 10.0 + 500_000.0 * 50.0) / 1e6,
+        );
+        close(
+            book.cost(&codex("gpt-6-luna", 1_000_000, 0, 0)),
+            1_000_000.0 * 0.20 / 1e6,
+        );
+    }
+
+    #[test]
+    fn codex_fast_tier_doubles_and_unknown_tier_is_unpriced() {
+        let book = PriceBook::builtin();
+        let mut e = codex("gpt-6.1-terra", 100_000, 40_000, 2_000);
+        let base = (60_000.0 * 1.0 + 40_000.0 * 0.05 + 2_000.0 * 5.0) / 1e6;
+        close(book.cost(&e), base);
+        e.fast = true;
+        close(book.cost(&e), base * 2.0);
+        e.fast = false;
+        e.unknown_tier = true;
+        assert_eq!(book.cost(&e), None);
+    }
+
     #[test]
     fn date_suffix_matches_only_exact_snapshots() {
         let book = PriceBook::builtin();
@@ -248,17 +304,22 @@ mod tests {
             "claude-sonnet-4",
             "claude-haiku-5-5",
             "claude-haiku-4-5",
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6.1-terra",
+            "gpt-6-luna",
+            "gpt-6-sol",
         ] {
             assert!(book.models.contains_key(id), "missing {id}");
         }
-        assert_eq!(book.models.len(), 21);
+        assert_eq!(book.models.len(), 26);
     }
 
     #[test]
     fn load_missing_path_is_builtin() {
         let dir = std::env::temp_dir().join("agentpulse-cost-missing");
         let book = PriceBook::load(&dir.join("nope.toml")).unwrap();
-        assert_eq!(book.models.len(), 21);
+        assert_eq!(book.models.len(), 26);
     }
 
     const ONE_MODEL: &str = r#"

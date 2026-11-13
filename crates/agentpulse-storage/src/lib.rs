@@ -341,6 +341,7 @@ mod tests {
             usage,
             fast: false,
             us_inference: false,
+            unknown_tier: false,
         }
     }
 
@@ -572,6 +573,36 @@ mod tests {
             s.sessions_since(Provider::Codex, 100).unwrap()[0].session_id,
             "codex-s"
         );
+    }
+
+    #[test]
+    fn same_ids_under_two_providers_never_collide() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut d = delta("same", &[100]);
+        d.model = Some("claude-m".into());
+        s.apply(
+            &batch(vec![ev("same-event", "same", 100, tokens(1, 2))], vec![d]),
+            &flat,
+        )
+        .unwrap();
+        let mut d = delta("same", &[200]);
+        d.model = Some("codex-m".into());
+        let mut codex = batch(vec![ev("same-event", "same", 200, tokens(10, 20))], vec![d]);
+        codex.provider = Provider::Codex;
+        codex.files[0].path = "/codex/rollout.jsonl".into();
+        s.apply(&codex, &flat).unwrap();
+        let claude = &s.sessions_since(P, 0).unwrap()[0];
+        let codex = &s.sessions_since(Provider::Codex, 0).unwrap()[0];
+        assert_eq!(
+            (claude.tokens, claude.model.as_deref()),
+            (tokens(1, 2), Some("claude-m"))
+        );
+        assert_eq!(
+            (codex.tokens, codex.model.as_deref()),
+            (tokens(10, 20), Some("codex-m"))
+        );
+        let t = s.totals_since(0).unwrap();
+        assert_eq!((t.tokens, t.sessions), (tokens(11, 22), 2));
     }
 
     #[test]

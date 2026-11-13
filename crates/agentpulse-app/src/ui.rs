@@ -257,13 +257,16 @@ enum Screen {
 
 const STOPPED: &str = "Data collection stopped. Restart AgentPulse.";
 
+/// A row cat's session. Keyed by provider too: session ids are unique per agent only.
+type CatKey = (Provider, String);
+
 /// View state only; the data and motion settings live in the [`Hub`].
 struct AppView {
     hub: Entity<Hub>,
     screen: Screen,
     dark: bool,
     forced_dark: Option<bool>,
-    cats: HashMap<String, CatAnimator>,
+    cats: HashMap<CatKey, CatAnimator>,
     /// Shown when no agent is live.
     empty_cat: CatAnimator,
     last_tick: Instant,
@@ -325,13 +328,18 @@ impl AppView {
         let Some(snap) = &hub.snapshot else {
             return;
         };
-        let live: Vec<(String, SessionStatus, f32, Option<f32>)> = snap
+        let live: Vec<(CatKey, SessionStatus, f32, Option<f32>)> = snap
             .sessions
             .iter()
             .filter(|s| s.status.is_live())
             .map(|s| {
                 let cpu = s.resources.value().and_then(|r| r.cpu_percent);
-                (s.session_id.clone(), s.status, s.output_rate, cpu)
+                (
+                    (s.provider, s.session_id.clone()),
+                    s.status,
+                    s.output_rate,
+                    cpu,
+                )
             })
             .collect();
         #[cfg(feature = "screenshot")]
@@ -597,7 +605,8 @@ const SESSION_MIN_WIDTH: f32 = 896.;
 /// Below the Sessions table: what the two cost columns are.
 const COST_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Claude Code is the \
     session's own cost record, covering the Claude Code run that last wrote it and written when a \
-    session ends or saves its state, so a running session often has none yet (—). +? means Claude Code had no price for a model it used.";
+    session ends or saves its state, so a running session often has none yet (—). +? means Claude Code had no price for a model it used. \
+    Codex keeps no such record, so its sessions always show —.";
 
 /// Peak of the chart's y axis: the smallest 1, 2 or 5 times a power of ten
 /// at or above the history's peak. None when there is nothing to scale.
@@ -759,7 +768,7 @@ impl AppView {
                         .child("No agents running"),
                 )
                 .child(secondary(
-                    "Start Claude Code in a terminal and it will appear here.",
+                    "Start Claude Code or Codex and it will appear here.",
                     t,
                 ))
         } else {
@@ -797,7 +806,7 @@ impl AppView {
         let resources = s.resources.value();
         let sprite = self
             .cats
-            .get(&s.session_id)
+            .get(&(s.provider, s.session_id.clone()))
             .map_or(self.empty_cat.sprite(), |c| c.sprite());
         let detail = |text: String| columns.detail.then_some(Some(text));
         div()
@@ -845,7 +854,10 @@ impl AppView {
             .child(figures(
                 w(5),
                 format::approx_cost(s.cost_usd),
-                detail(recorded_line(format::recorded_cost(s.recorded_cost))),
+                detail(recorded_line(
+                    s.provider,
+                    format::recorded_cost(s.recorded_cost),
+                )),
                 t,
             ))
             .when(columns.cpu, |row| {
@@ -1282,7 +1294,8 @@ fn header(columns: &[Column], t: Theme) -> Div {
     d
 }
 
-/// Project name over its full path; takes all spare width.
+/// Project name over the agent and the full path; takes all spare width. The
+/// agent is named in text, never told by the cat's colour alone.
 fn project_cell(s: &AgentSession, t: Theme) -> Div {
     let path = s.project_path.as_deref();
     div()
@@ -1299,7 +1312,11 @@ fn project_cell(s: &AgentSession, t: Theme) -> Div {
         )
         .child(
             secondary(
-                &path.map_or("Project path unknown".into(), format::display_path),
+                &format!(
+                    "{} · {}",
+                    s.provider.label(),
+                    path.map_or("project path unknown".into(), format::display_path)
+                ),
                 t,
             )
             .truncate(),
@@ -1342,9 +1359,13 @@ fn figures(width: f32, top: Option<String>, below: Option<Option<String>>, t: Th
         .children(below.map(|b| value(b, ty::LABEL, t.muted)))
 }
 
-/// Second line under the estimate. The Overview cost column is 128 pt, so a
-/// long figure ("$123.45 +?") takes the short label rather than lose its start.
-fn recorded_line(value: Option<String>) -> String {
+/// Second line under the estimate: Claude Code's own cost record, blank for
+/// other agents. The Overview cost column is 128 pt, so a long figure
+/// ("$123.45 +?") takes the short label rather than lose its start.
+fn recorded_line(provider: Provider, value: Option<String>) -> String {
+    if provider != Provider::ClaudeCode {
+        return String::new();
+    }
     let value = value.unwrap_or(DASH.into());
     let label = if value.chars().count() > 8 {
         "Claude"
@@ -1472,13 +1493,13 @@ mod tests {
 
     #[test]
     fn recorded_line_keeps_the_figure_whole() {
-        assert_eq!(recorded_line(None), "Claude Code —");
-        assert_eq!(recorded_line(Some("$4.62".into())), "Claude Code $4.62");
-        assert_eq!(
-            recorded_line(Some("$1234.50".into())),
-            "Claude Code $1234.50"
-        );
-        assert_eq!(recorded_line(Some("$99.99 +?".into())), "Claude $99.99 +?");
+        let cc = |v: Option<&str>| recorded_line(Provider::ClaudeCode, v.map(Into::into));
+        assert_eq!(cc(None), "Claude Code —");
+        assert_eq!(cc(Some("$4.62")), "Claude Code $4.62");
+        assert_eq!(cc(Some("$1234.50")), "Claude Code $1234.50");
+        assert_eq!(cc(Some("$99.99 +?")), "Claude $99.99 +?");
+        // Claude Code's own record means nothing for another agent.
+        assert_eq!(recorded_line(Provider::Codex, None), "");
     }
 
     #[test]

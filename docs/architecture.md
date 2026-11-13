@@ -9,11 +9,12 @@ no network calls and stores no conversation content.
 ```text
  agent files                     collector thread                         UI thread (GPUI)
 ┌────────────────────┐   poll   ┌──────────────────────────────┐ snapshot ┌──────────────────┐
-│ ~/.claude/projects │ ───────▶ │ adapter  → PollBatch          │ ───────▶ │ views render the │
+│ ~/.claude/projects │ ───────▶ │ adapters → PollBatch each     │ ───────▶ │ views render the │
 │ ~/.claude/sessions │          │ storage  → idempotent upsert  │ channel  │ latest snapshot  │
-└────────────────────┘          │ cost     → price per response │          │ cat animators    │
- OS process table  ───sample──▶ │ process  → tree CPU / RSS     │          └──────────────────┘
-                                │ core     → status, rates      │
+│ ~/.codex/sessions  │          │ cost     → price per response │          │ cat animators    │
+└────────────────────┘          │ process  → tree CPU / RSS     │          └──────────────────┘
+ OS process table  ───sample──▶ │ core     → status, rates      │
+ (+ codex open files)           │                               │
                                 └───────────────┬──────────────┘
                                                 ▼
                                    SQLite (sessions, usage_events,
@@ -29,9 +30,9 @@ as JSON with no window.
 | Crate | Responsibility | Depends on |
 |---|---|---|
 | `agentpulse-core` | Domain types, the `AgentAdapter` trait, pure rules (status, active time, rolling rate) | serde |
-| `agentpulse-telemetry` | Claude Code adapter: transcript tailing, live-session registry | core |
+| `agentpulse-telemetry` | Claude Code and Codex adapters, and the file tailing they share (`tail.rs`: cached file list, hot files, 5 s rescan, read budget) | core, process |
 | `agentpulse-cost` | Price table (TOML) and per-response cost | core |
-| `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution | core, libc |
+| `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution, open files of a process | core, libc |
 | `agentpulse-storage` | SQLite schema, migrations, idempotent ingestion, totals | core, rusqlite |
 | `agentpulse-animation` | Original cat sprites and the animation state machine | core |
 | `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion; whole-Mac GPU through IOKit | objc2 |
@@ -70,8 +71,13 @@ needs it.
 ### Adapters are polled and stateless about progress
 `AgentAdapter::poll(offsets, since)` returns a `PollBatch`. Offsets live in SQLite and are
 written in the same transaction as the data they cover, so a crash cannot skip or repeat
-records. Adapters report errors and the collector carries on with the last good data; a
-broken or missing agent never takes the window down.
+records. The collector holds a list of adapters (Claude Code, and Codex when a Codex root
+can be named) and polls each one in turn. Errors are kept per adapter: one failing adapter
+keeps its last good data and reports its error, and the others carry on. A missing agent
+directory is not an error. A broken or missing agent never takes the window down.
+
+Sessions and live-session meters are keyed by `(provider, session id)`, so two agents can
+never merge rows even if their ids collide.
 
 ### Every measurement says how it is known
 `Reading::Measured`, `Reading::Estimated` and `Reading::Unavailable` are distinct in the
@@ -104,6 +110,12 @@ matches `ps` for tree size and memory.
 A live session is attached to a process only when the PID exists and its OS start time
 matches what the agent recorded. Each process is attributed to its nearest agent ancestor,
 so nested agents never count a process twice.
+
+Codex writes no registry, so a Codex session is live when a `codex` process holds its
+rollout open (found through libproc's file-descriptor calls). The process is attached only
+when it holds exactly one root session; a process hosting several sessions still bounds the
+process tree but is counted for none of them, so its CPU and memory are never split by
+guesswork or counted twice.
 
 ### The app outlives its window
 A hub entity, not tied to any window, owns the snapshot stream, the menu-bar cat and the
@@ -156,6 +168,6 @@ does not deserialize those fields at all.
 
 ## What is deliberately not built yet
 
-Codex and OpenCode adapters, resource history tables, retention pruning, per-agent GPU,
+The OpenCode adapter, resource history tables, retention pruning, per-agent GPU,
 settings UI, alerts, a notarized distributable. Each is listed with its phase in
 `roadmap.md`.
