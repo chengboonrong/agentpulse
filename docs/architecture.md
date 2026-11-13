@@ -34,12 +34,15 @@ as JSON with no window.
 | `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution | core, libc |
 | `agentpulse-storage` | SQLite schema, migrations, idempotent ingestion, totals | core, rusqlite |
 | `agentpulse-animation` | Original cat sprites and the animation state machine | core |
-| `agentpulse-app` | Collector loop, GPUI window, the `agentpulse` binary | all of the above, gpui |
+| `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion | objc2 |
+| `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, the `agentpulse` binary | all of the above, gpui |
 
-The handoff brief proposed nine crates. Two are not created yet because they would be
-empty: `agentpulse-ui` (the UI is two screens and lives in the app crate until it is worth
-splitting) and `agentpulse-platform-macos` (created when the menu-bar item and the IOKit GPU
-reader land; today the only AppKit call is one Reduce Motion query).
+The handoff brief proposed nine crates. One is not created yet because it would be
+empty: `agentpulse-ui`. The UI is two screens and lives in the app crate until it is worth
+splitting.
+
+Outside the Rust workspace, `macos/` holds the Swift widget extension and `scripts/bundle.sh`
+assembles and signs `AgentPulse.app`.
 
 ## Decisions
 
@@ -102,6 +105,29 @@ A live session is attached to a process only when the PID exists and its OS star
 matches what the agent recorded. Each process is attributed to its nearest agent ancestor,
 so nested agents never count a process twice.
 
+### The app outlives its window
+A hub entity, not tied to any window, owns the snapshot stream, the menu-bar cat and the
+status item. The window observes the hub and holds only view state. Closing the window
+leaves the collector and the menu bar running; "Open AgentPulse" in the menu or a Dock
+click brings a window back, and only Quit ends the process. The window and the menu bar
+read the same snapshot, so they cannot disagree.
+
+### Menu bar through AppKit, kept cheap
+GPUI has no status item, so `agentpulse-platform-macos` wraps `NSStatusItem`. The cat is a
+template image (macOS tints it for light and dark menu bars) at a fixed width, so nothing in
+the menu bar shifts when its pose changes. A still pose runs no timer. Motion is capped at
+10 frames a second, frames are cached images, and menu rows are applied only when the menu
+opens. Most of the remaining per-frame cost is AppKit mirroring the status window.
+
+### Widgets read a file, not the app
+A WidgetKit extension is a sandboxed process that cannot talk to the Rust app. When run
+from inside the bundle, the app writes a small `widget.json` (counts, display strings, the
+cat's sprite rows; never a path or session id) and asks WidgetKit to reload, sparingly,
+through a one-function Swift dylib it `dlopen`s. The extension reads that one directory
+through a read-only sandbox exception. An app group container was the first choice and was
+abandoned: without a provisioning profile macOS 27 denies the unsandboxed app access to it
+with no prompt. `macos/README.md` has the details and the App Store caveat.
+
 ### Animation follows telemetry, not a clock
 A cat's state comes from session status. Its speed comes from a smoothed rolling token
 rate. Timers run only while something is animating and the window is active; with Reduce
@@ -126,6 +152,6 @@ does not deserialize those fields at all.
 
 ## What is deliberately not built yet
 
-Codex and OpenCode adapters, resource history tables, retention pruning, the menu-bar
-companion, GPU telemetry, settings UI, alerts, packaging. Each is listed with its phase in
+Codex and OpenCode adapters, resource history tables, retention pruning, GPU telemetry,
+settings UI, alerts, a notarized distributable. Each is listed with its phase in
 `roadmap.md`.

@@ -4,8 +4,8 @@ Watch your agents work. A native macOS app that shows what the AI coding agents 
 Mac are doing right now: tokens, estimated cost, runtime, CPU and memory, with a pixel cat
 per agent whose behaviour follows the agent's real activity.
 
-This is the first vertical slice: **Claude Code** sessions, two screens (Overview and
-Sessions). See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
+This is an early build: **Claude Code** sessions, two screens (Overview and Sessions), a
+menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 
 ![Overview](docs/screenshots/dark/overview.png)
 
@@ -21,6 +21,9 @@ Sessions). See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 - Animates one cat per live agent: sitting when idle, looking around when waiting, running
   when working, and a cartoon-style sprint (spinning legs, speed lines, dust) under heavy
   output.
+- Lives in the menu bar: a cat that follows overall activity, the number of active agents,
+  and a menu with today's figures. Closing the window keeps it running.
+- Small and medium desktop widgets (see [macos/README.md](macos/README.md)).
 
 Everything stays on this machine. AgentPulse makes no network calls and never reads or
 stores prompt, response or file content. Values it cannot measure are shown as unavailable,
@@ -38,6 +41,7 @@ cargo run --release -p agentpulse-app          # the app
 cargo run --release -p agentpulse-app -- --dump    # one snapshot as JSON, no window
 cargo run --release -p agentpulse-app -- --bench   # collector overhead over 20 s
 cargo test --workspace
+scripts/bundle.sh                                  # signed AgentPulse.app with widgets
 ```
 
 The first build fetches GPUI from the Zed repository at a pinned commit and takes a few

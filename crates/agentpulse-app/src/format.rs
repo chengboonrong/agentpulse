@@ -1,7 +1,9 @@
 //! Display formatting for numbers, durations and times.
 
 use std::fmt::Display;
+use std::sync::LazyLock;
 
+use agentpulse_core::Reading;
 use chrono::{DateTime, Local, TimeZone};
 
 /// Shown in place of a value that is not available.
@@ -86,11 +88,63 @@ where
     }
 }
 
+/// `≈ $55.55`: costs are estimates from list prices, except that nothing used
+/// costs exactly `$0.00`. None when unpriced.
+pub fn approx_cost(c: Reading<f64>) -> Option<String> {
+    c.value().map(|&v| {
+        if v == 0.0 {
+            cost(v)
+        } else {
+            format!("≈ {}", cost(v))
+        }
+    })
+}
+
+static HOME: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("HOME").ok());
+
+/// Last component of a project path, "~" for the home folder itself (whose
+/// name is the username), or the dash when the path is unknown.
+pub fn project_name(path: Option<&str>) -> &str {
+    name_under(path, HOME.as_deref())
+}
+
+fn name_under<'a>(path: Option<&'a str>, home: Option<&str>) -> &'a str {
+    let Some(path) = path.map(|p| p.trim_end_matches('/')) else {
+        return DASH;
+    };
+    if home.is_some_and(|h| !h.is_empty() && h.trim_end_matches('/') == path) {
+        return "~";
+    }
+    path.rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(DASH)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::FixedOffset;
 
     use super::*;
+
+    #[test]
+    fn project_names() {
+        assert_eq!(project_name(Some("/Users/a/agentpulse/")), "agentpulse");
+        assert_eq!(project_name(Some("/")), DASH);
+        assert_eq!(project_name(None), DASH);
+        let home = Some("/Users/a");
+        assert_eq!(name_under(Some("/Users/a"), home), "~");
+        assert_eq!(name_under(Some("/Users/a/"), home), "~");
+        assert_eq!(name_under(Some("/Users/a"), Some("/Users/a/")), "~");
+        assert_eq!(name_under(Some("/Users/a/x"), home), "x");
+        assert_eq!(name_under(Some("/Users/ab"), home), "ab");
+        assert_eq!(name_under(Some("/Users/a"), None), "a");
+        assert_eq!(name_under(Some("/"), Some("")), DASH);
+        assert_eq!(approx_cost(Reading::Estimated(55.554)).unwrap(), "≈ $55.55");
+        assert_eq!(approx_cost(Reading::Unavailable), None);
+        assert_eq!(approx_cost(Reading::Estimated(0.0)).unwrap(), "$0.00");
+        assert_eq!(approx_cost(Reading::Estimated(0.001)).unwrap(), "≈ <$0.01");
+    }
 
     #[test]
     fn token_counts() {

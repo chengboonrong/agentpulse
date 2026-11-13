@@ -1,0 +1,39 @@
+[package]
+name = "agentpulse-platform-macos"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# AppKit and other macOS system APIs, kept out of the GPUI app crate.
+# Same objc2 versions as gpui_macos, so nothing new is compiled.
+[dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSAccessibility",
+    "NSBitmapImageRep",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSFont",
+    "NSFontDescriptor",
+    "NSGraphics",
+    "NSImage",
+    "NSImageRep",
+    "NSImageView",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSView",
+    "NSWorkspace",
+] }

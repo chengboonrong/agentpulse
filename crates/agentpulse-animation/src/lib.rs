@@ -68,6 +68,11 @@ impl Sprite {
         self.rows.len()
     }
 
+    /// The ASCII rows, one char per pixel; [`Sprite::ink`] gives each char's meaning.
+    pub fn rows(&self) -> &'static [&'static str] {
+        self.rows
+    }
+
     /// Out-of-range coordinates and unknown characters read as `Clear`.
     pub fn ink(&self, x: usize, y: usize) -> Ink {
         self.rows
