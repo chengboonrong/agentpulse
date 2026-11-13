@@ -1,0 +1,39 @@
+[package]
+name = "agentpulse-app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "agentpulse"
+path = "src/main.rs"
+
+[features]
+# `--screenshot <dir>`: saves the rendered window as PNGs. GPUI only exposes
+# `Window::render_to_image` with its test-support feature.
+screenshot = ["gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+agentpulse-core.workspace = true
+agentpulse-telemetry.workspace = true
+agentpulse-cost.workspace = true
+agentpulse-process.workspace = true
+agentpulse-storage.workspace = true
+agentpulse-animation.workspace = true
+anyhow.workspace = true
+# The same crate and version GPUI already uses, so no second channel implementation.
+async-channel = "2.5.0"
+chrono.workspace = true
+gpui.workspace = true
+# font-kit: without it gpui_macos renders no text.
+gpui_platform = { workspace = true, features = ["font-kit"] }
+# getrusage for `--bench`; already in the tree through agentpulse-process.
+libc = "0.2.191"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Reduce Motion. Same version as gpui_macos; adds only the NSAccessibility bindings.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAccessibility", "NSWorkspace"] }

@@ -1,0 +1,11 @@
+[package]
+name = "agentpulse-animation"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentpulse-core.workspace = true
+
+[dev-dependencies]
+png.workspace = true

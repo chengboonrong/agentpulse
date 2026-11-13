@@ -1,0 +1,13 @@
+[package]
+name = "agentpulse-storage"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentpulse-core.workspace = true
+anyhow.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

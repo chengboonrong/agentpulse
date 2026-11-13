@@ -1,0 +1,11 @@
+[package]
+name = "agentpulse-cost"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+agentpulse-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
