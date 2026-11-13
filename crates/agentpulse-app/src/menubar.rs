@@ -295,6 +295,9 @@ mod tests {
             system_gpu_percent: Reading::Unavailable,
             indexing: false,
             errors: vec![],
+            usage: None,
+            codex_limits: None,
+            detail: None,
         }
     }
 

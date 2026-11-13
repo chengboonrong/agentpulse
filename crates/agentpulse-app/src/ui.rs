@@ -1,7 +1,11 @@
-//! The window: an Overview and a Sessions screen over the hub's latest snapshot.
-//! Closing it does not quit; the menu bar item and the Dock icon reopen it.
+//! The window: Overview, Sessions (with a session's detail) and Usage screens
+//! over the hub's latest snapshot. Closing it does not quit; the menu bar item
+//! and the Dock icon reopen it.
+
+mod charts;
 
 use std::collections::HashMap;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
@@ -12,11 +16,12 @@ use agentpulse_platform_macos::{MainThreadMarker, MenuAction, StatusItem};
 use anyhow::Context as _;
 use gpui::{
     App, Bounds, Context, Div, Entity, FontFeatures, FontWeight, Global, KeyBinding, Menu,
-    MenuItem, PathBuilder, QuitMode, Rgba, Task, TitlebarOptions, Window, WindowAppearance,
-    WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size,
+    MenuItem, PathBuilder, QuitMode, Rgba, SharedString, Task, TitlebarOptions, WeakEntity, Window,
+    WindowAppearance, WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*,
+    px, rgb, size,
 };
 
-use crate::collector::{HISTORY_LEN, Snapshot};
+use crate::collector::{HISTORY_LEN, Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
 
@@ -63,11 +68,13 @@ impl Options {
 struct Shared {
     hub: Entity<Hub>,
     appearance: Option<bool>,
+    /// Asks the collector for one session's requests (None: no session).
+    details: Sender<Option<Key>>,
 }
 
 impl Global for Shared {}
 
-pub fn run(rx: async_channel::Receiver<Snapshot>, options: Options) {
+pub fn run(rx: async_channel::Receiver<Snapshot>, details: Sender<Option<Key>>, options: Options) {
     let app = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
     // Clicking the Dock icon.
     app.on_reopen(show);
@@ -107,6 +114,7 @@ pub fn run(rx: async_channel::Receiver<Snapshot>, options: Options) {
         cx.set_global(Shared {
             hub,
             appearance: options.appearance,
+            details,
         });
         cx.spawn(async move |cx| {
             while let Ok(action) = actions.recv().await {
@@ -253,6 +261,7 @@ fn tabular() -> FontFeatures {
 enum Screen {
     Overview,
     Sessions,
+    Usage,
 }
 
 const STOPPED: &str = "Data collection stopped. Restart AgentPulse.";
@@ -264,6 +273,10 @@ type CatKey = (Provider, String);
 struct AppView {
     hub: Entity<Hub>,
     screen: Screen,
+    /// The session whose detail replaces the Sessions table.
+    detail: Option<Key>,
+    /// Scroll position of the Usage and session detail pages.
+    page_scroll: gpui::ScrollHandle,
     dark: bool,
     forced_dark: Option<bool>,
     cats: HashMap<CatKey, CatAnimator>,
@@ -303,6 +316,8 @@ impl AppView {
         let mut view = Self {
             hub,
             screen: Screen::Overview,
+            detail: None,
+            page_scroll: gpui::ScrollHandle::new(),
             dark: options.appearance.unwrap_or(is_dark(window.appearance())),
             forced_dark: options.appearance,
             cats: HashMap::new(),
@@ -423,6 +438,17 @@ impl AppView {
     fn theme(&self) -> Theme {
         if self.dark { DARK } else { LIGHT }
     }
+
+    /// Opens a session's detail, or closes it with None.
+    fn show_detail(&mut self, key: Option<Key>, cx: &mut Context<Self>) {
+        if key != self.detail {
+            cx.global::<Shared>().details.send(key.clone()).ok();
+            self.detail = key;
+        }
+        // Each page opens at its top.
+        self.page_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
 }
 
 #[cfg(feature = "screenshot")]
@@ -441,6 +467,56 @@ async fn screenshot(
         cx.notify();
     })?;
     cx.update(|window, cx| capture(window, cx, &dir.join("sessions.png")))??;
+    this.update(cx, |this, cx| {
+        this.screen = Screen::Usage;
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("usage.png")))??;
+    this.update(cx, |this, cx| {
+        this.page_scroll.scroll_to_bottom();
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("usage-end.png")))??;
+    // The most expensive session listed, if any.
+    let key = this.update(cx, |this, cx| {
+        let key = this.hub.read(cx).snapshot.as_ref().and_then(|s| {
+            s.sessions
+                .iter()
+                .max_by(|a, b| {
+                    let usd = |x: &AgentSession| x.cost_usd.value().copied().unwrap_or(0.0);
+                    usd(a).total_cmp(&usd(b))
+                })
+                .map(|x| (x.provider, x.session_id.clone()))
+        });
+        this.screen = Screen::Sessions;
+        this.show_detail(key.clone(), cx);
+        key
+    })?;
+    if key.is_some() {
+        for _ in 0..50 {
+            cx.background_executor()
+                .timer(Duration::from_millis(200))
+                .await;
+            let ready = this.update(cx, |this, cx| {
+                let detail = this
+                    .hub
+                    .read(cx)
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.detail.clone());
+                detail.is_some_and(|d| Some(&d.key) == key.as_ref())
+            })?;
+            if ready {
+                break;
+            }
+        }
+        cx.update(|window, cx| capture(window, cx, &dir.join("session-detail.png")))??;
+        this.update(cx, |this, cx| {
+            this.page_scroll.scroll_to_bottom();
+            cx.notify();
+        })?;
+        cx.update(|window, cx| capture(window, cx, &dir.join("session-detail-end.png")))??;
+    }
     tracing::info!(dir = %dir.display(), "saved screenshots");
     Ok(())
 }
@@ -608,7 +684,7 @@ const COST_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. 
     session ends or saves its state, so a running session often has none yet (—). +? means Claude Code had no price for a model it used. \
     Codex keeps no such record, so its sessions always show —.";
 
-/// Peak of the chart's y axis: the smallest 1, 2 or 5 times a power of ten
+/// Peak of the chart's y axis: the smallest 1, 2, 3, 4, 5, 6 or 8 times a power of ten
 /// at or above the history's peak. None when there is nothing to scale.
 fn axis_max(history: &[f32]) -> Option<f32> {
     // Any non-finite sample leaves a flat baseline with no peak label.
@@ -620,7 +696,7 @@ fn axis_max(history: &[f32]) -> Option<f32> {
         return None;
     }
     let base = 10f32.powf(peak.log10().floor());
-    [1., 2., 5., 10.]
+    [1., 2., 3., 4., 5., 6., 8., 10.]
         .into_iter()
         .map(|m| m * base)
         // Relative tolerance: log10 and powf are not exact.
@@ -642,8 +718,10 @@ impl Render for AppView {
         let nav = [
             self.nav("Overview", Screen::Overview, t, cx),
             self.nav("Sessions", Screen::Sessions, t, cx),
+            self.nav("Usage", Screen::Usage, t, cx),
         ];
         let columns = AgentColumns::for_window(f32::from(window.viewport_size().width));
+        let view = cx.entity().downgrade();
         let hub = self.hub.read(cx);
         let content = match &hub.snapshot {
             None => div()
@@ -662,7 +740,16 @@ impl Render for AppView {
                 let notes = notes(s, hub.stopped, t);
                 match self.screen {
                     Screen::Overview => self.overview(s, notes, columns, t).into_any_element(),
-                    Screen::Sessions => sessions(s, notes, t).into_any_element(),
+                    Screen::Sessions => match &self.detail {
+                        Some(key) => {
+                            charts::session_detail(s, key, notes, t, view, &self.page_scroll)
+                                .into_any_element()
+                        }
+                        None => sessions(s, notes, t, view).into_any_element(),
+                    },
+                    Screen::Usage => {
+                        charts::usage(s, notes, t, &self.page_scroll).into_any_element()
+                    }
                 }
             }
         };
@@ -736,8 +823,8 @@ impl AppView {
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.screen = screen;
+                this.show_detail(None, cx);
                 this.schedule_animation(cx);
-                cx.notify();
             }))
     }
 
@@ -967,7 +1054,8 @@ fn status_line(s: &Snapshot, live: usize, t: Theme) -> Div {
                                     "GPU use of the whole Mac, not of any one agent"
                                 } else {
                                     "Not readable on this Mac"
-                                },
+                                }
+                                .into(),
                                 t,
                             })
                             .into()
@@ -977,7 +1065,7 @@ fn status_line(s: &Snapshot, live: usize, t: Theme) -> Div {
 }
 
 struct Tooltip {
-    text: &'static str,
+    text: SharedString,
     t: Theme,
 }
 
@@ -992,7 +1080,7 @@ impl Render for Tooltip {
             .border_color(rgb(self.t.border))
             .text_size(px(ty::LABEL))
             .text_color(rgb(self.t.text))
-            .child(self.text)
+            .child(self.text.clone())
     }
 }
 
@@ -1165,7 +1253,12 @@ fn today(s: &Snapshot, t: Theme) -> Div {
 
 // ---------------------------------------------------------------- sessions
 
-fn sessions(s: &Snapshot, notes: Vec<Div>, t: Theme) -> impl IntoElement {
+fn sessions(
+    s: &Snapshot,
+    notes: Vec<Div>,
+    t: Theme,
+    view: WeakEntity<AppView>,
+) -> impl IntoElement {
     let w = |i: usize| SESSION_COLUMNS[i].width;
     let n = s.sessions.len();
     div()
@@ -1204,8 +1297,17 @@ fn sessions(s: &Snapshot, notes: Vec<Div>, t: Theme) -> impl IntoElement {
                         .flex()
                         .flex_col()
                         .child(header(&SESSION_COLUMNS, t))
-                        .children(s.sessions.iter().map(|x| {
+                        .children(s.sessions.iter().enumerate().map(|(i, x)| {
+                            let key = (x.provider, x.session_id.clone());
+                            let view = view.clone();
                             div()
+                                .id(("session", i))
+                                .cursor_pointer()
+                                .hover(|d| d.bg(rgb(t.surface)))
+                                .on_click(move |_, _, cx| {
+                                    view.update(cx, |v, cx| v.show_detail(Some(key.clone()), cx))
+                                        .ok();
+                                })
                                 .flex()
                                 .items_center()
                                 .gap(px(sp::M))
@@ -1248,7 +1350,8 @@ fn sessions(s: &Snapshot, notes: Vec<Div>, t: Theme) -> impl IntoElement {
                                     t,
                                 ))
                         }))
-                        .child(secondary(COST_NOTE, t).mt(px(sp::M))),
+                        .child(secondary(COST_NOTE, t).mt(px(sp::M)))
+                        .child(secondary("Click a session for its requests.", t).mt(px(sp::S))),
                 ),
         )
 }
@@ -1466,26 +1569,27 @@ mod tests {
         assert_eq!(axis_max(&[0.]), None);
         assert_eq!(axis_max(&[1., f32::NAN]), None);
         assert_eq!(axis_max(&[f32::INFINITY]), None);
-        assert_eq!(axis_max(&[28.8, 3.]), Some(50.));
-        assert_eq!(axis_max(&[65.8]), Some(100.));
+        assert_eq!(axis_max(&[28.8, 3.]), Some(30.));
+        assert_eq!(axis_max(&[65.8]), Some(80.));
         assert_eq!(axis_max(&[100.]), Some(100.));
         assert_eq!(axis_max(&[110.]), Some(200.));
         assert_eq!(axis_max(&[1.0]), Some(1.));
-        assert_eq!(axis_max(&[0.3]), Some(0.5));
+        assert_eq!(axis_max(&[0.3]), Some(0.3));
         // The label always shows the value the top line stands for.
         let label = |peak: f32| axis_max(&[peak]).map(axis_label);
         for (peak, shown) in [
-            (0.004, "0.005"),
+            (0.004, "0.004"),
             (0.015, "0.02"),
-            (0.033, "0.05"),
+            (0.033, "0.04"),
             (0.1, "0.1"),
             (0.2, "0.2"),
-            (0.4, "0.5"),
+            (0.4, "0.4"),
             (1., "1"),
             (4.2, "5"),
-            (28.8, "50"),
+            (28.8, "30"),
             (100., "100"),
             (110., "200"),
+            (203., "300"),
         ] {
             assert_eq!(label(peak).as_deref(), Some(shown), "peak {peak}");
         }

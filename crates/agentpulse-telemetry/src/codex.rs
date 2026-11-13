@@ -4,8 +4,9 @@
 //! Privacy: rollout lines carry prompts, responses, reasoning, tool calls and
 //! file contents. Each line's record type is read from its first bytes, and
 //! only the metadata records listed in [`wanted`] are parsed, into structs
-//! that name metadata fields only, so serde skips everything else. No line
-//! text is stored or logged.
+//! that name metadata fields only, so serde skips everything else. From
+//! `token_count` events only the plan-limit fields of `rate_limits` are read;
+//! their token figures are not. No line text is stored or logged.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -13,7 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, SessionDelta, TokenUsage, UsageEvent,
+    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
+    SessionDelta, TokenUsage, UsageEvent,
 };
 use agentpulse_process::OpenFiles;
 use serde::Deserialize;
@@ -65,6 +67,8 @@ struct FileState {
     busy: bool,
     /// Newest timestamp of any line read.
     last_ms: Option<i64>,
+    /// Newest plan-limit reading in this file.
+    rate_limits: Option<RateLimits>,
     /// Byte offset the state above was read up to; `u64::MAX` while a read is
     /// unfinished.
     offset: u64,
@@ -159,6 +163,43 @@ struct Payload {
     response_id: Option<String>,
     usage: Option<Usage>,
     thread_settings: Option<ThreadSettings>,
+    /// `token_count`: plan limits. A shape this adapter does not know reads
+    /// as none, never failing the line (and its timestamp or usage).
+    #[serde(default, deserialize_with = "lenient")]
+    rate_limits: Option<Limits>,
+}
+
+/// `T`, or None when the value does not have `T`'s shape.
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Ok(serde_json::Value::deserialize(d)
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok()))
+}
+
+#[derive(Deserialize)]
+struct Limits {
+    primary: Option<Window>,
+    secondary: Option<Window>,
+    plan_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Window {
+    used_percent: Option<f64>,
+    window_minutes: Option<u64>,
+    resets_at: Option<i64>,
+}
+
+impl Window {
+    fn reading(&self) -> Option<RateWindow> {
+        Some(RateWindow {
+            used_percent: self.used_percent?,
+            window_minutes: self.window_minutes,
+            resets_at_s: self.resets_at,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -190,7 +231,11 @@ fn wanted(head: &[u8]) -> bool {
         Some(b"event_msg") => matches!(
             field(head, br#""payload":{"type":""#),
             None | Some(
-                b"task_started" | b"task_complete" | b"turn_aborted" | b"thread_settings_applied"
+                b"task_started"
+                    | b"task_complete"
+                    | b"turn_aborted"
+                    | b"thread_settings_applied"
+                    | b"token_count"
             )
         ),
         Some(_) => false,
@@ -258,6 +303,18 @@ fn fold_line(line: &[u8], thread: &str, st: &mut FileState, out: Option<&mut Out
         }
         (Some("event_msg"), Some("task_started")) => st.busy = true,
         (Some("event_msg"), Some("task_complete" | "turn_aborted")) => st.busy = false,
+        (Some("event_msg"), Some("token_count")) => {
+            if let (Some(ts), Some(l)) = (ts, &p.rate_limits)
+                && st.rate_limits.as_ref().is_none_or(|r| ts >= r.ts_ms)
+            {
+                st.rate_limits = Some(RateLimits {
+                    ts_ms: ts,
+                    plan_type: l.plan_type.clone(),
+                    primary: l.primary.as_ref().and_then(Window::reading),
+                    secondary: l.secondary.as_ref().and_then(Window::reading),
+                });
+            }
+        }
         _ => {}
     }
     let Some(out) = out else { return };
@@ -385,6 +442,7 @@ impl AgentAdapter for CodexAdapter {
             events: vec![],
             sessions: vec![],
             more: false,
+            rate_limits: None,
         };
         // live_sessions reports from the same scan.
         self.open = (self.open_files)();
@@ -470,6 +528,13 @@ impl AgentAdapter for CodexAdapter {
             })
             .collect();
         batch.events = events.into_values().collect();
+        // Every file read this run, seeded ones included, so a restart re-learns it.
+        batch.rate_limits = self
+            .files
+            .values()
+            .filter_map(|s| s.rate_limits.as_ref())
+            .max_by_key(|r| r.ts_ms)
+            .cloned();
         batch
             .events
             .sort_by(|a, b| (a.ts_ms, &a.event_id).cmp(&(b.ts_ms, &b.event_id)));
@@ -575,6 +640,7 @@ mod tests {
             ("event_msg", "task_complete"),
             ("event_msg", "turn_aborted"),
             ("event_msg", "thread_settings_applied"),
+            ("event_msg", "token_count"),
         ] {
             assert!(wanted(line(t, sub).as_bytes()), "{t}/{sub}");
         }
@@ -582,7 +648,6 @@ mod tests {
             ("response_item", "message"),
             ("response_item", "function_call_output"),
             ("event_msg", "item_completed"),
-            ("event_msg", "token_count"),
             ("event_msg", "agent_message"),
             ("compacted", "x"),
             ("world_state", "x"),

@@ -316,6 +316,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             events: vec![],
             sessions: vec![],
             more: false,
+            rate_limits: None,
         };
         // A session still running keeps its whole history, however old its files are.
         let live: HashSet<String> = match self.live_sessions() {

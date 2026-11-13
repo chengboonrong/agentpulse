@@ -162,6 +162,9 @@ pub fn placeholder() -> Payload {
         system_gpu_percent: Reading::Unavailable,
         indexing: false,
         errors: vec![],
+        usage: None,
+        codex_limits: None,
+        detail: None,
     };
     let mut p = payload(&empty, false);
     p.today.tokens = DASH.into();
@@ -477,6 +480,9 @@ mod tests {
             system_gpu_percent: Reading::Unavailable,
             indexing: false,
             errors: vec![],
+            usage: None,
+            codex_limits: None,
+            detail: None,
         }
     }
 

@@ -74,9 +74,10 @@ fn open_collector() -> anyhow::Result<Collector> {
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(1);
+    let (detail_tx, detail_rx) = std::sync::mpsc::channel();
     let widgets = widget_export::WidgetExporter::detect();
-    collector::spawn(open_collector()?, tx, widgets)?;
-    ui::run(rx, options);
+    collector::spawn(open_collector()?, tx, detail_rx, widgets)?;
+    ui::run(rx, detail_tx, options);
     Ok(())
 }
 

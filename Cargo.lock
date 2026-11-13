@@ -150,7 +150,9 @@ version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "anyhow",
+ "chrono",
  "rusqlite",
+ "serde",
  "tempfile",
 ]
 

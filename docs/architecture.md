@@ -21,9 +21,11 @@ no network calls and stores no conversation content.
                                            ingest_files)
 ```
 
-The UI never reads agent files. It receives a `Snapshot` and draws it. Collectors know
-nothing about GPUI, so they are tested headless and `agentpulse --dump` prints a snapshot
-as JSON with no window.
+The UI never reads agent files or the database. It receives a `Snapshot` and draws it.
+The one message the other way is which session's detail is open: the window sends that key
+over a channel, the collector wakes, queries that session's requests and carries them in
+the following snapshots. Collectors know nothing about GPUI, so they are tested headless
+and `agentpulse --dump` prints a snapshot as JSON with no window.
 
 ## Crates
 
@@ -39,8 +41,10 @@ as JSON with no window.
 | `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, the `agentpulse` binary | all of the above, gpui |
 
 The handoff brief proposed nine crates. One is not created yet because it would be
-empty: `agentpulse-ui`. The UI is two screens and lives in the app crate until it is worth
-splitting.
+empty: `agentpulse-ui`. The UI lives in the app crate: `ui.rs` holds the window, Overview
+and Sessions, and `ui/charts.rs` the Usage screen and the session detail. Charts are drawn
+by hand (divs for bars that carry a tooltip, `canvas` for lines and dense series); there is
+no chart library.
 
 Outside the Rust workspace, `macos/` holds the Swift widget extension and `scripts/bundle.sh`
 assembles and signs `AgentPulse.app`.
@@ -165,6 +169,13 @@ cost is upserted only by a record with a later as-of time, so re-reading changes
 
 Not stored: prompts, responses, tool inputs or outputs, file contents, API keys. The parser
 does not deserialize those fields at all.
+
+### Usage queries are cached in two parts
+The Usage screen needs 30 days of per-day aggregates. Past days change rarely, so they are
+queried once indexing has finished, then at local midnight and at most every 10 minutes.
+Today's part (per-day totals since midnight, cache reads, the timeline) is a cheap query on
+the `ts` index and runs with the session rows, after new data or every 30 s. The existing
+indexes cover every query, so no migration was added.
 
 ## What is deliberately not built yet
 
