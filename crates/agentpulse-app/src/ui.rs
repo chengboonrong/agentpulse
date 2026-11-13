@@ -7,7 +7,7 @@ mod charts;
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use agentpulse_animation::{CatAnimator, CatState, Ink, Look, Sprite, frames};
 use agentpulse_core::{AgentSession, Provider, SessionStatus};
@@ -15,10 +15,11 @@ use agentpulse_platform_macos::{MainThreadMarker, MenuAction, StatusItem};
 #[cfg(feature = "screenshot")]
 use anyhow::Context as _;
 use gpui::{
-    App, Bounds, Context, Div, Entity, FocusHandle, FontFeatures, FontWeight, Global, KeyBinding,
-    Menu, MenuItem, PathBuilder, QuitMode, Rgba, Role, SharedString, Task, TitlebarOptions,
-    WeakEntity, Window, WindowAppearance, WindowBounds, WindowOptions, actions, canvas, div, fill,
-    point, prelude::*, px, rgb, size, transparent_black,
+    Animation, AnimationExt, App, Bounds, Context, Div, ElementId, Entity, FocusHandle,
+    FontFeatures, FontWeight, Global, KeyBinding, Menu, MenuItem, PathBuilder, QuitMode, Rgba,
+    Role, SharedString, Stateful, Task, TitlebarOptions, WeakEntity, Window, WindowAppearance,
+    WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size,
+    transparent_black,
 };
 
 use crate::collector::{HISTORY_LEN, Key, Snapshot};
@@ -142,6 +143,11 @@ pub fn run(
     });
 }
 
+/// The rounded design of the system font (SF Pro Rounded) in every weight,
+/// named by CoreText as the plain one is `.AppleSystemUIFont`. Where it is
+/// missing, GPUI falls back to the system font.
+const FONT_FAMILY: &str = ".AppleSystemUIFontRounded";
+
 /// Brings the window forward, or opens a new one if it was closed.
 fn show(cx: &mut App) {
     tracing::debug!(existing = !cx.windows().is_empty(), "show window");
@@ -195,67 +201,155 @@ fn open_window(options: Options, cx: &mut App) {
 /// Colours as 0xRRGGBB so the contrast test can check them.
 #[derive(Clone, Copy)]
 struct Theme {
+    /// The ground behind every screen.
     window: u32,
+    /// The sidebar.
     chrome: u32,
+    /// Hover and quiet fills on the ground.
     surface: u32,
     border: u32,
     selected: u32,
     text: u32,
     muted: u32,
-    accent: u32,
-    active: u32,
+    /// Warnings in charts (long-context line, a limit nearly used).
     waiting: u32,
-    idle: u32,
-    completed: u32,
     failed: u32,
     banner: u32,
     banner_border: u32,
+    /// Roster cells and chart cards, and their keyline.
+    card: u32,
+    keyline: u32,
+    /// A cat's stage, by agent; ended sessions stand on a neutral one.
+    stage_claude: u32,
+    stage_codex: u32,
+    stage_ended: u32,
+    /// The pale ring around the cell that needs you.
+    ring: u32,
+    /// Ribbons, one per state, with white labels except the pale ended one.
+    need: u32,
+    sprint: u32,
+    work: u32,
+    idle: u32,
+    ended: u32,
+    ended_text: u32,
+    fail: u32,
+    /// Chart series per agent.
+    series_claude: u32,
+    series_codex: u32,
 }
 
+const ON_RIBBON: u32 = 0xFFFFFF;
+
 const LIGHT: Theme = Theme {
-    window: 0xFFFFFF,
-    chrome: 0xF3F3F5,
-    surface: 0xF7F7F9,
-    border: 0xE1E1E6,
-    selected: 0xE1E1E7,
-    text: 0x1D1D1F,
-    muted: 0x5C5C64,
-    accent: 0x0A64D2,
-    active: 0x1A7F37,
-    waiting: 0x8F5F00,
-    idle: 0x4A5590,
-    completed: 0x5C5C64,
-    failed: 0xC21F2B,
-    banner: 0xFFF6E0,
+    window: 0xFFF6E8,
+    chrome: 0xF1EAF3,
+    surface: 0xF8EAD4,
+    border: 0xE8DACB,
+    selected: 0xE3D5E8,
+    text: 0x2B2430,
+    muted: 0x66596C,
+    waiting: 0xB9520A,
+    failed: 0xB4423E,
+    banner: 0xFFF3E0,
     banner_border: 0xE6C46E,
+    card: 0xFFFFFF,
+    keyline: 0xEBDCC7,
+    stage_claude: 0xFFE9DC,
+    stage_codex: 0xE4E8F3,
+    stage_ended: 0xF1EEF2,
+    ring: 0xFFD6E5,
+    need: 0xD92D6A,
+    sprint: 0xB9520A,
+    work: 0x2F6FE0,
+    idle: 0x6E737B,
+    ended: 0xE5E1E8,
+    ended_text: 0x5A4F60,
+    fail: 0xB4423E,
+    series_claude: 0xD06A2E,
+    series_codex: 0x5F6FCB,
 };
 
 const DARK: Theme = Theme {
-    window: 0x1C1C1E,
-    chrome: 0x242427,
-    surface: 0x26262A,
-    border: 0x3A3A40,
-    selected: 0x3A3A41,
-    text: 0xECECEE,
-    muted: 0xA3A3AB,
-    accent: 0x4C9BFF,
-    active: 0x48C35A,
-    waiting: 0xDDA53A,
-    idle: 0xA3AEE8,
-    completed: 0xA3A3AB,
-    failed: 0xFF7B70,
+    window: 0x1F1823,
+    chrome: 0x2A2030,
+    surface: 0x30263A,
+    border: 0x3E3245,
+    selected: 0x45384E,
+    text: 0xF3ECF5,
+    muted: 0xB8ACBF,
+    waiting: 0xE59A55,
+    failed: 0xF0857C,
     banner: 0x3A2F17,
     banner_border: 0x6E5826,
+    card: 0x2B2231,
+    keyline: 0x40344A,
+    stage_claude: 0x4A3329,
+    stage_codex: 0x2E3452,
+    stage_ended: 0x342C39,
+    ring: 0x5C2440,
+    need: 0xD92D6A,
+    sprint: 0xB9520A,
+    work: 0x2F6FE0,
+    idle: 0x6E737B,
+    ended: 0x4A4150,
+    ended_text: 0xE0D8E4,
+    fail: 0xB4423E,
+    series_claude: 0xF0A070,
+    series_codex: 0xA3AEF0,
 };
 
 impl Theme {
-    fn status(&self, s: SessionStatus) -> u32 {
-        match s {
-            SessionStatus::Active => self.active,
-            SessionStatus::Waiting => self.waiting,
-            SessionStatus::Idle => self.idle,
-            SessionStatus::Completed => self.completed,
-            SessionStatus::Failed => self.failed,
+    fn stage(&self, p: Provider) -> u32 {
+        match p {
+            Provider::ClaudeCode => self.stage_claude,
+            _ => self.stage_codex,
+        }
+    }
+
+    /// Ribbon fill and label colour.
+    fn ribbon(&self, r: Ribbon) -> (u32, u32) {
+        match r {
+            Ribbon::NeedsYou => (self.need, ON_RIBBON),
+            Ribbon::Sprinting => (self.sprint, ON_RIBBON),
+            Ribbon::Working => (self.work, ON_RIBBON),
+            Ribbon::Idle => (self.idle, ON_RIBBON),
+            Ribbon::Failed => (self.fail, ON_RIBBON),
+            Ribbon::Ended => (self.ended, self.ended_text),
+        }
+    }
+}
+
+/// A session's state as its ribbon shows it. The order is the roster's rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Ribbon {
+    NeedsYou,
+    Sprinting,
+    Working,
+    Idle,
+    Failed,
+    Ended,
+}
+
+impl Ribbon {
+    fn of(status: SessionStatus, sprinting: bool) -> Self {
+        match status {
+            SessionStatus::Waiting => Self::NeedsYou,
+            SessionStatus::Active if sprinting => Self::Sprinting,
+            SessionStatus::Active => Self::Working,
+            SessionStatus::Idle => Self::Idle,
+            SessionStatus::Failed => Self::Failed,
+            SessionStatus::Completed => Self::Ended,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::NeedsYou => "needs you",
+            Self::Sprinting => "sprinting",
+            Self::Working => "working",
+            Self::Idle => "idle",
+            Self::Failed => "failed",
+            Self::Ended => "ended",
         }
     }
 }
@@ -294,6 +388,11 @@ struct AppView {
     dark: bool,
     forced_dark: Option<bool>,
     cats: HashMap<CatKey, CatAnimator>,
+    /// Each roster cell's ribbon at the last render, to spot a change of rank.
+    ranks: HashMap<CatKey, Ribbon>,
+    /// Cats bouncing after their cell changed rank: when, and a fresh id.
+    bounced: HashMap<CatKey, (Instant, u64)>,
+    bounce_seq: u64,
     /// Shown when no agent is live.
     empty_cat: CatAnimator,
     cat_settings: CatSettings,
@@ -350,6 +449,9 @@ impl AppView {
             dark: options.appearance.unwrap_or(is_dark(window.appearance())),
             forced_dark: options.appearance,
             cats: HashMap::new(),
+            ranks: HashMap::new(),
+            bounced: HashMap::new(),
+            bounce_seq: 0,
             empty_cat: CatAnimator::new(),
             cat_settings,
             cats_agent: Provider::ClaudeCode,
@@ -424,6 +526,10 @@ impl AppView {
     fn visible_cats(&self) -> Vec<&CatAnimator> {
         if self.screen == Screen::Cats {
             return self.preview.iter().collect();
+        }
+        // The Sessions table and a session's profile show live cats too.
+        if self.screen == Screen::Sessions {
+            return self.cats.values().collect();
         }
         if self.screen != Screen::Overview {
             return vec![];
@@ -501,6 +607,12 @@ async fn screenshot(
     cx.background_executor().timer(Duration::from_secs(3)).await;
     cx.update(|window, cx| capture(window, cx, &dir.join("overview.png")))??;
     this.update(cx, |this, cx| {
+        this.page_scroll.scroll_to_bottom();
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("overview-end.png")))??;
+    this.update(cx, |this, cx| {
+        this.page_scroll.set_offset(point(px(0.), px(0.)));
         this.screen = Screen::Sessions;
         this.schedule_animation(cx);
         cx.notify();
@@ -591,24 +703,46 @@ mod sp {
     pub const L: f32 = 16.;
     pub const XL: f32 = 24.;
     pub const GROUP: f32 = 32.;
-    pub const XXL: f32 = 48.;
 }
 
 /// Type scale in px. Nothing is larger than the screen title.
 mod ty {
     pub const LABEL: f32 = 12.;
     pub const BODY: f32 = 13.;
+    pub const RIBBON: f32 = 11.;
     pub const ROW_TITLE: f32 = 15.;
-    pub const TITLE: f32 = 20.;
+    pub const PLATE: f32 = 17.;
+    pub const FIGURE: f32 = 22.;
+    pub const TITLE: f32 = 26.;
 }
 
 const TITLEBAR_H: f32 = 38.;
 const SIDEBAR_W: f32 = 176.;
 /// Horizontal padding of a screen's content.
 const CONTENT_PAD: f32 = sp::XL;
-const AGENT_ROW_H: f32 = 72.;
 const CHART_H: f32 = 96.;
-const DOT: f32 = 7.;
+
+/// Roster cells: never narrower than this, `CELL_GAP` apart, at most three across.
+const CELL_MIN: f32 = 340.;
+const CELL_GAP: f32 = sp::L;
+const MAX_COLUMNS: usize = 3;
+/// A cell's stage is a square this wide; its cat is drawn at `STAGE_SCALE`.
+const STAGE: f32 = 96.;
+const STAGE_SCALE: f32 = 3.;
+const CELL_RADIUS: f32 = 18.;
+/// The pale ring around the cell that needs you.
+const RING: f32 = 3.;
+/// Ended sessions shown after the live ones, newest first.
+const RECENT_ENDED: usize = 3;
+/// The cat's hop when its cell changes rank.
+const BOUNCE: Duration = Duration::from_millis(250);
+const BOUNCE_PX: f32 = 6.;
+
+/// How many whole cells fit across a window this wide.
+fn roster_columns(window_width: f32) -> usize {
+    let available = window_width - SIDEBAR_W - 2. * CONTENT_PAD;
+    (((available + CELL_GAP) / (CELL_MIN + CELL_GAP)).floor() as usize).clamp(1, MAX_COLUMNS)
+}
 
 /// Column title, width (0 takes the remaining space) and right alignment.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -625,8 +759,6 @@ const fn col(title: &'static str, width: f32, numeric: bool) -> Column {
         numeric,
     }
 }
-
-const ROW_CAT_SCALE: f32 = 3.;
 
 /// Empty sprite columns left of the cat in every stationary frame, read from
 /// the sprite data: room the sprint's speed lines and dust use.
@@ -648,77 +780,23 @@ static CAT_LEFT_PAD: LazyLock<usize> = LazyLock::new(|| {
     .unwrap_or(0)
 });
 
-/// How far a row cat is shifted left so a stationary cat starts at the content edge.
-fn cat_overhang() -> f32 {
-    *CAT_LEFT_PAD as f32 * ROW_CAT_SCALE
+/// How far a cat drawn at `scale` is shifted left so a stationary cat starts at its box's edge.
+fn cat_overhang(scale: f32) -> f32 {
+    *CAT_LEFT_PAD as f32 * scale
 }
 
-/// The project column of the agent rows never gets narrower than this.
-const PROJECT_MIN: f32 = 180.;
-
-/// Which optional parts of the agent rows fit the window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AgentColumns {
-    cpu: bool,
-    /// Second lines of Runtime and Tokens.
-    detail: bool,
-}
-
-impl AgentColumns {
-    /// Richest first; each step gives the project column more room.
-    const STEPS: [AgentColumns; 3] = [
-        AgentColumns {
-            cpu: true,
-            detail: true,
-        },
-        AgentColumns {
-            cpu: false,
-            detail: true,
-        },
-        AgentColumns {
-            cpu: false,
-            detail: false,
-        },
-    ];
-
-    /// Drops the CPU / RAM column first, then the second lines, until the
-    /// project column gets at least `PROJECT_MIN`.
-    fn for_window(window_width: f32) -> Self {
-        let available = window_width - SIDEBAR_W - 2. * CONTENT_PAD;
-        Self::STEPS
-            .into_iter()
-            .find(|c| available - c.fixed_width() >= PROJECT_MIN)
-            .unwrap_or(Self::STEPS[2])
-    }
-
-    fn columns(self) -> Vec<Column> {
-        // Cat sprites are 32x16, drawn at 3x; the empty columns left of a
-        // stationary cat hang into the page gutter.
-        let mut c = vec![
-            col("", 32. * ROW_CAT_SCALE - cat_overhang(), false),
-            col("Project", 0., false),
-            col("Status", 112., false),
-            col("Runtime", if self.detail { 124. } else { 64. }, true),
-            col("Tokens", if self.detail { 76. } else { 56. }, true),
-            col("Est. cost", if self.detail { 128. } else { 76. }, true),
-        ];
-        if self.cpu {
-            c.push(col("CPU / RAM", 64., true));
-        }
-        c
-    }
-
-    /// Width of everything but the project column, gaps included.
-    fn fixed_width(self) -> f32 {
-        let c = self.columns();
-        c.iter().map(|c| c.width).sum::<f32>() + (c.len() - 1) as f32 * sp::M
-    }
+/// The Sessions table's cats.
+const TABLE_CAT_SCALE: f32 = 2.;
+const TABLE_GAP: f32 = 10.;
+/// A stationary table cat's width, and the ribbon beside it.
+fn table_cat_w() -> f32 {
+    32. * TABLE_CAT_SCALE - cat_overhang(TABLE_CAT_SCALE)
 }
 
 const SESSION_COLUMNS: [Column; 9] = [
-    col("Status", 92., false),
+    col("Status", 128., false),
     col("Project", 0., false),
-    col("Model", 116., false),
+    col("Model", 104., false),
     col("Started", 92., true),
     col("Duration", 68., true),
     col("Active (est.)", 80., true),
@@ -726,9 +804,34 @@ const SESSION_COLUMNS: [Column; 9] = [
     col("Est. cost", 72., true),
     col("Claude Code", 76., true),
 ];
-/// The content width of the default 1120 pt window, so the table does not
-/// scroll sideways there.
-const SESSION_MIN_WIDTH: f32 = 896.;
+/// The narrowest the project column gets before the table scrolls sideways.
+const PROJECT_MIN: f32 = 140.;
+/// Left out where the whole table does not fit: Model, Started and Claude
+/// Code's own cost record, so the columns shown end on a whole column.
+const NARROW_HIDDEN: [usize; 3] = [2, 3, 8];
+const NARROW_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Widen the window for Model, Started and Claude Code's own cost record.";
+
+/// The Sessions columns shown in a window this wide.
+fn session_columns(window_width: f32) -> Vec<usize> {
+    let all: Vec<usize> = (0..SESSION_COLUMNS.len()).collect();
+    if table_width(&all) <= window_width - SIDEBAR_W - 2. * CONTENT_PAD {
+        all
+    } else {
+        all.into_iter()
+            .filter(|i| !NARROW_HIDDEN.contains(i))
+            .collect()
+    }
+}
+
+/// The least width that shows these columns whole.
+fn table_width(columns: &[usize]) -> f32 {
+    columns
+        .iter()
+        .map(|&i| SESSION_COLUMNS[i].width)
+        .sum::<f32>()
+        + (columns.len() - 1) as f32 * TABLE_GAP
+        + PROJECT_MIN
+}
 /// Below the Sessions table: what the two cost columns are.
 const COST_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Claude Code is the \
     session's own cost record, covering the Claude Code run that last wrote it and written when a \
@@ -772,9 +875,17 @@ impl Render for AppView {
             self.nav("Usage", Screen::Usage, t, cx),
             self.nav("Cats", Screen::Cats, t, cx),
         ];
-        let columns = AgentColumns::for_window(f32::from(window.viewport_size().width));
+        let width = f32::from(window.viewport_size().width);
         let view = cx.weak_entity();
         let hub = self.hub.read(cx);
+        let order = hub
+            .snapshot
+            .as_ref()
+            .map(|s| roster(&s.sessions, |x| self.sprinting(x)))
+            .unwrap_or_default();
+        if let Some(s) = &hub.snapshot {
+            self.track_ranks(s, &order, hub.motion.enabled);
+        }
         let content = match (self.screen, &hub.snapshot) {
             // Needs no agent data.
             (Screen::Cats, _) => self.cats_screen(t, view.clone()).into_any_element(),
@@ -791,25 +902,27 @@ impl Render for AppView {
                 })
                 .into_any_element(),
             (Screen::Overview, Some(s)) => self
-                .overview(s, notes(s, hub.stopped, t), columns, t)
+                .overview(s, &order, notes(s, hub.stopped, t), width, t, view)
                 .into_any_element(),
             (Screen::Sessions, Some(s)) => match &self.detail {
                 Some(key) => charts::session_detail(
                     s,
                     key,
+                    self.profile(s, key, t),
                     notes(s, hub.stopped, t),
                     t,
                     view,
                     &self.page_scroll,
                 )
                 .into_any_element(),
-                None => sessions(s, notes(s, hub.stopped, t), t, view).into_any_element(),
+                None => self
+                    .sessions(s, notes(s, hub.stopped, t), width, t, view)
+                    .into_any_element(),
             },
             (Screen::Usage, Some(s)) => {
                 charts::usage(s, notes(s, hub.stopped, t), t, &self.page_scroll).into_any_element()
             }
         };
-        let today = hub.snapshot.as_ref().map(|s| today(s, t));
         div()
             .size_full()
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
@@ -817,53 +930,148 @@ impl Render for AppView {
             .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
             .on_action(|_: &FocusPrev, window, cx| window.focus_prev(cx))
             .flex()
-            .flex_col()
             .bg(rgb(t.window))
+            .font_family(FONT_FAMILY)
+            .font_features(tabular())
             .text_color(rgb(t.text))
             .text_size(px(ty::BODY))
             .child(
+                // Full height under the traffic lights, as in a native sidebar.
                 div()
-                    .h(px(TITLEBAR_H))
+                    .w(px(SIDEBAR_W))
                     .flex_none()
                     .flex()
-                    .items_center()
-                    .justify_center()
+                    .flex_col()
                     .bg(rgb(t.chrome))
-                    .border_b_1()
+                    .border_r_1()
                     .border_color(rgb(t.border))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("AgentPulse")),
+                    .child(div().h(px(TITLEBAR_H)).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .px(px(sp::S))
+                            .pt(px(sp::S))
+                            .flex()
+                            .flex_col()
+                            .gap(px(sp::XS))
+                            .children(nav),
+                    ),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_h_0()
+                    .min_w_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(SIDEBAR_W))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .bg(rgb(t.chrome))
-                            .border_r_1()
-                            .border_color(rgb(t.border))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .p(px(sp::S))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(sp::XS))
-                                    .children(nav),
-                            )
-                            .children(today),
-                    )
-                    .child(div().flex_1().min_w_0().flex().flex_col().child(content)),
+                    .flex_col()
+                    // Clear of the title bar, where the window is dragged.
+                    .child(div().h(px(TITLEBAR_H - sp::M)).flex_none())
+                    .child(div().flex_1().min_h_0().flex().flex_col().child(content)),
             )
     }
 }
 
+/// The roster's order: live sessions ranked needs-you, sprinting, working,
+/// idle, then the newest few ended ones. Within a rank, the snapshot's order
+/// (newest activity first). Indexes into the snapshot's sessions.
+fn roster(
+    sessions: &[AgentSession],
+    sprinting: impl Fn(&AgentSession) -> bool,
+) -> Vec<(usize, Ribbon)> {
+    let live = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.status.is_live());
+    let ended = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| !x.status.is_live())
+        .take(RECENT_ENDED);
+    let mut order: Vec<(usize, Ribbon)> = live
+        .chain(ended)
+        .map(|(i, x)| (i, Ribbon::of(x.status, sprinting(x))))
+        .collect();
+    // Stable: equal ranks keep the snapshot's order.
+    order.sort_by_key(|&(_, r)| r);
+    order
+}
+
+/// "6 min", "2 h 05 min", "3 d 4 h": a span at a glance.
+fn ago(ms: i64) -> String {
+    let m = ms.max(0) / 60_000;
+    match m {
+        0 => "under 1 min".into(),
+        1..60 => format!("{m} min"),
+        60..1_440 => format!("{} h {:02} min", m / 60, m % 60),
+        _ => format!("{} d {} h", m / 1_440, m % 1_440 / 60),
+    }
+}
+
+/// "118 tok/s", "4.2 tok/s".
+fn rate_text(r: f32) -> String {
+    if r >= 9.95 {
+        format!("{r:.0} tok/s")
+    } else {
+        format!("{r:.1} tok/s")
+    }
+}
+
+/// One honest line about what the session is doing, from measured fields only.
+fn note(x: &AgentSession, r: Ribbon, now_ms: i64) -> String {
+    let since = x.last_activity_at_ms.map(|at| ago(now_ms - at));
+    let ended_at = x
+        .ended_at_ms
+        .or(x.last_activity_at_ms)
+        .map(|ms| format::start_time(ms, now_ms));
+    match r {
+        Ribbon::NeedsYou => match since {
+            Some(s) => format!("Needs you for {s}"),
+            None => "Needs you".into(),
+        },
+        Ribbon::Sprinting | Ribbon::Working => {
+            let mut line = rate_text(x.output_rate);
+            if let Some(c) = x.resources.value().and_then(|r| r.cpu_percent) {
+                line += &format!(" · CPU {c:.0}%");
+            }
+            line
+        }
+        Ribbon::Idle => match since {
+            Some(s) => format!("Idle {s}"),
+            None => "Idle".into(),
+        },
+        Ribbon::Failed => match ended_at {
+            Some(at) => format!("Failed {at} · API error"),
+            None => "Failed · API error".into(),
+        },
+        Ribbon::Ended => match ended_at {
+            Some(at) => format!("Ended {at}"),
+            None => "Ended".into(),
+        },
+    }
+}
+
 impl AppView {
+    fn sprinting(&self, x: &AgentSession) -> bool {
+        self.cats
+            .get(&(x.provider, x.session_id.clone()))
+            .is_some_and(|c| c.state() == CatState::Sprinting)
+    }
+
+    /// Notes each cell's ribbon; a cell whose ribbon changed bounces its cat once.
+    fn track_ranks(&mut self, s: &Snapshot, order: &[(usize, Ribbon)], motion: bool) {
+        let mut ranks = HashMap::with_capacity(order.len());
+        for &(i, r) in order {
+            let key = (s.sessions[i].provider, s.sessions[i].session_id.clone());
+            if motion && self.ranks.get(&key).is_some_and(|old| *old != r) {
+                self.bounce_seq += 1;
+                self.bounced
+                    .insert(key.clone(), (Instant::now(), self.bounce_seq));
+            }
+            ranks.insert(key, r);
+        }
+        self.ranks = ranks;
+        self.bounced.retain(|_, (at, _)| at.elapsed() < BOUNCE);
+    }
+
     fn nav(
         &self,
         label: &'static str,
@@ -871,19 +1079,24 @@ impl AppView {
         t: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
+        let on = self.screen == screen;
         div()
             .id(label)
             .role(Role::Tab)
             .aria_label(label)
-            .aria_selected(self.screen == screen)
+            .aria_selected(on)
             // One point less padding makes room for the focus ring's border,
             // so the sidebar lays out exactly as it did without one.
-            .px(px(sp::S - 1.))
-            .py(px(sp::XS - 1.))
-            .rounded_md()
+            .px(px(sp::M - 1.))
+            .py(px(6. - 1.))
+            .rounded(px(8.))
             .with_focus_ring(t)
-            .when(self.screen == screen, |d| {
-                d.bg(rgb(t.selected)).font_weight(FontWeight::MEDIUM)
+            .map(|d| {
+                if on {
+                    d.bg(rgb(t.selected)).font_weight(FontWeight::BOLD)
+                } else {
+                    d.text_color(rgb(t.muted)).hover(|s| s.bg(rgb(t.surface)))
+                }
             })
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -896,133 +1109,461 @@ impl AppView {
     fn overview(
         &self,
         s: &Snapshot,
+        order: &[(usize, Ribbon)],
         notes: Vec<Div>,
-        columns: AgentColumns,
+        width: f32,
         t: Theme,
+        view: WeakEntity<Self>,
     ) -> impl IntoElement {
-        let live: Vec<&AgentSession> = s.sessions.iter().filter(|x| x.status.is_live()).collect();
-        let agents = if live.is_empty() {
+        let live = order
+            .iter()
+            .filter(|(i, _)| s.sessions[*i].status.is_live());
+        let count = |r: &[Ribbon]| live.clone().filter(|(_, x)| r.contains(x)).count();
+        let (need, working, resting) = (
+            count(&[Ribbon::NeedsYou]),
+            count(&[Ribbon::Sprinting, Ribbon::Working]),
+            count(&[Ribbon::Idle]),
+        );
+        let any_live = live.clone().next().is_some();
+        let mut cells: Vec<gpui::AnyElement> = Vec::new();
+        if !any_live {
+            cells.push(self.empty_cell(t).into_any_element());
+        }
+        cells.extend(order.iter().map(|&(i, r)| {
+            self.cell(i, &s.sessions[i], r, s.taken_at_ms, t, &view)
+                .into_any_element()
+        }));
+        let pills = any_live.then(|| {
             div()
                 .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(sp::M))
-                .py(px(sp::XXL))
-                .child(cat(
-                    self.empty_cat.sprite(),
-                    self.cat_settings.looks().get(Provider::ClaudeCode),
-                    4.,
-                ))
-                .child(
-                    div()
-                        .text_size(px(ty::ROW_TITLE))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("No agents running"),
-                )
-                .child(secondary(
-                    "Start Claude Code or Codex and it will appear here.",
+                .gap(px(sp::S))
+                .child(pill(
+                    &match need {
+                        0 => "no one needs you".to_string(),
+                        1 => "1 needs you".to_string(),
+                        n => format!("{n} need you"),
+                    },
+                    need > 0,
                     t,
                 ))
-        } else {
-            let cols = columns.columns();
-            div().flex().flex_col().child(header(&cols, t)).children(
-                live.iter()
-                    .map(|x| self.agent_row(x, s.taken_at_ms, columns, &cols, t)),
-            )
-        };
+                .child(pill(&format!("{working} working"), false, t))
+                .child(pill(&format!("{resting} resting"), false, t))
+        });
         div()
             .id("overview")
+            .track_scroll(&self.page_scroll)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .px(px(CONTENT_PAD))
-            .py(px(sp::XL))
+            .pt(px(sp::M))
+            .pb(px(sp::XL))
             .flex()
             .flex_col()
-            .child(heading("Overview"))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(sp::M))
+                    .child(heading("Roster"))
+                    .children(pills)
+                    .child(today_figure(s, t).ml_auto()),
+            )
             .children(notes.into_iter().map(|n| n.mt(px(sp::M))))
-            .child(status_line(s, live.len(), t).mt(px(sp::M)))
-            .child(agents.mt(px(sp::GROUP)))
-            .child(rate(s, t).mt(px(sp::GROUP)))
+            .child(
+                div()
+                    .mt(px(sp::XL))
+                    .grid()
+                    .grid_cols(roster_columns(width) as u16)
+                    .gap(px(CELL_GAP))
+                    .children(cells),
+            )
+            .child(legend(t).mt(px(sp::XL)))
+            .child(
+                card(t)
+                    .mt(px(sp::XL))
+                    .child(rate(s, t))
+                    .child(machine_line(s, t).mt(px(sp::L))),
+            )
     }
 
-    fn agent_row(
+    /// A roster cell: the cat on its agent's stage, name plate and ribbon, one
+    /// line about what it is doing, and its figures. A click opens its profile.
+    fn cell(
         &self,
-        s: &AgentSession,
+        i: usize,
+        x: &AgentSession,
+        r: Ribbon,
         now_ms: i64,
-        columns: AgentColumns,
-        cols: &[Column],
         t: Theme,
-    ) -> Div {
-        let w = |i: usize| cols[i].width;
-        let resources = s.resources.value();
-        let sprite = self
-            .cats
-            .get(&(s.provider, s.session_id.clone()))
-            .map_or(self.empty_cat.sprite(), |c| c.sprite());
-        let detail = |text: String| columns.detail.then_some(Some(text));
+        view: &WeakEntity<Self>,
+    ) -> Stateful<Div> {
+        let key = (x.provider, x.session_id.clone());
+        let ended = !x.status.is_live();
+        let need = r == Ribbon::NeedsYou;
+        let name = format::project_name(x.project_path.as_deref()).to_string();
+        let line = note(x, r, now_ms);
+        let label = format!("{name}, {}, {}, {line}", x.provider.label(), r.label());
+        let view = view.clone();
+        let open = key.clone();
         div()
-            .h(px(AGENT_ROW_H))
+            .id(("cell", i))
+            .role(Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .cursor_pointer()
+            .p(px(RING))
+            .rounded(px(CELL_RADIUS + RING))
+            .when(need, |d| d.bg(rgb(t.ring)))
+            .focus_visible(|s| s.bg(rgb(t.text)))
+            .on_click(move |_, _, cx| {
+                view.update(cx, |v, cx| {
+                    v.screen = Screen::Sessions;
+                    v.show_detail(Some(open.clone()), cx);
+                    v.schedule_animation(cx);
+                })
+                .ok();
+            })
+            .child(
+                div()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(sp::L - 2.))
+                    .px(px(sp::L))
+                    .py(px(sp::M + 2.))
+                    .rounded(px(CELL_RADIUS))
+                    .bg(rgb(t.card))
+                    .border_2()
+                    .border_color(rgb(if need { t.need } else { t.keyline }))
+                    .child(self.stage(x, &key, STAGE, STAGE, STAGE_SCALE, t))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(sp::XS + 2.))
+                            .child(plate(&name, r, ty::PLATE, ended, t))
+                            .child(div().truncate().text_color(rgb(t.muted)).child(line))
+                            .child(facts(x, t)),
+                    ),
+            )
+    }
+
+    /// The cat on its stage: the live animation, or asleep and faded once the
+    /// session has ended. It hops once when its cell has just changed rank.
+    fn stage(&self, x: &AgentSession, key: &CatKey, w: f32, h: f32, scale: f32, t: Theme) -> Div {
+        let ended = !x.status.is_live();
+        let look = self.cat_settings.looks().get(x.provider);
+        let sprite = if ended {
+            &frames(CatState::Sleeping)[0]
+        } else {
+            self.cats
+                .get(key)
+                .map_or(self.empty_cat.sprite(), |c| c.sprite())
+        };
+        // Centre the stationary cat; a sprint's speed lines run off the left.
+        let cat = div()
+            .relative()
+            .ml(px(-cat_overhang(scale)))
+            .child(cat_with(sprite, look, scale, ended));
+        let cat = match self.bounced.get(key) {
+            Some(&(_, n)) => cat
+                .with_animation(
+                    ElementId::NamedInteger("bounce".into(), n),
+                    Animation::new(BOUNCE).with_easing(|v: f32| 1. - (1. - v).powi(3)),
+                    |d, v| d.top(px(-BOUNCE_PX * (std::f32::consts::PI * v).sin())),
+                )
+                .into_any_element(),
+            None => cat.into_any_element(),
+        };
+        div()
+            .w(px(w))
+            .h(px(h))
+            .flex_none()
+            .rounded(px(14.))
+            .bg(rgb(if ended {
+                t.stage_ended
+            } else {
+                t.stage(x.provider)
+            }))
+            .overflow_hidden()
+            .flex()
+            .items_end()
+            .justify_center()
+            .pb(px(h * 0.1))
+            .child(cat)
+    }
+
+    /// Stands first in the roster while no agent is live.
+    fn empty_cell(&self, t: Theme) -> Div {
+        div().p(px(RING)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(sp::L - 2.))
+                .px(px(sp::L))
+                .py(px(sp::M + 2.))
+                .rounded(px(CELL_RADIUS))
+                .bg(rgb(t.card))
+                .border_2()
+                .border_color(rgb(t.keyline))
+                .child(
+                    div()
+                        .size(px(STAGE))
+                        .flex_none()
+                        .rounded(px(14.))
+                        .bg(rgb(t.stage_ended))
+                        .overflow_hidden()
+                        .flex()
+                        .items_end()
+                        .justify_center()
+                        .pb(px(STAGE * 0.1))
+                        .child(div().ml(px(-cat_overhang(STAGE_SCALE))).child(cat(
+                            self.empty_cat.sprite(),
+                            self.cat_settings.looks().get(Provider::ClaudeCode),
+                            STAGE_SCALE,
+                        ))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(sp::XS + 2.))
+                        .child(
+                            div()
+                                .text_size(px(ty::PLATE))
+                                .font_weight(FontWeight::EXTRA_BOLD)
+                                .child("No agents running"),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(t.muted))
+                                .child("Start Claude Code or Codex and it will appear here."),
+                        ),
+                ),
+        )
+    }
+
+    /// A session's profile above its charts: a large stage, plate, ribbon and figures.
+    fn profile(&self, s: &Snapshot, key: &Key, t: Theme) -> Div {
+        let Some(x) = s
+            .sessions
+            .iter()
+            .find(|x| x.provider == key.0 && x.session_id == key.1)
+        else {
+            return div()
+                .child(heading(key.0.label()))
+                .child(secondary("This session is no longer listed.", t));
+        };
+        let r = Ribbon::of(x.status, self.sprinting(x));
+        let path = x.project_path.as_deref();
+        let mut sub = vec![path.map_or("project path unknown".into(), format::display_path)];
+        if let Some(m) = &x.model {
+            sub.push(m.clone());
+        }
+        let mut when = vec![];
+        if let Some(ms) = x.started_at_ms {
+            when.push(format!("started {}", format::start_time(ms, s.taken_at_ms)));
+        }
+        if let Some(ms) = x.wall_ms(s.taken_at_ms) {
+            when.push(format::duration(ms));
+        }
+        when.push(format!("{} active (est.)", format::duration(x.active_ms)));
+        div()
             .flex()
             .items_center()
-            .gap(px(sp::M))
-            .border_b_1()
-            .border_color(rgb(t.border))
+            .gap(px(sp::XL))
             .child(
-                div()
-                    .w(px(w(0)))
-                    .flex_none()
-                    .child(div().ml(px(-cat_overhang())).child(cat(
-                        sprite,
-                        self.cat_settings.looks().get(s.provider),
-                        ROW_CAT_SCALE,
-                    ))),
+                self.stage(x, key, 168., 120., 4., t)
+                    .rounded(px(CELL_RADIUS)),
             )
-            .child(project_cell(s, t))
             .child(
                 div()
-                    .w(px(w(2)))
-                    .flex_none()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(status_label(s.status, t))
-                    .child(match &s.model {
-                        Some(m) => secondary(m, t).truncate(),
-                        None => secondary(DASH, t),
-                    }),
+                    .gap(px(sp::XS + 2.))
+                    .child(plate(
+                        format::project_name(path),
+                        r,
+                        ty::TITLE,
+                        !x.status.is_live(),
+                        t,
+                    ))
+                    .child(div().truncate().child(note(x, r, s.taken_at_ms)))
+                    .child(facts(x, t))
+                    .child(secondary(&sub.join(" · "), t).truncate())
+                    .child(secondary(&when.join(" · "), t))
+                    .children((x.provider == Provider::ClaudeCode).then(|| {
+                        secondary(
+                            &format!(
+                                "Claude Code's own cost record: {}",
+                                format::recorded_cost(x.recorded_cost).unwrap_or(DASH.into())
+                            ),
+                            t,
+                        )
+                    })),
             )
-            .child(figures(
-                w(3),
-                s.wall_ms(now_ms).map(format::duration),
-                detail(format!("{} active (est.)", format::duration(s.active_ms))),
-                t,
-            ))
-            .child(figures(
-                w(4),
-                Some(format::tokens(s.tokens.total())),
-                detail(format!("{:.1} tok/s", s.output_rate)),
-                t,
-            ))
-            .child(figures(
-                w(5),
-                format::approx_cost(s.cost_usd),
-                detail(recorded_line(
-                    s.provider,
-                    format::recorded_cost(s.recorded_cost),
-                )),
-                t,
-            ))
-            .when(columns.cpu, |row| {
-                row.child(figures(
-                    w(6),
-                    resources
-                        .and_then(|r| r.cpu_percent)
-                        .map(|c| format!("{c:.1}%")),
-                    Some(resources.map(|r| format::bytes(r.rss_bytes))),
-                    t,
-                ))
-            })
     }
+}
+
+/// Name plate: the project's name, heavy, and the state's ribbon.
+fn plate(name: &str, r: Ribbon, size: f32, ended: bool, t: Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(sp::S))
+        .min_w_0()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(size))
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .when(ended, |d| d.text_color(rgb(t.muted)))
+                .child(name.to_string()),
+        )
+        .child(ribbon(r, t))
+}
+
+fn ribbon(r: Ribbon, t: Theme) -> Div {
+    let (bg, fg) = t.ribbon(r);
+    div()
+        .flex_none()
+        .px(px(sp::S))
+        .rounded_full()
+        .bg(rgb(bg))
+        .text_color(rgb(fg))
+        .text_size(px(ty::RIBBON))
+        .line_height(px(17.))
+        .font_weight(FontWeight::BOLD)
+        .child(r.label())
+}
+
+/// ≈ cost, tokens and the agent, the figures emphasised.
+fn facts(x: &AgentSession, t: Theme) -> Div {
+    let figure = |v: String| div().font_weight(FontWeight::BOLD).child(v);
+    div()
+        .flex()
+        .gap(px(sp::M + 2.))
+        .text_size(px(ty::LABEL))
+        .text_color(rgb(t.muted))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(div().text_color(rgb(t.text)).child(figure(
+            format::approx_cost(x.cost_usd).unwrap_or(DASH.into()),
+        )))
+        .child(
+            div()
+                .flex()
+                .gap(px(3.))
+                .child(figure(format::tokens(x.tokens.total())).text_color(rgb(t.text)))
+                .child("tok"),
+        )
+        .child(x.provider.label())
+}
+
+/// A count in the roster header; the needs-you count is filled in its ribbon colour.
+fn pill(text: &str, need: bool, t: Theme) -> Div {
+    div()
+        .px(px(sp::M))
+        .py(px(sp::XS))
+        .rounded_full()
+        .border_2()
+        .text_size(px(12.5))
+        .font_weight(FontWeight::BOLD)
+        .map(|d| {
+            if need {
+                d.bg(rgb(t.need))
+                    .border_color(rgb(t.need))
+                    .text_color(rgb(ON_RIBBON))
+            } else {
+                d.bg(rgb(t.card)).border_color(rgb(t.keyline))
+            }
+        })
+        .child(text.to_string())
+}
+
+/// Today's estimated cost and the Codex plan limit, at the right of the header.
+fn today_figure(s: &Snapshot, t: Theme) -> Div {
+    let (cost, what) = match format::approx_cost(s.today_cost_usd) {
+        Some(c) => (c, "today · estimate"),
+        None => (DASH.into(), "today · no price for today's models"),
+    };
+    let limit = s
+        .codex_limits
+        .as_ref()
+        .and_then(|l| l.primary.as_ref().or(l.secondary.as_ref()));
+    let limit = match limit {
+        None => format!("Codex limit {DASH}"),
+        Some(w) if w.resets_at_s.is_some_and(|r| r * 1000 < s.taken_at_ms) => {
+            "Codex limit out of date".into()
+        }
+        Some(w) => format!(
+            "Codex {} limit {:.0}%",
+            charts::window_name(w.window_minutes),
+            w.used_percent
+        ),
+    };
+    div()
+        .flex()
+        .flex_col()
+        .items_end()
+        .child(
+            div()
+                .text_size(px(ty::FIGURE))
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .child(cost),
+        )
+        .child(secondary(&format!("{what} · {limit}"), t))
+}
+
+/// What each ribbon colour means.
+fn legend(t: Theme) -> Div {
+    div().flex().flex_wrap().gap(px(sp::L)).children(
+        [
+            (t.need, "needs you"),
+            (t.sprint, "sprinting"),
+            (t.work, "working"),
+            (t.idle, "idle"),
+            (t.fail, "failed"),
+            (t.ended, "ended"),
+        ]
+        .map(|(c, label)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .size(px(10.))
+                        .rounded_full()
+                        .bg(rgb(c))
+                        .when(c == t.ended, |d| {
+                            d.border_1().border_color(rgb(t.ended_text))
+                        }),
+                )
+                .child(secondary(label, t))
+        }),
+    )
+}
+
+/// A rounded card on the ground, holding one chart or figure group.
+fn card(t: Theme) -> Div {
+    div()
+        .p(px(sp::L + 4.))
+        .rounded(px(CELL_RADIUS))
+        .bg(rgb(t.card))
+        .border_2()
+        .border_color(rgb(t.keyline))
+        .flex()
+        .flex_col()
 }
 
 /// Indexing note and error banner, shown between the title and the content.
@@ -1042,7 +1583,7 @@ fn notes(s: &Snapshot, stopped: bool, t: Theme) -> Vec<Div> {
             div()
                 .px(px(sp::M))
                 .py(px(sp::S))
-                .rounded_md()
+                .rounded(px(10.))
                 .bg(rgb(t.banner))
                 .border_1()
                 .border_color(rgb(t.banner_border))
@@ -1056,76 +1597,46 @@ fn notes(s: &Snapshot, stopped: bool, t: Theme) -> Vec<Div> {
     notes
 }
 
-/// "3 agents · 1 active · 0 waiting · 2 idle" and the machine figures, as text.
-fn status_line(s: &Snapshot, live: usize, t: Theme) -> Div {
-    let count = |st| s.sessions.iter().filter(|x| x.status == st).count();
-    let fig = |v: String| {
-        div()
-            .font_weight(FontWeight::MEDIUM)
-            .font_features(tabular())
-            .child(v)
-    };
+/// The agents' CPU and memory, and the whole Mac's GPU, as text.
+fn machine_line(s: &Snapshot, t: Theme) -> Div {
+    let fig = |v: String| div().font_weight(FontWeight::MEDIUM).child(v);
     let word = |v: &'static str| div().text_color(rgb(t.muted)).child(v);
     let dot = || word("·");
     let cpu = s.agents_cpu_percent.map(|c| format!("{c:.1}%"));
     let gpu = s.system_gpu_percent.value().map(|g| format!("{g}%"));
     let has_gpu = gpu.is_some();
-    // With no live agent the counts are all zero; the empty state says so.
-    let counts = (live > 0).then(|| {
-        div()
-            .flex()
-            .gap(px(sp::XS))
-            .child(fig(live.to_string()))
-            .child(word(if live == 1 { "agent" } else { "agents" }))
-            .child(dot())
-            .child(fig(count(SessionStatus::Active).to_string()))
-            .child(word("active"))
-            .child(dot())
-            .child(fig(count(SessionStatus::Waiting).to_string()))
-            .child(word("waiting"))
-            .child(dot())
-            .child(fig(count(SessionStatus::Idle).to_string()))
-            .child(word("idle"))
-    });
     div()
         .flex()
         .flex_wrap()
-        .justify_between()
-        .when(counts.is_none(), |d| d.justify_end())
-        .gap(px(sp::S))
-        .children(counts)
+        .gap(px(sp::XS))
+        .text_size(px(ty::LABEL))
+        .child(word("All agents: CPU"))
+        .child(fig(cpu.clone().unwrap_or(DASH.into())))
+        .when(cpu.is_some(), |d| d.child(word("of one core")))
+        .child(dot())
+        .child(word("RAM"))
+        .child(fig(s.agents_rss_bytes.map_or(DASH.into(), format::bytes)))
+        .child(dot())
         .child(
             div()
+                .id("gpu")
                 .flex()
                 .gap(px(sp::XS))
-                .child(word("CPU"))
-                .child(fig(cpu.clone().unwrap_or(DASH.into())))
-                .when(cpu.is_some(), |d| d.child(word("of one core")))
-                .child(dot())
-                .child(word("RAM"))
-                .child(fig(s.agents_rss_bytes.map_or(DASH.into(), format::bytes)))
-                .child(dot())
-                .child(
-                    div()
-                        .id("gpu")
-                        .flex()
-                        .gap(px(sp::XS))
-                        .child(word("GPU"))
-                        .child(gpu.clone().map_or(word("unavailable"), fig))
-                        .when(gpu.is_some(), |d| d.child(word("whole Mac")))
-                        .tooltip(move |_, cx| {
-                            cx.new(|_| Tooltip {
-                                text: if has_gpu {
-                                    "GPU use of the whole Mac, not of any one agent"
-                                } else {
-                                    "Not readable on this Mac"
-                                }
-                                .into(),
-                                t,
-                            })
-                            .into()
-                        }),
-                ),
+                .child(word("GPU"))
+                .child(gpu.clone().map_or(word("unavailable"), fig))
+                .when(gpu.is_some(), |d| d.child(word("whole Mac")))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| Tooltip {
+                        text: if has_gpu {
+                            "GPU use of the whole Mac, not of any one agent"
+                        } else {
+                            "Not readable on this Mac"
+                        }
+                        .into(),
+                        t,
+                    })
+                    .into()
+                }),
         )
 }
 
@@ -1139,10 +1650,11 @@ impl Render for Tooltip {
         div()
             .px(px(sp::S))
             .py(px(sp::XS))
-            .rounded_md()
-            .bg(rgb(self.t.surface))
+            .rounded(px(8.))
+            .bg(rgb(self.t.card))
             .border_1()
             .border_color(rgb(self.t.border))
+            .font_family(FONT_FAMILY)
             .text_size(px(ty::LABEL))
             .text_color(rgb(self.t.text))
             .child(self.text.clone())
@@ -1163,17 +1675,17 @@ fn rate(s: &Snapshot, t: Theme) -> Div {
                 .gap(px(sp::XL))
                 .child(
                     div()
-                        .w(px(144.))
+                        .w(px(184.))
                         .flex_none()
                         .flex()
                         .flex_col()
                         .child(
                             div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .font_features(tabular())
+                                .text_size(px(ty::FIGURE))
+                                .font_weight(FontWeight::EXTRA_BOLD)
                                 .child(format!("{:.1}", s.output_rate)),
                         )
-                        .child(secondary("tok/s, 30 s average", t)),
+                        .child(secondary("tok/s, 30 s average, all agents", t)),
                 )
                 .child(
                     div()
@@ -1201,7 +1713,6 @@ fn rate(s: &Snapshot, t: Theme) -> Div {
                                         .text_size(px(ty::LABEL))
                                         .line_height(px(sp::L))
                                         .text_color(rgb(t.muted))
-                                        .font_features(tabular())
                                         .child(max.map(axis_label).unwrap_or_default())
                                         .child("0"),
                                 )
@@ -1223,7 +1734,7 @@ fn rate(s: &Snapshot, t: Theme) -> Div {
 
 /// Baseline, a hairline at the axis maximum and the rate path scaled to it.
 fn chart(history: Vec<f32>, max: Option<f32>, t: Theme) -> impl IntoElement {
-    let (line, base, grid) = (rgb(t.accent), rgb(t.muted), rgb(t.border));
+    let (line, base, grid) = (rgb(t.text), rgb(t.muted), rgb(t.border));
     canvas(
         |_, _, _| {},
         move |b, _, window, _| {
@@ -1243,7 +1754,7 @@ fn chart(history: Vec<f32>, max: Option<f32>, t: Theme) -> impl IntoElement {
             let step = b.size.width * (1.0 / (HISTORY_LEN - 1) as f32);
             let x0 = b.right() - step * (history.len() - 1) as f32;
             let height = b.size.height - px(1.5);
-            let mut path = PathBuilder::stroke(px(1.5));
+            let mut path = PathBuilder::stroke(px(2.));
             for (i, v) in history.iter().enumerate() {
                 let p = point(
                     x0 + step * i as f32,
@@ -1264,174 +1775,190 @@ fn chart(history: Vec<f32>, max: Option<f32>, t: Theme) -> impl IntoElement {
     .h(px(CHART_H))
 }
 
-/// Pinned to the bottom of the sidebar on both screens.
-fn today(s: &Snapshot, t: Theme) -> Div {
-    let tk = s.today_tokens;
-    let line = |label: &'static str, value: u64| {
-        div()
-            .flex()
-            .justify_between()
-            .text_size(px(ty::LABEL))
-            .child(div().text_color(rgb(t.muted)).child(label))
-            .child(div().font_features(tabular()).child(format::tokens(value)))
-    };
-    let (cost, note) = match format::approx_cost(s.today_cost_usd) {
-        Some(c) => (c, "estimate, API list prices"),
-        None => (DASH.into(), "no price for today's models"),
-    };
-    div()
-        .flex_none()
-        .p(px(sp::L))
-        .border_t_1()
-        .border_color(rgb(t.border))
-        .flex()
-        .flex_col()
-        .gap(px(sp::XS))
-        .child(section_label("Today", t).mb(px(sp::XS)))
-        .child(
-            div().flex().justify_between().child("Tokens").child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .font_features(tabular())
-                    .child(format::tokens(tk.total())),
-            ),
-        )
-        .child(line("Input", tk.input))
-        .child(line("Output", tk.output))
-        .child(line("Cache write", tk.cache_write_5m + tk.cache_write_1h))
-        .child(line("Cache read", tk.cache_read))
-        .child(
-            div()
-                .mt(px(sp::M))
-                .font_weight(FontWeight::MEDIUM)
-                .font_features(tabular())
-                .child(cost),
-        )
-        .child(secondary(note, t))
-        .children((s.today_unpriced_events > 0).then(|| {
-            secondary(
-                &format!("{} responses unpriced", s.today_unpriced_events),
-                t,
-            )
-        }))
-}
-
 // ---------------------------------------------------------------- sessions
 
-fn sessions(
-    s: &Snapshot,
-    notes: Vec<Div>,
-    t: Theme,
-    view: WeakEntity<AppView>,
-) -> impl IntoElement {
-    let w = |i: usize| SESSION_COLUMNS[i].width;
-    let n = s.sessions.len();
-    div()
-        .flex_1()
-        .min_h_0()
-        .px(px(CONTENT_PAD))
-        .pt(px(sp::XL))
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .flex()
-                .items_baseline()
-                .gap(px(sp::M))
-                .child(heading("Sessions"))
-                .child(secondary(
-                    &format!(
-                        "{n} {} in the last 24 hours or still running",
-                        if n == 1 { "session" } else { "sessions" }
-                    ),
-                    t,
-                )),
-        )
-        .children(notes.into_iter().map(|n| n.mt(px(sp::M))))
-        .child(
-            div()
-                .id("sessions-scroll")
-                .mt(px(sp::GROUP))
-                .flex_1()
-                .min_h_0()
-                .overflow_scroll()
-                .child(
-                    div()
-                        .min_w(px(SESSION_MIN_WIDTH))
-                        .pb(px(sp::XL))
-                        .flex()
-                        .flex_col()
-                        .child(header(&SESSION_COLUMNS, t))
-                        .children(s.sessions.iter().enumerate().map(|(i, x)| {
-                            let key = (x.provider, x.session_id.clone());
-                            let view = view.clone();
-                            div()
-                                .id(("session", i))
-                                .cursor_pointer()
-                                .hover(|d| d.bg(rgb(t.surface)))
-                                .on_click(move |_, _, cx| {
-                                    view.update(cx, |v, cx| v.show_detail(Some(key.clone()), cx))
+impl AppView {
+    fn sessions(
+        &self,
+        s: &Snapshot,
+        notes: Vec<Div>,
+        width: f32,
+        t: Theme,
+        view: WeakEntity<AppView>,
+    ) -> impl IntoElement {
+        let w = |i: usize| SESSION_COLUMNS[i].width;
+        let columns = session_columns(width);
+        let show = |i: usize| columns.contains(&i);
+        let shown: Vec<Column> = columns.iter().map(|&i| SESSION_COLUMNS[i]).collect();
+        let n = s.sessions.len();
+        div()
+            .flex_1()
+            .min_h_0()
+            .px(px(CONTENT_PAD))
+            .pt(px(sp::M))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(sp::M))
+                    .child(heading("Sessions"))
+                    .child(secondary(
+                        &format!(
+                            "{n} {} in the last 24 hours or still running",
+                            if n == 1 { "session" } else { "sessions" }
+                        ),
+                        t,
+                    )),
+            )
+            .children(notes.into_iter().map(|n| n.mt(px(sp::M))))
+            .child(
+                div()
+                    .id("sessions-scroll")
+                    .mt(px(sp::XL))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .child(
+                        div()
+                            .min_w(px(table_width(&columns)))
+                            .pb(px(sp::XL))
+                            .flex()
+                            .flex_col()
+                            .child(header(&shown, t))
+                            .children(s.sessions.iter().enumerate().map(|(i, x)| {
+                                let key = (x.provider, x.session_id.clone());
+                                let r = Ribbon::of(x.status, self.sprinting(x));
+                                let ended = !x.status.is_live();
+                                let sprite = if ended {
+                                    &frames(CatState::Sleeping)[0]
+                                } else {
+                                    self.cats
+                                        .get(&key)
+                                        .map_or(self.empty_cat.sprite(), |c| c.sprite())
+                                };
+                                let look = self.cat_settings.looks().get(x.provider);
+                                let view = view.clone();
+                                div()
+                                    .id(("session", i))
+                                    .role(Role::Button)
+                                    .aria_label(format!(
+                                        "{}, {}, {}",
+                                        format::project_name(x.project_path.as_deref()),
+                                        x.provider.label(),
+                                        r.label()
+                                    ))
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .rounded(px(10.))
+                                    .hover(|d| d.bg(rgb(t.surface)))
+                                    .focus_visible(|d| d.bg(rgb(t.selected)))
+                                    .on_click(move |_, _, cx| {
+                                        view.update(cx, |v, cx| {
+                                            v.show_detail(Some(key.clone()), cx)
+                                        })
                                         .ok();
-                                })
-                                .flex()
-                                .items_center()
-                                .gap(px(sp::M))
-                                .py(px(sp::M))
-                                .border_b_1()
-                                .border_color(rgb(t.border))
-                                .child(status_label(x.status, t).w(px(w(0))).flex_none())
-                                .child(project_cell(x, t))
-                                .child(match &x.model {
-                                    Some(m) => {
-                                        div().w(px(w(2))).flex_none().truncate().child(m.clone())
-                                    }
-                                    None => secondary(DASH, t).w(px(w(2))).flex_none(),
-                                })
-                                .child(figures(
-                                    w(3),
-                                    x.started_at_ms
-                                        .map(|ms| format::start_time(ms, s.taken_at_ms)),
-                                    None,
-                                    t,
-                                ))
-                                .child(figures(
-                                    w(4),
-                                    x.wall_ms(s.taken_at_ms).map(format::duration),
-                                    None,
-                                    t,
-                                ))
-                                .child(figures(w(5), Some(format::duration(x.active_ms)), None, t))
-                                .child(figures(
-                                    w(6),
-                                    Some(format::tokens(x.tokens.total())),
-                                    None,
-                                    t,
-                                ))
-                                .child(figures(w(7), format::approx_cost(x.cost_usd), None, t))
-                                .child(figures(
-                                    w(8),
-                                    format::recorded_cost(x.recorded_cost),
-                                    None,
-                                    t,
-                                ))
-                        }))
-                        .child(secondary(COST_NOTE, t).mt(px(sp::M)))
-                        .child(secondary("Click a session for its requests.", t).mt(px(sp::S))),
-                ),
-        )
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(TABLE_GAP))
+                                    .py(px(sp::S))
+                                    .border_b_1()
+                                    .border_color(rgb(t.border))
+                                    .child(
+                                        div()
+                                            .w(px(w(0)))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(sp::S))
+                                            .child(
+                                                div()
+                                                    .w(px(table_cat_w()))
+                                                    .flex_none()
+                                                    .overflow_hidden()
+                                                    .child(
+                                                        div()
+                                                            .ml(px(-cat_overhang(TABLE_CAT_SCALE)))
+                                                            .child(cat_with(
+                                                                sprite,
+                                                                look,
+                                                                TABLE_CAT_SCALE,
+                                                                ended,
+                                                            )),
+                                                    ),
+                                            )
+                                            .child(ribbon(r, t)),
+                                    )
+                                    .child(project_cell(x, t))
+                                    .when(show(2), |d| {
+                                        d.child(match &x.model {
+                                            Some(m) => div()
+                                                .w(px(w(2)))
+                                                .flex_none()
+                                                .truncate()
+                                                .child(m.clone()),
+                                            None => secondary(DASH, t).w(px(w(2))).flex_none(),
+                                        })
+                                    })
+                                    .when(show(3), |d| {
+                                        d.child(figures(
+                                            w(3),
+                                            x.started_at_ms
+                                                .map(|ms| format::start_time(ms, s.taken_at_ms)),
+                                            None,
+                                            t,
+                                        ))
+                                    })
+                                    .child(figures(
+                                        w(4),
+                                        x.wall_ms(s.taken_at_ms).map(format::duration),
+                                        None,
+                                        t,
+                                    ))
+                                    .child(figures(
+                                        w(5),
+                                        Some(format::duration(x.active_ms)),
+                                        None,
+                                        t,
+                                    ))
+                                    .child(figures(
+                                        w(6),
+                                        Some(format::tokens(x.tokens.total())),
+                                        None,
+                                        t,
+                                    ))
+                                    .child(figures(w(7), format::approx_cost(x.cost_usd), None, t))
+                                    .when(show(8), |d| {
+                                        d.child(figures(
+                                            w(8),
+                                            format::recorded_cost(x.recorded_cost),
+                                            None,
+                                            t,
+                                        ))
+                                    })
+                            }))
+                            .child(
+                                secondary(if show(8) { COST_NOTE } else { NARROW_NOTE }, t)
+                                    .mt(px(sp::M)),
+                            )
+                            .child(secondary("Click a session for its requests.", t).mt(px(sp::S))),
+                    ),
+            )
+    }
 }
-
 // ------------------------------------------------------------------ pieces
 
-fn heading(text: &'static str) -> Div {
+fn heading(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(ty::TITLE))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text)
+        .font_weight(FontWeight::EXTRA_BOLD)
+        .child(text.into())
 }
 
 fn section_label(text: &'static str, t: Theme) -> Div {
-    secondary(text, t).font_weight(FontWeight::MEDIUM)
+    secondary(text, t).font_weight(FontWeight::BOLD)
 }
 
 fn secondary(text: &str, t: Theme) -> Div {
@@ -1445,7 +1972,7 @@ fn secondary(text: &str, t: Theme) -> Div {
 fn header(columns: &[Column], t: Theme) -> Div {
     let mut d = div()
         .flex()
-        .gap(px(sp::M))
+        .gap(px(TABLE_GAP))
         .py(px(sp::S))
         .border_b_1()
         .border_color(rgb(t.border))
@@ -1475,7 +2002,8 @@ fn project_cell(s: &AgentSession, t: Theme) -> Div {
             div()
                 .truncate()
                 .text_size(px(ty::ROW_TITLE))
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(FontWeight::BOLD)
+                .when(!s.status.is_live(), |d| d.text_color(rgb(t.muted)))
                 .child(format::project_name(path).to_string()),
         )
         .child(
@@ -1491,26 +2019,10 @@ fn project_cell(s: &AgentSession, t: Theme) -> Div {
         )
 }
 
-/// Dot and label: the label carries the meaning, not the colour alone.
-fn status_label(s: SessionStatus, t: Theme) -> Div {
-    let color = rgb(t.status(s));
-    div()
-        .flex()
-        .items_center()
-        .gap(px(sp::S))
-        .text_color(color)
-        .font_weight(FontWeight::MEDIUM)
-        .child(div().size(px(DOT)).flex_none().rounded_full().bg(color))
-        .child(s.label())
-}
-
 /// A right-aligned figure, with an optional secondary line below; None shows the dash.
 fn figures(width: f32, top: Option<String>, below: Option<Option<String>>, t: Theme) -> Div {
     let value = |text: Option<String>, size: f32, color: u32| {
-        let d = div()
-            .text_size(px(size))
-            .whitespace_nowrap()
-            .font_features(tabular());
+        let d = div().text_size(px(size)).whitespace_nowrap();
         match text {
             Some(text) => d.text_color(rgb(color)).child(text),
             None => d.text_color(rgb(t.muted)).child(DASH),
@@ -1525,22 +2037,6 @@ fn figures(width: f32, top: Option<String>, below: Option<Option<String>>, t: Th
         .overflow_hidden()
         .child(value(top, ty::BODY, t.text))
         .children(below.map(|b| value(b, ty::LABEL, t.muted)))
-}
-
-/// Second line under the estimate: Claude Code's own cost record, blank for
-/// other agents. The Overview cost column is 128 pt, so a long figure
-/// ("$123.45 +?") takes the short label rather than lose its start.
-fn recorded_line(provider: Provider, value: Option<String>) -> String {
-    if provider != Provider::ClaudeCode {
-        return String::new();
-    }
-    let value = value.unwrap_or(DASH.into());
-    let label = if value.chars().count() > 8 {
-        "Claude"
-    } else {
-        "Claude Code"
-    };
-    format!("{label} {value}")
 }
 
 /// A keyboard focus ring that takes no extra room: the border is always there,
@@ -1562,6 +2058,17 @@ fn rgba([r, g, b, a]: [u8; 4]) -> Rgba {
         g: g as f32 / 255.,
         b: b as f32 / 255.,
         a: a as f32 / 255.,
+    }
+}
+
+/// An ended session's cat: its coat in grey, a little faded, so the live cats lead.
+fn faded(c: Rgba) -> Rgba {
+    let grey = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    Rgba {
+        r: grey,
+        g: grey,
+        b: grey,
+        a: c.a * 0.6,
     }
 }
 
@@ -1609,6 +2116,11 @@ fn runs(sprite: &'static Sprite, look: Look) -> Arc<[Run]> {
 /// Paints a sprite with square pixels at an integer scale, one quad per run of
 /// equal colour in a row.
 fn cat(sprite: &'static Sprite, look: Look, scale: f32) -> impl IntoElement {
+    cat_with(sprite, look, scale, false)
+}
+
+/// [`cat`], [`faded`] when `ended`.
+fn cat_with(sprite: &'static Sprite, look: Look, scale: f32, ended: bool) -> impl IntoElement {
     let (w, h) = (sprite.width(), sprite.height());
     let runs = runs(sprite, look);
     canvas(
@@ -1622,7 +2134,7 @@ fn cat(sprite: &'static Sprite, look: Look, scale: f32) -> impl IntoElement {
                         origin + point(px(x as f32 * scale), px(y as f32 * scale)),
                         size(px(len as f32 * scale), px(scale)),
                     ),
-                    color,
+                    if ended { faded(color) } else { color },
                 ));
             }
         },
@@ -1681,15 +2193,18 @@ mod tests {
     #[test]
     fn text_meets_wcag_aa_in_both_themes() {
         for t in [LIGHT, DARK] {
-            let status = [t.active, t.waiting, t.idle, t.completed, t.failed];
             // Each text colour against every background it is drawn on.
             let pairs = [
                 (
                     &[t.text][..],
-                    &[t.window, t.chrome, t.surface, t.selected, t.banner][..],
+                    &[t.window, t.chrome, t.surface, t.selected, t.banner, t.card][..],
                 ),
-                (&[t.muted], &[t.window, t.chrome, t.surface]),
-                (&status, &[t.window, t.surface]),
+                (
+                    &[t.muted],
+                    &[t.window, t.chrome, t.surface, t.selected, t.card],
+                ),
+                (&[ON_RIBBON], &[t.need, t.sprint, t.work, t.idle, t.fail]),
+                (&[t.ended_text], &[t.ended]),
             ];
             for (fgs, bgs) in pairs {
                 for (&fg, &bg) in fgs.iter().flat_map(|f| bgs.iter().map(move |b| (f, b))) {
@@ -1697,8 +2212,96 @@ mod tests {
                     assert!(c >= 4.5, "{fg:06x} on {bg:06x}: {c:.2}");
                 }
             }
-            // The chart line is a graphical object; it sits on the window background.
-            assert!(contrast(t.accent, t.window) >= 3.0, "chart line");
+            // Graphical objects on the cards and ground: chart series and
+            // marks, the ended legend swatch's outline, and the keyline of
+            // the cell that needs you.
+            for fg in [
+                t.text,
+                t.muted,
+                t.ended_text,
+                t.waiting,
+                t.failed,
+                t.series_claude,
+                t.series_codex,
+                t.need,
+            ] {
+                for bg in [t.card, t.window] {
+                    let c = contrast(fg, bg);
+                    assert!(c >= 3.0, "{fg:06x} on {bg:06x}: {c:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn roster_ranks_who_needs_you_first() {
+        use agentpulse_core::{Reading, TokenUsage};
+        let session = |id: &str, status| AgentSession {
+            provider: Provider::ClaudeCode,
+            session_id: id.into(),
+            project_path: None,
+            model: None,
+            status,
+            started_at_ms: None,
+            last_activity_at_ms: Some(0),
+            ended_at_ms: None,
+            active_ms: 0,
+            tokens: TokenUsage::default(),
+            cost_usd: Reading::Unavailable,
+            unpriced_events: 0,
+            output_rate: 0.,
+            process: None,
+            resources: Reading::Unavailable,
+            recorded_cost: Reading::Unavailable,
+        };
+        use SessionStatus::*;
+        let sessions = vec![
+            session("idle", Idle),
+            session("busy", Active),
+            session("fast", Active),
+            session("asks", Waiting),
+            session("done1", Completed),
+            session("fail", Failed),
+            session("done2", Completed),
+            session("done3", Completed),
+        ];
+        let order = roster(&sessions, |x| x.session_id == "fast");
+        let ids: Vec<&str> = order
+            .iter()
+            .map(|(i, _)| sessions[*i].session_id.as_str())
+            .collect();
+        // Only the newest three ended sessions; failed ranks before ended.
+        assert_eq!(
+            ids,
+            ["asks", "fast", "busy", "idle", "fail", "done1", "done2"]
+        );
+        assert_eq!(order[0].1, Ribbon::NeedsYou);
+        assert_eq!(order[1].1, Ribbon::Sprinting);
+    }
+
+    #[test]
+    fn notes_say_what_was_measured() {
+        assert_eq!(ago(0), "under 1 min");
+        assert_eq!(ago(6 * 60_000 + 59_000), "6 min");
+        assert_eq!(ago(125 * 60_000), "2 h 05 min");
+        assert_eq!(ago((3 * 24 + 4) * 3_600_000), "3 d 4 h");
+        assert_eq!(rate_text(118.4), "118 tok/s");
+        assert_eq!(rate_text(4.25), "4.2 tok/s");
+    }
+
+    #[test]
+    fn roster_fits_whole_cells() {
+        assert_eq!(roster_columns(880.), 1);
+        assert_eq!(roster_columns(1120.), 2);
+        assert_eq!(roster_columns(1440.), 3);
+        assert_eq!(roster_columns(3000.), MAX_COLUMNS);
+        for w in (880..=3000).step_by(8).map(|w| w as f32) {
+            let n = roster_columns(w) as f32;
+            let available = w - SIDEBAR_W - 2. * CONTENT_PAD;
+            assert!(
+                n * CELL_MIN + (n - 1.) * CELL_GAP <= available || n == 1.,
+                "{w}"
+            );
         }
     }
 
@@ -1735,55 +2338,16 @@ mod tests {
     }
 
     #[test]
-    fn recorded_line_keeps_the_figure_whole() {
-        let cc = |v: Option<&str>| recorded_line(Provider::ClaudeCode, v.map(Into::into));
-        assert_eq!(cc(None), "Claude Code —");
-        assert_eq!(cc(Some("$4.62")), "Claude Code $4.62");
-        assert_eq!(cc(Some("$1234.50")), "Claude Code $1234.50");
-        assert_eq!(cc(Some("$99.99 +?")), "Claude $99.99 +?");
-        // Claude Code's own record means nothing for another agent.
-        assert_eq!(recorded_line(Provider::Codex, None), "");
-    }
-
-    #[test]
-    fn agent_columns_drop_cpu_then_detail_and_keep_the_project_wide() {
-        let full = AgentColumns {
-            cpu: true,
-            detail: true,
-        };
-        let no_cpu = AgentColumns {
-            cpu: false,
-            detail: true,
-        };
-        let bare = AgentColumns {
-            cpu: false,
-            detail: false,
-        };
-        assert_eq!(AgentColumns::for_window(1120.), full);
-        assert_eq!(AgentColumns::for_window(980.), no_cpu);
-        assert_eq!(AgentColumns::for_window(880.), bare);
-        // From the minimum window width (880) to well past the default, the
-        // chosen columns plus the project's minimum fit the content width.
-        for w in (880..=2400).step_by(4).map(|w| w as f32) {
-            let available = w - SIDEBAR_W - 2. * CONTENT_PAD;
-            let c = AgentColumns::for_window(w);
-            assert!(c.fixed_width() + PROJECT_MIN <= available, "{w} pt: {c:?}");
-        }
-        assert_eq!(full.columns().len(), 7);
-        assert_eq!(bare.columns().len(), 6);
-        assert!(bare.fixed_width() < no_cpu.fixed_width());
-        // The Sessions table fits the default window without sideways scrolling,
-        // and its project column keeps a usable width there.
-        let fixed: f32 = SESSION_COLUMNS.iter().map(|c| c.width).sum::<f32>()
-            + (SESSION_COLUMNS.len() - 1) as f32 * sp::M;
-        const { assert!(SESSION_MIN_WIDTH <= 1120. - SIDEBAR_W - 2. * CONTENT_PAD) };
-        assert!(
-            SESSION_MIN_WIDTH - fixed >= 140.,
-            "{}",
-            SESSION_MIN_WIDTH - fixed
-        );
-        // The cat's overhang fits in the gutter, so sprint lines are not clipped.
-        assert!(cat_overhang() > 0. && cat_overhang() <= CONTENT_PAD);
+    fn session_table_shows_whole_columns() {
+        // The whole Sessions table fits the default window; the minimum window
+        // drops columns instead of slicing one at its edge.
+        assert_eq!(session_columns(1120.).len(), SESSION_COLUMNS.len());
+        let narrow = session_columns(880.);
+        assert!(narrow.iter().all(|i| !NARROW_HIDDEN.contains(i)));
+        let room = 880. - SIDEBAR_W - 2. * CONTENT_PAD;
+        assert!(table_width(&narrow) <= room, "{}", table_width(&narrow));
+        // The leading column holds the cat and the widest ribbon.
+        assert!(table_cat_w() + sp::S + 72. <= SESSION_COLUMNS[0].width);
     }
 
     #[test]

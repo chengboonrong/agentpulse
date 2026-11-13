@@ -1,0 +1,902 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-13T08:45:16+00:00",
+  "title": "Design System: AgentPulse",
+  "extensions": {
+    "colorMeta": {
+      "cream-ground": {
+        "role": "neutral",
+        "displayName": "Cream Ground",
+        "canonical": "#FFF6E8",
+        "tonalRamp": [
+          "#0E0B06",
+          "#29241E",
+          "#474138",
+          "#676056",
+          "#898175",
+          "#ABA499",
+          "#CFC8BE",
+          "#F3EEE5"
+        ]
+      },
+      "lilac-sidebar": {
+        "role": "neutral",
+        "displayName": "Lilac Sidebar",
+        "canonical": "#F1EAF3",
+        "tonalRamp": [
+          "#0D0A0D",
+          "#272428",
+          "#454046",
+          "#645F66",
+          "#868088",
+          "#A8A3AA",
+          "#CCC7CE",
+          "#F1EDF2"
+        ]
+      },
+      "warm-hover": {
+        "role": "neutral",
+        "displayName": "Warm Hover",
+        "canonical": "#F8EAD4",
+        "tonalRamp": [
+          "#0F0A04",
+          "#2B2419",
+          "#494133",
+          "#6A604F",
+          "#8D806D",
+          "#AFA391",
+          "#D2C8B7",
+          "#F6EDDF"
+        ]
+      },
+      "sand-border": {
+        "role": "neutral",
+        "displayName": "Sand Border",
+        "canonical": "#E8DACB",
+        "tonalRamp": [
+          "#0F0A05",
+          "#2B241C",
+          "#494037",
+          "#6A5F54",
+          "#8D8072",
+          "#AFA396",
+          "#D2C7BC",
+          "#F6EDE3"
+        ]
+      },
+      "lilac-selected": {
+        "role": "neutral",
+        "displayName": "Lilac Selected",
+        "canonical": "#E3D5E8",
+        "tonalRamp": [
+          "#0E0910",
+          "#29222B",
+          "#473E4A",
+          "#685D6B",
+          "#8A7D8E",
+          "#ACA0B0",
+          "#CFC5D3",
+          "#F4EBF7"
+        ]
+      },
+      "plum-ink": {
+        "role": "neutral",
+        "displayName": "Plum Ink",
+        "canonical": "#2B2430",
+        "tonalRamp": [
+          "#0D0A0F",
+          "#28232B",
+          "#453F49",
+          "#655E6A",
+          "#877F8D",
+          "#A9A2AF",
+          "#CDC6D2",
+          "#F2ECF6"
+        ]
+      },
+      "dusk-muted": {
+        "role": "neutral",
+        "displayName": "Dusk Muted",
+        "canonical": "#66596C",
+        "tonalRamp": [
+          "#0E0911",
+          "#29222D",
+          "#473E4C",
+          "#685C6D",
+          "#8A7D91",
+          "#ACA0B2",
+          "#D0C4D5",
+          "#F4EAF9"
+        ]
+      },
+      "card-white": {
+        "role": "neutral",
+        "displayName": "Card White",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "biscuit-keyline": {
+        "role": "neutral",
+        "displayName": "Biscuit Keyline",
+        "canonical": "#EBDCC7",
+        "tonalRamp": [
+          "#0F0A04",
+          "#2B2419",
+          "#4A4033",
+          "#6B5F4F",
+          "#8E806D",
+          "#B0A392",
+          "#D3C7B8",
+          "#F7EDDF"
+        ]
+      },
+      "stage-peach": {
+        "role": "neutral",
+        "displayName": "Stage Peach",
+        "canonical": "#FFE9DC",
+        "tonalRamp": [
+          "#110905",
+          "#2D231C",
+          "#4C3F37",
+          "#6E5D53",
+          "#917E72",
+          "#B3A196",
+          "#D6C5BC",
+          "#FAEBE3"
+        ]
+      },
+      "stage-periwinkle": {
+        "role": "neutral",
+        "displayName": "Stage Periwinkle",
+        "canonical": "#E4E8F3",
+        "tonalRamp": [
+          "#0A0B0F",
+          "#23252A",
+          "#3F4249",
+          "#5E6169",
+          "#7F828C",
+          "#A2A5AE",
+          "#C6C9D1",
+          "#ECEEF5"
+        ]
+      },
+      "stage-ended": {
+        "role": "neutral",
+        "displayName": "Stage Ended",
+        "canonical": "#F1EEF2",
+        "tonalRamp": [
+          "#0C0B0C",
+          "#262426",
+          "#434144",
+          "#626063",
+          "#848185",
+          "#A6A4A7",
+          "#CAC8CB",
+          "#EFEEF0"
+        ]
+      },
+      "need-halo": {
+        "role": "primary",
+        "displayName": "Need Halo",
+        "canonical": "#FFD6E5",
+        "tonalRamp": [
+          "#14060C",
+          "#321E26",
+          "#533A43",
+          "#765763",
+          "#9B7684",
+          "#BC9AA7",
+          "#DEC0CB",
+          "#FFE6F0"
+        ]
+      },
+      "ribbon-need-pink": {
+        "role": "primary",
+        "displayName": "Ribbon Need Pink",
+        "canonical": "#D92D6A",
+        "tonalRamp": [
+          "#2A0005",
+          "#54001B",
+          "#800035",
+          "#AF1651",
+          "#DF3670",
+          "#FF6B94",
+          "#FF9ABA",
+          "#FFC7E1"
+        ]
+      },
+      "ribbon-sprint-orange": {
+        "role": "secondary",
+        "displayName": "Ribbon Sprint Orange",
+        "canonical": "#B9520A",
+        "tonalRamp": [
+          "#230000",
+          "#490C00",
+          "#712700",
+          "#9C4302",
+          "#C86023",
+          "#E88958",
+          "#FFB287",
+          "#FFDBB6"
+        ]
+      },
+      "ribbon-work-blue": {
+        "role": "secondary",
+        "displayName": "Ribbon Work Blue",
+        "canonical": "#2F6FE0",
+        "tonalRamp": [
+          "#000135",
+          "#001D5F",
+          "#0C3B8D",
+          "#245BBD",
+          "#3D7DEE",
+          "#68A3FF",
+          "#94C9FF",
+          "#C1F0FF"
+        ]
+      },
+      "ribbon-idle-grey": {
+        "role": "secondary",
+        "displayName": "Ribbon Idle Grey",
+        "canonical": "#6E737B",
+        "tonalRamp": [
+          "#090B0E",
+          "#22252A",
+          "#3F4248",
+          "#5D6168",
+          "#7E838B",
+          "#A1A5AD",
+          "#C5C9D0",
+          "#EBEFF5"
+        ]
+      },
+      "ribbon-fail-red": {
+        "role": "secondary",
+        "displayName": "Ribbon Fail Red",
+        "canonical": "#B4423E",
+        "tonalRamp": [
+          "#240000",
+          "#4A0508",
+          "#73211F",
+          "#9F3C38",
+          "#CC5953",
+          "#EC827A",
+          "#FFACA3",
+          "#FFD6CD"
+        ]
+      },
+      "ribbon-ended-pale": {
+        "role": "neutral",
+        "displayName": "Ribbon Ended Pale",
+        "canonical": "#E5E1E8",
+        "tonalRamp": [
+          "#0C0A0D",
+          "#262428",
+          "#434145",
+          "#636065",
+          "#848187",
+          "#A7A3A9",
+          "#CBC8CD",
+          "#F0EDF2"
+        ]
+      },
+      "ribbon-ended-ink": {
+        "role": "neutral",
+        "displayName": "Ribbon Ended Ink",
+        "canonical": "#5A4F60",
+        "tonalRamp": [
+          "#0E0910",
+          "#29222C",
+          "#473E4B",
+          "#675D6C",
+          "#897D8F",
+          "#ABA0B1",
+          "#CFC5D4",
+          "#F3EBF8"
+        ]
+      },
+      "on-ribbon": {
+        "role": "secondary",
+        "displayName": "On Ribbon",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "warning-amber": {
+        "role": "tertiary",
+        "displayName": "Warning Amber",
+        "canonical": "#B9520A",
+        "tonalRamp": [
+          "#230000",
+          "#490C00",
+          "#712700",
+          "#9C4302",
+          "#C86023",
+          "#E88958",
+          "#FFB287",
+          "#FFDBB6"
+        ]
+      },
+      "error-red": {
+        "role": "tertiary",
+        "displayName": "Error Red",
+        "canonical": "#B4423E",
+        "tonalRamp": [
+          "#240000",
+          "#4A0508",
+          "#73211F",
+          "#9F3C38",
+          "#CC5953",
+          "#EC827A",
+          "#FFACA3",
+          "#FFD6CD"
+        ]
+      },
+      "banner-cream": {
+        "role": "neutral",
+        "displayName": "Banner Cream",
+        "canonical": "#FFF3E0",
+        "tonalRamp": [
+          "#0F0A05",
+          "#2A241B",
+          "#484135",
+          "#696051",
+          "#8B8170",
+          "#ADA494",
+          "#D1C8BA",
+          "#F5EDE1"
+        ]
+      },
+      "banner-gold": {
+        "role": "neutral",
+        "displayName": "Banner Gold",
+        "canonical": "#E6C46E",
+        "tonalRamp": [
+          "#160800",
+          "#342200",
+          "#553E00",
+          "#795D01",
+          "#9E7E23",
+          "#BFA259",
+          "#E0C788",
+          "#FFEDB7"
+        ]
+      },
+      "series-claude": {
+        "role": "tertiary",
+        "displayName": "Series Claude",
+        "canonical": "#D06A2E",
+        "tonalRamp": [
+          "#230000",
+          "#480E00",
+          "#702900",
+          "#9A4406",
+          "#C66225",
+          "#E68A59",
+          "#FFB388",
+          "#FFDCB7"
+        ]
+      },
+      "series-codex": {
+        "role": "tertiary",
+        "displayName": "Series Codex",
+        "canonical": "#5F6FCB",
+        "tonalRamp": [
+          "#05042B",
+          "#181E52",
+          "#313A7C",
+          "#4C59A8",
+          "#6979D6",
+          "#8C9FF3",
+          "#B3C4FF",
+          "#DAEBFF"
+        ]
+      },
+      "dark-plum-ground": {
+        "role": "neutral",
+        "displayName": "Dark Plum Ground",
+        "canonical": "#1F1823",
+        "tonalRamp": [
+          "#0D0A0F",
+          "#28232B",
+          "#453F49",
+          "#655E6A",
+          "#877E8C",
+          "#AAA1AE",
+          "#CDC6D2",
+          "#F2ECF6"
+        ]
+      },
+      "dark-plum-sidebar": {
+        "role": "neutral",
+        "displayName": "Dark Plum Sidebar",
+        "canonical": "#2A2030",
+        "tonalRamp": [
+          "#0E0911",
+          "#29222D",
+          "#473E4C",
+          "#675D6D",
+          "#897D91",
+          "#ABA0B2",
+          "#CFC5D5",
+          "#F3EBF9"
+        ]
+      },
+      "dark-hover": {
+        "role": "neutral",
+        "displayName": "Dark Hover",
+        "canonical": "#30263A",
+        "tonalRamp": [
+          "#0D0912",
+          "#28222F",
+          "#463E4F",
+          "#665C71",
+          "#887D95",
+          "#AAA0B6",
+          "#CEC5D8",
+          "#F3EAFC"
+        ]
+      },
+      "dark-border": {
+        "role": "neutral",
+        "displayName": "Dark Border",
+        "canonical": "#3E3245",
+        "tonalRamp": [
+          "#0E0911",
+          "#29222E",
+          "#473E4D",
+          "#685C6F",
+          "#8A7C92",
+          "#ACA0B4",
+          "#CFC4D6",
+          "#F4EAFA"
+        ]
+      },
+      "dark-selected": {
+        "role": "neutral",
+        "displayName": "Dark Selected",
+        "canonical": "#45384E",
+        "tonalRamp": [
+          "#0E0812",
+          "#29212F",
+          "#473D4F",
+          "#685C71",
+          "#8A7C95",
+          "#AC9FB6",
+          "#D0C4D8",
+          "#F4EAFC"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark Ink",
+        "canonical": "#F3ECF5",
+        "tonalRamp": [
+          "#0D0A0D",
+          "#272428",
+          "#454046",
+          "#645F66",
+          "#868088",
+          "#A8A3AA",
+          "#CCC7CE",
+          "#F1EDF2"
+        ]
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Dark Muted",
+        "canonical": "#B8ACBF",
+        "tonalRamp": [
+          "#0E0910",
+          "#28222C",
+          "#463F4B",
+          "#675D6C",
+          "#897D8F",
+          "#ABA1B1",
+          "#CEC5D4",
+          "#F3EBF8"
+        ]
+      },
+      "dark-card": {
+        "role": "neutral",
+        "displayName": "Dark Card",
+        "canonical": "#2B2231",
+        "tonalRamp": [
+          "#0D0910",
+          "#28222C",
+          "#463F4B",
+          "#665D6D",
+          "#887E90",
+          "#AAA1B1",
+          "#CEC5D4",
+          "#F3EBF8"
+        ]
+      },
+      "dark-keyline": {
+        "role": "neutral",
+        "displayName": "Dark Keyline",
+        "canonical": "#40344A",
+        "tonalRamp": [
+          "#0E0912",
+          "#29212F",
+          "#473E4F",
+          "#675C71",
+          "#897C95",
+          "#AC9FB6",
+          "#CFC4D9",
+          "#F4EAFC"
+        ]
+      },
+      "dark-stage-peach": {
+        "role": "neutral",
+        "displayName": "Dark Stage Peach",
+        "canonical": "#4A3329",
+        "tonalRamp": [
+          "#120805",
+          "#30211B",
+          "#503D35",
+          "#725B52",
+          "#967C70",
+          "#B89F94",
+          "#DAC4BA",
+          "#FEEAE1"
+        ]
+      },
+      "dark-stage-periwinkle": {
+        "role": "neutral",
+        "displayName": "Dark Stage Periwinkle",
+        "canonical": "#2E3452",
+        "tonalRamp": [
+          "#080A17",
+          "#202436",
+          "#3B4058",
+          "#595F7D",
+          "#7880A3",
+          "#9CA3C3",
+          "#C1C8E5",
+          "#E7EDFF"
+        ]
+      },
+      "dark-stage-ended": {
+        "role": "neutral",
+        "displayName": "Dark Stage Ended",
+        "canonical": "#342C39",
+        "tonalRamp": [
+          "#0D090F",
+          "#28232B",
+          "#463F4A",
+          "#665E6B",
+          "#887E8E",
+          "#AAA1AF",
+          "#CDC6D2",
+          "#F2EBF7"
+        ]
+      },
+      "dark-need-halo": {
+        "role": "primary",
+        "displayName": "Dark Need Halo",
+        "canonical": "#5C2440",
+        "tonalRamp": [
+          "#19030D",
+          "#3A1828",
+          "#5E3246",
+          "#844E66",
+          "#AB6C88",
+          "#CC91AB",
+          "#EDB8CE",
+          "#FFDFF3"
+        ]
+      },
+      "dark-ribbon-ended-pale": {
+        "role": "neutral",
+        "displayName": "Dark Ribbon Ended Pale",
+        "canonical": "#4A4150",
+        "tonalRamp": [
+          "#0D0910",
+          "#28232C",
+          "#463F4A",
+          "#665D6C",
+          "#887E8F",
+          "#AAA1B0",
+          "#CEC5D3",
+          "#F2EBF7"
+        ]
+      },
+      "dark-ribbon-ended-ink": {
+        "role": "neutral",
+        "displayName": "Dark Ribbon Ended Ink",
+        "canonical": "#E0D8E4",
+        "tonalRamp": [
+          "#0D0A0E",
+          "#272329",
+          "#454047",
+          "#655F68",
+          "#867F8A",
+          "#A9A2AC",
+          "#CDC7D0",
+          "#F1ECF4"
+        ]
+      },
+      "dark-warning-amber": {
+        "role": "tertiary",
+        "displayName": "Dark Warning Amber",
+        "canonical": "#E59A55",
+        "tonalRamp": [
+          "#1D0200",
+          "#401800",
+          "#653300",
+          "#8D5008",
+          "#B66F27",
+          "#D6955A",
+          "#F6BB89",
+          "#FFE3B8"
+        ]
+      },
+      "dark-error-red": {
+        "role": "tertiary",
+        "displayName": "Dark Error Red",
+        "canonical": "#F0857C",
+        "tonalRamp": [
+          "#220000",
+          "#470C0C",
+          "#6F2723",
+          "#99423D",
+          "#C55F58",
+          "#E5877F",
+          "#FFB0A7",
+          "#FFD9D1"
+        ]
+      },
+      "dark-banner": {
+        "role": "neutral",
+        "displayName": "Dark Banner",
+        "canonical": "#3A2F17",
+        "tonalRamp": [
+          "#0F0A02",
+          "#2B2415",
+          "#4A412E",
+          "#6B6049",
+          "#8D8167",
+          "#AFA48C",
+          "#D2C8B3",
+          "#F7EEDB"
+        ]
+      },
+      "dark-banner-gold": {
+        "role": "neutral",
+        "displayName": "Dark Banner Gold",
+        "canonical": "#6E5826",
+        "tonalRamp": [
+          "#130900",
+          "#302304",
+          "#50401B",
+          "#725E33",
+          "#967F4E",
+          "#B7A376",
+          "#DAC7A0",
+          "#FDEDCB"
+        ]
+      },
+      "dark-series-claude": {
+        "role": "tertiary",
+        "displayName": "Dark Series Claude",
+        "canonical": "#F0A070",
+        "tonalRamp": [
+          "#1E0100",
+          "#401700",
+          "#66320C",
+          "#8E4E24",
+          "#B76D3E",
+          "#D89369",
+          "#F8B995",
+          "#FFE1C2"
+        ]
+      },
+      "dark-series-codex": {
+        "role": "tertiary",
+        "displayName": "Dark Series Codex",
+        "canonical": "#A3AEF0",
+        "tonalRamp": [
+          "#070721",
+          "#1D2143",
+          "#383E69",
+          "#555C91",
+          "#737DBB",
+          "#97A1DA",
+          "#BCC6F9",
+          "#E3ECFF"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Screen titles; nothing is larger."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "Today's estimated cost in the roster header; coat name on the Cats preview."
+      },
+      "plate": {
+        "displayName": "Plate",
+        "purpose": "Name plates in roster cells; figure values in Usage cards."
+      },
+      "row-title": {
+        "displayName": "Row Title",
+        "purpose": "Project names in the Sessions table."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Window default, cell notes, table figures."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Secondary lines, axes, legends, facts rows; bold for section labels."
+      },
+      "ribbon": {
+        "displayName": "Ribbon",
+        "purpose": "State ribbons only, lowercase."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "rank-bounce",
+        "value": "250ms, translateY up to -6px along sin(pi*t), easing 1-(1-t)^3",
+        "purpose": "A cat hops once when its roster cell changes rank; disabled when animation is off."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "window-min",
+        "value": "880x560"
+      },
+      {
+        "name": "roster-cell-min",
+        "value": "340px (16px gap, max 3 columns, sidebar 176px, content padding 24px)"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Roster Cell",
+      "kind": "card",
+      "refersTo": "roster-cell",
+      "description": "One agent as a character: pastel stage, plate, ribbon, note and facts.",
+      "html": "<div class=\"ds-ring\"><div class=\"ds-cell\"><div class=\"ds-stage\"></div><div class=\"ds-col\"><div class=\"ds-plate\"><span class=\"ds-name\">ai-projects</span><span class=\"ds-ribbon ds-work\">working</span></div><div class=\"ds-note\">118 tok/s · CPU 6%</div><div class=\"ds-facts\"><b>≈ $165.67</b><span><b>380M</b> tok</span><span>Claude Code</span></div></div></div></div>",
+      "css": ".ds-ring{padding:3px;border-radius:21px;max-width:420px} .ds-ring:focus-visible{background:#2B2430;outline:none} .ds-cell{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:18px;background:#FFFFFF;border:2px solid #EBDCC7;color:#2B2430;cursor:pointer;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;font-size:13px} .ds-stage{width:96px;height:96px;flex:none;border-radius:14px;background:#FFE9DC} .ds-col{display:flex;flex-direction:column;gap:6px;min-width:0} .ds-plate{display:flex;align-items:center;gap:8px} .ds-name{font-size:17px;font-weight:800} .ds-ribbon{padding:0 8px;border-radius:9999px;color:#fff;font-size:11px;line-height:17px;font-weight:700} .ds-work{background:#2F6FE0} .ds-note{color:#66596C} .ds-facts{display:flex;gap:14px;font-size:12px;color:#66596C} .ds-facts b{color:#2B2430}"
+    },
+    {
+      "name": "Roster Cell, needs you",
+      "kind": "card",
+      "refersTo": "roster-cell-needs-you",
+      "description": "The cell that needs you: pink keyline inside a pale pink halo.",
+      "html": "<div class=\"ds-ring-need\"><div class=\"ds-cell-need\"><div class=\"ds-stage-cx\"></div><div><span class=\"ds-name-n\">agentpulse</span> <span class=\"ds-rib-need\">needs you</span><div class=\"ds-note-n\">Needs you for 6 min</div></div></div></div>",
+      "css": ".ds-ring-need{padding:3px;border-radius:21px;background:#FFD6E5;max-width:420px} .ds-cell-need{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:18px;background:#FFFFFF;border:2px solid #D92D6A;color:#2B2430;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;font-size:13px} .ds-stage-cx{width:96px;height:96px;flex:none;border-radius:14px;background:#E4E8F3} .ds-name-n{font-size:17px;font-weight:800} .ds-rib-need{padding:0 8px;border-radius:9999px;background:#D92D6A;color:#fff;font-size:11px;line-height:17px;font-weight:700} .ds-note-n{color:#66596C;margin-top:6px}"
+    },
+    {
+      "name": "State Ribbons",
+      "kind": "chip",
+      "refersTo": "ribbon-need",
+      "description": "One capsule per state; white label except the pale ended one.",
+      "html": "<div class=\"ds-ribbons\"><span class=\"ds-r\" style=\"background:#D92D6A\">needs you</span><span class=\"ds-r\" style=\"background:#B9520A\">sprinting</span><span class=\"ds-r\" style=\"background:#2F6FE0\">working</span><span class=\"ds-r\" style=\"background:#6E737B\">idle</span><span class=\"ds-r\" style=\"background:#B4423E\">failed</span><span class=\"ds-r\" style=\"background:#E5E1E8;color:#5A4F60\">ended</span></div>",
+      "css": ".ds-ribbons{display:flex;gap:8px;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;} .ds-r{padding:0 8px;border-radius:9999px;color:#fff;font-size:11px;line-height:17px;font-weight:700}"
+    },
+    {
+      "name": "Count Pills",
+      "kind": "chip",
+      "refersTo": "count-pill",
+      "description": "Roster header counts; the needs-you pill fills pink when anyone needs you.",
+      "html": "<div class=\"ds-pills\"><span class=\"ds-pill ds-pill-need\">1 needs you</span><span class=\"ds-pill\">3 working</span><span class=\"ds-pill\">10 resting</span></div>",
+      "css": ".ds-pills{display:flex;gap:8px;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;} .ds-pill{padding:4px 12px;border-radius:9999px;border:2px solid #EBDCC7;background:#FFFFFF;color:#2B2430;font-size:12.5px;font-weight:700} .ds-pill-need{background:#D92D6A;border-color:#D92D6A;color:#fff}"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Native-style sidebar items on lilac; selected fills lilac-selected in bold.",
+      "html": "<nav class=\"ds-side\"><a class=\"ds-nav ds-on\" tabindex=\"0\">Overview</a><a class=\"ds-nav\" tabindex=\"0\">Sessions</a><a class=\"ds-nav\" tabindex=\"0\">Usage</a><a class=\"ds-nav\" tabindex=\"0\">Cats</a></nav>",
+      "css": ".ds-side{width:176px;padding:8px;display:flex;flex-direction:column;gap:4px;background:#F1EAF3;border-right:1px solid #E8DACB;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;font-size:13px} .ds-nav{padding:5px 11px;border-radius:8px;border:1px solid transparent;color:#66596C;cursor:pointer} .ds-nav:hover{background:#F8EAD4} .ds-nav:focus-visible{outline:none;border-color:#2B2430} .ds-on{background:#E3D5E8;color:#2B2430;font-weight:700} .ds-on:hover{background:#E3D5E8}"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "button",
+      "refersTo": "segmented-control",
+      "description": "The Cats screen's agent switch.",
+      "html": "<div class=\"ds-seg\"><button class=\"ds-segb ds-segon\">Claude Code</button><button class=\"ds-segb\">Codex</button></div>",
+      "css": ".ds-seg{display:inline-flex;gap:4px;padding:3px;border-radius:10px;background:#F1EAF3;border:1px solid #E8DACB;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;} .ds-segb{padding:4px 12px;border-radius:8px;border:0;background:transparent;color:#2B2430;font:inherit;font-size:13px;cursor:pointer} .ds-segb:hover{background:#F8EAD4} .ds-segb:focus-visible{outline:1px solid #2B2430} .ds-segon{background:#FFFFFF;font-weight:700} .ds-segon:hover{background:#FFFFFF}"
+    },
+    {
+      "name": "Chart Card",
+      "kind": "card",
+      "refersTo": "chart-card",
+      "description": "Flat white card with keyline holding one chart; stacked agent bars.",
+      "html": "<div class=\"ds-chart\"><div class=\"ds-lbl\">Daily cost</div><div class=\"ds-bars\"><i style=\"height:40%\"></i><i style=\"height:70%\"></i><i class=\"ds-nod\"></i><i style=\"height:55%\"></i><i style=\"height:90%\"></i></div></div>",
+      "css": ".ds-chart{padding:20px;border-radius:18px;background:#FFFFFF;border:2px solid #EBDCC7;max-width:360px;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;} .ds-lbl{font-size:12px;font-weight:700;color:#66596C;margin-bottom:8px} .ds-bars{display:flex;gap:2px;align-items:flex-end;height:120px;border-bottom:1px solid #66596C} .ds-bars i{flex:1;background:linear-gradient(#5F6FCB 0 40%,#FFFFFF 40% calc(40% + 1px),#D06A2E calc(40% + 1px))} .ds-bars i.ds-nod{background:none;height:4px;border-top:2px dotted rgba(102,89,108,.5)}"
+    },
+    {
+      "name": "Error Banner",
+      "kind": "custom",
+      "refersTo": "banner",
+      "description": "Shown between the title and the content when collection fails.",
+      "html": "<div class=\"ds-banner\">Data collection stopped. Restart AgentPulse.</div>",
+      "css": ".ds-banner{padding:8px 12px;border-radius:10px;background:#FFF3E0;border:1px solid #E6C46E;color:#2B2430;font-size:12px;font-family: ui-rounded, 'SF Pro Rounded', system-ui; font-variant-numeric: tabular-nums;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Character Goods Shelf",
+    "overview": "**Creative North Star: \"The Character Goods Shelf\"**\n\nAgentPulse presents its agents the way a character-goods catalogue presents its figures: each one on its own little pastel stage, boxed in a white card with a soft keyline, with a heavy rounded name plate and a ribbon that says what state it is in. The ground is warm cream with a lilac sidebar in light appearance and deep plum in dark; the cards, stages and ribbons keep their roles in both. Nothing is glossy, gradient-filled or shadowed; depth is a flat card on a tinted ground.\n\nThe system is glance-first. Saturation is rationed to the state ribbons and the chart series, so the eye lands on the one pink cell before it reads a word. Pixel cats carry the state through motion; the text confirms it in one line and a small row of tabular figures. Every figure that is estimated says so (≈, \"estimate\"), and missing values show as a dash, never a zero.\n\nDensity is moderate: whole cells only, never clipped, at most three across, with generous 16px gutters. The app keeps the Mac's own grammar (a full-height sidebar under the traffic lights, system rounded type, native menus) and puts its personality into the cells, not the chrome.",
+    "keyCharacteristics": [
+      "Warm cream ground, lilac sidebar; deep plum in dark appearance.",
+      "White rounded cards with a 2px keyline; no shadows anywhere.",
+      "One saturated ribbon per state; everything else is pastel or ink.",
+      "Pastel stage per agent: peach for Claude Code, periwinkle for Codex, neutral for ended.",
+      "SF Pro Rounded throughout, extra-bold for plates and headline figures, tabular digits everywhere.",
+      "Pixel cats drawn on whole-pixel edges; ended cats print grey and faded."
+    ],
+    "rules": [
+      {
+        "name": "The Ribbon Monopoly Rule",
+        "body": "Saturated colour on the roster belongs to the state ribbons. Stages, cards and grounds stay pastel or neutral; a new element that needs attention earns it with a ribbon, not a new hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Same Ribbons Rule",
+        "body": "Ribbon fills are identical in light and dark appearance; only the grounds, cards, stages and the ended ribbon change.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tested Contrast Rule",
+        "body": "Text reaches 4.5:1 on every surface it is drawn on, and series, marks and the needs-you keyline reach 3:1 on cards and ground, in both appearances. A unit test enforces it; a new colour joins the test before it ships.",
+        "section": "colors"
+      },
+      {
+        "name": "The Heavy Names Rule",
+        "body": "Names and headline figures are extra-bold (800); everything that explains them is regular and muted. There is no medium-weight middle tier for headings.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Everywhere Rule",
+        "body": "`tnum` is set on the root view; never turn it off for a figure.",
+        "section": "typography"
+      },
+      {
+        "name": "The Keyline Not Shadow Rule",
+        "body": "Separation is a 2px keyline on cards, pills and chips, or a 1px rule for dividers. Do not add drop shadows to make something float.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** give every new state or warning a ribbon from the existing six before considering a new colour.",
+      "**Do** put every agent on its stage colour: peach for Claude Code, periwinkle for Codex, neutral once ended.",
+      "**Do** separate surfaces with a 2px keyline on a flat card; use the 3px halo only for the cell that needs you.",
+      "**Do** keep figures tabular and mark estimates with ≈ or \"estimate\"; show a muted dash for unknown.",
+      "**Do** draw cats at integer scale on whole-point origins, and print ended cats in greyscale at 60% opacity.",
+      "**Do** add any new text or chart colour to the contrast test, in both appearances."
+    ],
+    "donts": [
+      "**Don't** add drop shadows, gradients or glass to cards, cells or pills.",
+      "**Don't** set any text larger than the 26px screen title.",
+      "**Don't** use a ribbon colour as a background tint for whole surfaces; stages and grounds stay pastel.",
+      "**Don't** clip a roster cell to fit a column; drop a column instead.",
+      "**Don't** convey the agent by cat or stage colour alone; name it in text as well."
+    ]
+  }
+}

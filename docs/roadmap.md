@@ -211,3 +211,6 @@ not been measured.
 - Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
   only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
   beside the estimate, and distribution is Developer ID rather than the App Store.
+- Decided 2026-11-13: the window loads the undocumented system font name
+  `.AppleSystemUIFontRounded` (SF Pro Rounded, all weights) for the Cat Roster design. If
+  macOS drops the name, GPUI falls back to the system font.
