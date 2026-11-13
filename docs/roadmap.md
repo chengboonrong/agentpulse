@@ -165,6 +165,15 @@ not been measured.
   It needs the paid Apple Developer Program for TestFlight or the App Store. Still open:
   who runs the relay (self-hosted or third party) and whether a local-network-only mode is
   enough for a first version.
+- New updates notice. Tell the user when a newer AgentPulse release exists, in the window
+  and the menu-bar menu, with its version, its release notes and a link to download it.
+  AgentPulse makes no network calls today, so this must be:
+  - opt-in, with a manual "Check for updates" that works even when automatic checks are off;
+  - one request for the latest release on the project's GitHub page, sending nothing about
+    the user or their agents;
+  - a notice only: it never downloads or installs anything by itself.
+  A self-updating app (Sparkle, MIT licensed) needs a notarized, Developer ID signed build
+  and a signed update feed, so it waits for the notarized DMG in Phase 5.
 
 ## Known limits of this slice
 - Widgets are snapshots: WidgetKit budgets reloads, so a widget can lag the app and always
@@ -193,6 +202,7 @@ not been measured.
 
 ## Open decisions for the owner
 - Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.
+- Phase 6 updates notice: automatic checks on or off by default, and how often they run.
 - Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
   only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
   beside the estimate, and distribution is Developer ID rather than the App Store.
