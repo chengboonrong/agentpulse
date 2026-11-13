@@ -1,24 +1,41 @@
 //! App-level state that outlives the window: the snapshot stream, the motion
-//! settings and the menu bar item with its cat. The window observes it.
+//! settings, the update check and the menu bar item with its cat. The window
+//! observes it.
 
 use std::time::{Duration, Instant};
 
 use agentpulse_animation::{CatAnimator, Motion};
 use agentpulse_platform_macos::{MenuLine, StatusItem, reduce_motion};
-use gpui::{Context, Task};
+use gpui::{Context, Task, prelude::*};
 
 use crate::collector::Snapshot;
 use crate::menubar::{self, POINTS_HIGH, Pose};
+use crate::settings::Settings;
+use crate::updates::{self, Check, Release};
 
 /// Shortest time between menu bar icon frames.
 /// 5 fps: at 10 fps AppKit's per-frame work put a sprinting cat at 3-3.7% CPU.
 const MENU_BAR_FRAME: Duration = Duration::from_millis(200);
+/// Automatic update checks are this far apart.
+pub const UPDATE_EVERY_MS: i64 = 2 * 60 * 60 * 1000;
 
 pub struct Hub {
     pub snapshot: Option<Snapshot>,
     /// The snapshot channel closed; the last snapshot is no longer current.
     pub stopped: bool,
     pub motion: Motion,
+    pub settings: Settings,
+    /// An update check is running.
+    pub checking: bool,
+    /// The latest check's result, this run.
+    pub last_check: Option<Result<Check, String>>,
+    /// The newer release found this run; a later failed check keeps it.
+    found: Option<Release>,
+    pub checked_at_ms: i64,
+    /// Automatic checks may run: the normal window, not screenshot mode.
+    auto_checks: bool,
+    update_timer: Option<Task<()>>,
+    check_task: Option<Task<()>>,
     cat: CatAnimator,
     pose: Pose,
     last_tick: Instant,
@@ -33,6 +50,7 @@ impl Hub {
     pub fn new(
         rx: async_channel::Receiver<Snapshot>,
         item: StatusItem,
+        settings: Settings,
         cx: &mut Context<Self>,
     ) -> Self {
         let snapshots = cx.spawn(async move |this, cx| {
@@ -49,7 +67,7 @@ impl Hub {
             })
             .ok();
         });
-        let motion = motion();
+        let motion = motion(&settings);
         tracing::info!(
             animation = motion.enabled,
             speed = motion.speed,
@@ -60,6 +78,14 @@ impl Hub {
             snapshot: None,
             stopped: false,
             motion,
+            settings,
+            checking: false,
+            last_check: None,
+            found: None,
+            checked_at_ms: 0,
+            auto_checks: false,
+            update_timer: None,
+            check_task: None,
             pose: Pose::of(&cat),
             cat,
             last_tick: Instant::now(),
@@ -75,8 +101,26 @@ impl Hub {
     }
 
     fn apply(&mut self, snap: Snapshot, cx: &mut Context<Self>) {
-        // Read on every snapshot, so a change applies even with no window open.
-        let motion = motion();
+        // Read on every snapshot, so a Reduce Motion change applies even with no window open.
+        self.refresh_motion();
+        self.snapshot = Some(snap);
+        self.follow(cx);
+        // Timers stop while the Mac sleeps, so an overdue check starts here.
+        if self.check_due() {
+            self.check_now(cx);
+        }
+    }
+
+    fn check_due(&self) -> bool {
+        let u = self.settings.updates();
+        self.auto_checks
+            && u.auto
+            && !self.checking
+            && now_ms().saturating_sub(u.last_checked_ms) >= UPDATE_EVERY_MS
+    }
+
+    fn refresh_motion(&mut self) {
+        let motion = motion(&self.settings);
         if motion != self.motion {
             tracing::info!(
                 enabled = motion.enabled,
@@ -85,8 +129,115 @@ impl Hub {
             );
             self.motion = motion;
         }
-        self.snapshot = Some(snap);
+    }
+
+    /// Turns the stored animation on or off, saves it and applies it at once.
+    pub fn toggle_animation(&mut self, cx: &mut Context<Self>) {
+        let mut a = self.settings.animation();
+        a.enabled = !a.enabled;
+        self.settings.set_animation(a);
+        self.refresh_motion();
         self.follow(cx);
+    }
+
+    /// Saves the animation speed and applies it at once.
+    pub fn set_speed(&mut self, speed: f32, cx: &mut Context<Self>) {
+        let mut a = self.settings.animation();
+        a.speed = speed;
+        self.settings.set_animation(a);
+        self.refresh_motion();
+        self.follow(cx);
+    }
+
+    /// The release newer than this build found this run, if any.
+    pub fn available(&self) -> Option<&Release> {
+        self.found.as_ref()
+    }
+
+    /// Starts automatic checks, if they are on. Only the normal window calls this.
+    pub fn start_update_checks(&mut self, cx: &mut Context<Self>) {
+        self.auto_checks = true;
+        self.schedule_check(cx);
+    }
+
+    pub fn toggle_auto_updates(&mut self, cx: &mut Context<Self>) {
+        let mut u = self.settings.updates();
+        u.auto = !u.auto;
+        self.settings.set_updates(u);
+        self.schedule_check(cx);
+        cx.notify();
+    }
+
+    /// Hides the banner for this release; Settings and the menu still show it.
+    pub fn dismiss(&mut self, version: &str, cx: &mut Context<Self>) {
+        let mut u = self.settings.updates();
+        u.dismissed = Some(version.to_string());
+        self.settings.set_updates(u);
+        cx.notify();
+    }
+
+    /// Asks GitHub now, unless a check is already running.
+    pub fn check_now(&mut self, cx: &mut Context<Self>) {
+        if self.checking {
+            return;
+        }
+        self.checking = true;
+        cx.notify();
+        let fetch = cx.background_spawn(async { updates::check() });
+        self.check_task = Some(cx.spawn(async move |this, cx| {
+            let result = fetch.await;
+            this.update(cx, |hub, cx| {
+                if let Err(e) = &result {
+                    tracing::warn!(error = %e, "update check failed");
+                }
+                let mut u = hub.settings.updates();
+                u.last_checked_ms = now_ms();
+                hub.settings.set_updates(u);
+                hub.show_check(result, cx);
+            })
+            .ok();
+        }));
+    }
+
+    /// Shows a finished check's result and plans the next automatic one.
+    pub fn show_check(&mut self, result: Result<Check, String>, cx: &mut Context<Self>) {
+        self.checking = false;
+        self.checked_at_ms = now_ms();
+        match &result {
+            Ok(Check::Available(r)) => self.found = Some(r.clone()),
+            Ok(Check::UpToDate) => self.found = None,
+            Err(_) => {}
+        }
+        self.last_check = Some(result);
+        tracing::info!(
+            available = ?self.available().map(|r| r.version.as_str()),
+            "update check done"
+        );
+        self.item
+            .set_update(self.available().map(|r| r.version.as_str()));
+        self.schedule_check(cx);
+        cx.notify();
+    }
+
+    /// The next automatic check: [`UPDATE_EVERY_MS`] after the last one,
+    /// or now if that has passed. None while automatic checks are off.
+    fn schedule_check(&mut self, cx: &mut Context<Self>) {
+        self.update_timer = None;
+        let u = self.settings.updates();
+        if !(self.auto_checks && u.auto) {
+            return;
+        }
+        let wait = u
+            .last_checked_ms
+            .saturating_add(UPDATE_EVERY_MS)
+            .saturating_sub(now_ms())
+            .clamp(0, UPDATE_EVERY_MS);
+        self.update_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(wait as u64))
+                .await;
+            this.update(cx, |hub, cx| hub.check_now(cx)).ok();
+        }));
     }
 
     /// Applies the current snapshot and stopped flag to the cat, title and rows.
@@ -163,14 +314,44 @@ impl Hub {
     }
 }
 
-pub fn motion() -> Motion {
-    let off = std::env::var("AGENTPULSE_ANIMATION").is_ok_and(|v| v == "off");
+pub fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// `AGENTPULSE_ANIMATION` (`on` or `off`) and a numeric
+/// `AGENTPULSE_ANIMATION_SPEED`, the developer knobs that win over Settings.
+/// Other values are ignored, with one warning.
+fn env_animation() -> (Option<bool>, Option<f32>) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let enabled = std::env::var("AGENTPULSE_ANIMATION").ok().and_then(|v| {
+        match v.to_ascii_lowercase().as_str() {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => {
+                WARNED.call_once(|| {
+                    tracing::warn!(value = %v, "AGENTPULSE_ANIMATION is not on or off, ignored");
+                });
+                None
+            }
+        }
+    });
     let speed = std::env::var("AGENTPULSE_ANIMATION_SPEED")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0);
+        .and_then(|v| v.parse().ok());
+    (enabled, speed)
+}
+
+/// Whether an environment variable in effect decides the animation instead of Settings.
+pub fn env_overrides_animation() -> bool {
+    env_animation() != (None, None)
+}
+
+/// Settings, overridden by the environment; Reduce Motion always stops it.
+pub fn motion(settings: &Settings) -> Motion {
+    let a = settings.animation();
+    let (enabled, speed) = env_animation();
     Motion {
-        enabled: !off && !reduce_motion(),
-        speed,
+        enabled: enabled.unwrap_or(a.enabled) && !reduce_motion(),
+        speed: speed.unwrap_or(a.speed),
     }
 }

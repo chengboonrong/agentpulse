@@ -96,9 +96,18 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
   wears the coat of the agent it follows, so with default settings a widget driven by Codex
   shows Codex's dark cat, not the ginger one.
 
-Everything stays on this machine. AgentPulse makes no network calls and never reads or
-stores prompt, response or file content. Values it cannot measure are shown as unavailable,
-not as zero.
+Everything stays on this machine. AgentPulse never reads or stores prompt, response or file
+content, and makes one kind of network request: the update check, an HTTPS
+`GET https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10` with the
+headers `User-Agent: AgentPulse/<version>`, `Accept: application/vnd.github+json` and
+`Accept-Language: en`, plus the standard `Accept-Encoding` that macOS adds. It sends no
+cookies, identifiers or anything about you or your agents; like any connection, GitHub sees
+your IP address. GitHub replies with the public list of AgentPulse releases, from
+which AgentPulse reads each version, date, notes and page link. It checks every 2 hours by
+default; turn off "Check for updates automatically" in Settings to stop that. "Check Now"
+works either way. Nothing is downloaded or installed by itself: a new release only shows a
+notice with a link to its GitHub page. Values AgentPulse cannot measure are shown as
+unavailable, not as zero.
 
 ## Requirements
 
@@ -128,8 +137,8 @@ minutes.
 | Claude Code directory | `CLAUDE_CONFIG_DIR` (default `~/.claude`) |
 | Codex directory | `CODEX_HOME` (default `~/.codex`) |
 | Prices | Put a `pricing.toml` in the data directory; it replaces the built-in table. Format: [crates/agentpulse-cost/pricing.toml](crates/agentpulse-cost/pricing.toml) |
-| Animation off | `AGENTPULSE_ANIMATION=off`, or macOS Reduce Motion |
-| Animation speed | `AGENTPULSE_ANIMATION_SPEED=1.5` (0.25 to 3) |
+| Animation on/off | The Settings screen. `AGENTPULSE_ANIMATION=on` or `off` overrides it; macOS Reduce Motion always stops it |
+| Animation speed | The Settings screen. `AGENTPULSE_ANIMATION_SPEED=1.5` (0.25 to 3) overrides it |
 | Log level | `AGENTPULSE_LOG=debug` |
 | Cat coats | The **Cats** screen: pick an agent, then a coat and an eye colour. Saved at once to `settings.json` in the data directory |
 

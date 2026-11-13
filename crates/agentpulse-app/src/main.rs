@@ -4,6 +4,7 @@ mod hub;
 mod menubar;
 mod settings;
 mod ui;
+mod updates;
 mod widget_export;
 
 use std::io::IsTerminal;
@@ -76,10 +77,10 @@ fn open_collector() -> anyhow::Result<Collector> {
 fn gui(options: ui::Options) -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(1);
     let (detail_tx, detail_rx) = std::sync::mpsc::channel();
-    let cats = settings::CatSettings::load(&data_dir()?);
-    let widgets = widget_export::WidgetExporter::detect(cats.clone());
+    let settings = settings::Settings::load(&data_dir()?);
+    let widgets = widget_export::WidgetExporter::detect(settings.clone());
     collector::spawn(open_collector()?, tx, detail_rx, widgets)?;
-    ui::run(rx, detail_tx, options, cats);
+    ui::run(rx, detail_tx, options, settings);
     Ok(())
 }
 

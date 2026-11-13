@@ -1,8 +1,9 @@
 # Architecture
 
 AgentPulse watches AI coding agents running on this Mac. It reads the files the agents
-already write, measures their processes, and shows the result in a native window. It makes
-no network calls and stores no conversation content.
+already write, measures their processes, and shows the result in a native window. Its only
+network call is the update check (see [telemetry-spec.md](telemetry-spec.md#network)), and it
+stores no conversation content.
 
 ## Data flow
 
@@ -37,13 +38,14 @@ and `agentpulse --dump` prints a snapshot as JSON with no window.
 | `agentpulse-process` | Process sampling through libproc, PID-reuse check, tree attribution, open files of a process | core, libc |
 | `agentpulse-storage` | SQLite schema, migrations, idempotent ingestion, totals | core, rusqlite |
 | `agentpulse-animation` | Original cat sprites, coats and eye colours (`coats.rs`), and the animation state machine | core |
-| `agentpulse-platform-macos` | AppKit bridge: menu-bar status item, Reduce Motion; whole-Mac GPU through IOKit | objc2 |
-| `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, the `agentpulse` binary | all of the above, gpui |
+| `agentpulse-platform-macos` | AppKit bridge: menu-bar status item (with its update item), Reduce Motion; whole-Mac GPU through IOKit; `fetch` (`fetch.rs`), one HTTPS GET through an ephemeral NSURLSession | objc2, block2 |
+| `agentpulse-app` | Collector loop, app hub, GPUI window, menu-bar cat, widget export, settings (`settings.rs`), the update check (`updates.rs`: parse and compare GitHub's release list; scheduled by the hub), the `agentpulse` binary | all of the above, gpui |
 
 The handoff brief proposed nine crates. One is not created yet because it would be
 empty: `agentpulse-ui`. The UI lives in the app crate: `ui.rs` holds the window, Overview
-and Sessions, `ui/charts.rs` the Usage screen and the session detail, and `ui/cats.rs` the
-Cats screen. Charts are drawn by hand (divs for bars that carry a tooltip, `canvas` for lines
+and Sessions, `ui/charts.rs` the Usage screen and the session detail, `ui/cats.rs` the
+Cats screen, and `ui/settings.rs` the Settings screen (animation, update check) and the
+new-release banner shown on the other screens. Charts are drawn by hand (divs for bars that carry a tooltip, `canvas` for lines
 and dense series); there is no chart library.
 
 Outside the Rust workspace, `macos/` holds the Swift widget extension and `scripts/bundle.sh`
@@ -169,9 +171,24 @@ Override the directory with `AGENTPULSE_DATA_DIR`.
 | `usage_events` | one row per API response: model, time, five token buckets, estimated cost |
 | `ingest_files` | byte offset per transcript file |
 
-Next to it, `settings.json` holds each agent's cat coat and eye colour (written on change,
-through a temp file and rename). A missing file means the defaults; a corrupt file or an
-unknown id falls back to the default with a warning.
+Next to it, `settings.json` (`settings.rs`) has three sections: `cats` (each agent's coat
+and eye colour), `animation` (`enabled`, `speed`) and `updates` (`auto`, `last_checked_ms`,
+`dismissed`). The window, the hub and the widget exporter share one in-memory copy; the
+widget exporter only reads it. It is written by the Cats screen (`cats`), the Settings screen
+(`animation`, `updates.auto`), the banner's Dismiss (`updates.dismissed`), and by the hub
+after every finished update check, automatic or manual (`updates.last_checked_ms`). Each
+write first takes up the file on disk into memory (so another instance's choices show here
+too), then replaces only what it changed (one agent's entry in `cats`, or the whole
+`animation` or `updates` section) and goes through a temp file and rename. Unknown top-level
+keys and the other entries in `cats`, including unknown agents and entries this version
+cannot read, are kept; unknown fields inside `animation` or `updates` are dropped when that
+section is saved. A missing file, section, entry or field means the default. A section that
+is not an object, a cat entry that does not parse or names an unknown coat, and a field of the
+wrong type each fall back to the default for just that part, with a warning; an unknown eye
+falls back to the coat's own, and a speed outside 0.25 to 3 is clamped. A file read whole
+whose content is not a JSON object is moved to `settings.json.bad-<unix ms>` (never over an
+earlier one) and the defaults are used; a file that cannot be read (for example, no
+permission) is left alone, the defaults are used, and no save is written over it.
 
 Schema changes are numbered migrations tracked in `PRAGMA user_version`. A database from a
 newer AgentPulse is refused, not downgraded. Migration 2 added the recorded-cost columns and
@@ -192,5 +209,5 @@ indexes cover every query, so no migration was added.
 ## What is deliberately not built yet
 
 The OpenCode adapter, resource history tables, retention pruning, per-agent GPU,
-settings UI, alerts, a notarized distributable. Each is listed with its phase in
+alerts, a notarized distributable. Each is listed with its phase in
 `roadmap.md`.

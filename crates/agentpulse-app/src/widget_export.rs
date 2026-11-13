@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::collector::Snapshot;
 use crate::format::{self, DASH};
-use crate::settings::{CatSettings, Looks};
+use crate::settings::{Looks, Settings};
 
 pub const VERSION: u32 = 1;
 pub const FILE_NAME: &str = "widget.json";
@@ -310,7 +310,7 @@ pub fn write_atomic(dir: &Path, p: &Payload, writer: &str) -> std::io::Result<()
 /// Every write happens under this lock.
 struct Shared {
     dir: PathBuf,
-    cats: CatSettings,
+    cats: Settings,
     reload: Option<extern "C" fn()>,
     /// The payload on disk.
     last: Option<Payload>,
@@ -365,7 +365,7 @@ pub struct WidgetExporter {
 impl WidgetExporter {
     /// Some only when running from inside AgentPulse.app with widgets set up;
     /// None for `cargo run`.
-    pub fn detect(cats: CatSettings) -> Option<Self> {
+    pub fn detect(cats: Settings) -> Option<Self> {
         let exe = std::env::current_exe().ok()?;
         let contents = exe.parent()?.parent()?;
         let app = contents.parent()?;
@@ -397,7 +397,7 @@ impl WidgetExporter {
         Some(exporter)
     }
 
-    fn new(dir: PathBuf, reload: Option<extern "C" fn()>, cats: CatSettings) -> Self {
+    fn new(dir: PathBuf, reload: Option<extern "C" fn()>, cats: Settings) -> Self {
         Self {
             shared: Arc::new(Mutex::new(Shared {
                 dir,
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     fn stop_marks_last_payload_and_blocks_later_publishes() {
         let dir = temp_dir("stop");
-        let mut w = WidgetExporter::new(dir.clone(), None, CatSettings::load(&dir));
+        let mut w = WidgetExporter::new(dir.clone(), None, Settings::load(&dir));
         w.publish(&snap(&[Active], 0.0));
         assert_eq!(read(&dir)["stopped"], false);
 
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn stop_before_any_publish_writes_stopped_placeholder() {
         let dir = temp_dir("stop-first");
-        WidgetExporter::new(dir.clone(), None, CatSettings::load(&dir)).stop();
+        WidgetExporter::new(dir.clone(), None, Settings::load(&dir)).stop();
         let v = read(&dir);
         assert_eq!(v["stopped"], true);
         assert_eq!(v["agents"]["active"], 0);
@@ -808,7 +808,7 @@ mod tests {
             eye: None,
         };
         let dir = temp_dir("coats");
-        let cats = CatSettings::load(&dir);
+        let cats = Settings::load(&dir);
         cats.set(Provider::ClaudeCode, calico);
         cats.set(Provider::Codex, tuxedo);
         let looks = cats.looks();

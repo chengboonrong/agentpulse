@@ -30,12 +30,17 @@ not been measured.
 - Claude Code formats and the price table verified against local data.
 
 ## Phase 1 — Foundation: partly done
-- Done: workspace, GPUI window, sidebar with Overview and Sessions, light and dark themes
-  following the system, logging, headless `--dump` and `--bench`.
-- Done: layout redesign. The live agents lead the Overview as rows with large cats; totals
-  moved to a status line and a Today block in the sidebar; the rate chart has real axes.
-- Done: Usage screen (see Phase 5).
-- Not started: Agents, Insights and Settings screens. Keyboard navigation in the sidebar.
+- Done: workspace, GPUI window, sidebar with Overview, Sessions, Usage, Cats and Settings,
+  light and dark themes following the system, logging, headless `--dump` and `--bench`.
+- Done: the Cat Roster (0.0.4). The Overview is a ranked grid of cards, one per agent, the
+  one that needs you first; the header counts who needs you, who is working and who is
+  resting beside today's estimated cost. Today's token split is at the top of the Usage
+  screen. The output rate chart is our own canvas component with a hover readout (see
+  `repository-audit.md`, section E).
+- Done: Usage screen (see Phase 5) and Settings screen.
+- Built, not verified by a person: keyboard use of the sidebar (Tab to an item, Enter or
+  Space to open it).
+- Not started: Agents and Insights screens.
 
 ## Phase 2 — Agent monitoring: Claude Code and Codex done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
@@ -129,7 +134,10 @@ not been measured.
   a secondary Codex limit window and the out-of-date state (local readings had neither).
 - Next: usage by model and project; trends beyond 30 days.
 - Retention setting and pruning.
-- Settings screen (animation speed and on/off are environment variables today).
+- Done: Settings screen. Animation on or off and its speed (0.5× to 2×), saved in
+  `settings.json` beside the coats; the `AGENTPULSE_ANIMATION` variables still win, and
+  Reduce Motion still stops the cats. Rendered through screenshot mode; clicks and keyboard
+  use not exercised by a person.
 - Alerts and thresholds.
 - Distribution outside the App Store (owner's choice, 2026-11-13). Done:
   `scripts/bundle.sh` signs with the hardened runtime and builds a DMG; `--release` signs
@@ -143,7 +151,7 @@ not been measured.
   CPU and memory, and the CPU sprint, would be lost.
 - App icon. Build-time shaders need Xcode's Metal Toolchain.
 
-## Phase 6 — Beyond the window: not started (owner request, 2026-11-13)
+## Phase 6 — Beyond the window: updates notice done (owner request, 2026-11-13)
 - App logo. Design an original mark (no RunCat likeness) and ship it as the app icon, the
   DMG icon and the README header. It needs light, dark and tinted variants for macOS 26+
   icons, and a template version that reads at menu-bar size.
@@ -169,15 +177,20 @@ not been measured.
   It needs the paid Apple Developer Program for TestFlight or the App Store. Still open:
   who runs the relay (self-hosted or third party) and whether a local-network-only mode is
   enough for a first version.
-- New updates notice. Tell the user when a newer AgentPulse release exists, in the window
-  and the menu-bar menu, with its version, its release notes and a link to download it.
-  AgentPulse makes no network calls today; this is the one exception, so it must be:
+- Done: new updates notice. Tell the user when a newer AgentPulse release exists, in the
+  window and the menu-bar menu, with its version, its release notes and a link to download
+  it. It is AgentPulse's only network request, and it is:
   - on by default, checking every 2 hours (owner decision, 2026-11-13), with a setting to
     turn automatic checks off and a manual "Check for updates" that works either way;
   - documented in the README and the telemetry spec as the app's only network request;
   - one request for the latest release on the project's GitHub page, sending nothing about
     the user or their agents;
   - a notice only: it never downloads or installs anything by itself.
+  It reads `api.github.com/repos/chengboonrong/agentpulse/releases` (not `/latest`, which
+  skips pre-releases) with an ephemeral session and the User-Agent `AgentPulse/<version>`.
+  One real check against GitHub succeeded (up to date at 0.0.4); the "available" state was
+  rendered from a local file through screenshot mode. The menu item and its click were not
+  exercised by a person.
   A self-updating app (Sparkle, MIT licensed) needs a notarized, Developer ID signed build
   and a signed update feed, so it waits for the notarized DMG in Phase 5.
 

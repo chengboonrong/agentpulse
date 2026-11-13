@@ -73,7 +73,8 @@ Findings that matter for AgentPulse:
   `message.data.tokens.{input,output,reasoning,cache.read,cache.write}`. Only count
   messages with `time.completed` (ccdash does; tokenomics-viewer does not).
 - session-observer calls `chatgpt.com/backend-api/...` with the user's Codex credentials to
-  read rate limits. AgentPulse makes no network calls.
+  read rate limits. AgentPulse's only network call is its own update check against GitHub's
+  public releases list; it never calls an agent's or provider's API.
 - None of the three uses a shared price feed. All hardcode prices in source.
 
 ### Verified on local Claude Code data

@@ -8,12 +8,22 @@ license.workspace = true
 # AppKit and other macOS system APIs, kept out of the GPUI app crate.
 # Same objc2 versions as gpui_macos, so nothing new is compiled.
 [dependencies]
+# NSURLSession's completion handler is a block. The version already in Cargo.lock.
+block2 = "=0.6.2"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
+    "block2",
+    "NSData",
+    "NSDate",
+    "NSError",
     "NSGeometry",
     "NSObject",
     "NSString",
+    "NSURL",
+    "NSURLRequest",
+    "NSURLResponse",
+    "NSURLSession",
 ] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",

@@ -17,7 +17,7 @@ const EYE_DOT: f32 = 12.;
 impl AppView {
     pub(super) fn cats_screen(&self, t: Theme, this: WeakEntity<Self>) -> impl IntoElement {
         let agent = self.cats_agent;
-        let look = self.cat_settings.looks().get(agent);
+        let look = self.settings.looks().get(agent);
         let eyes_text = look
             .eye
             .map_or("Coat's own eyes".into(), |e| format!("{} eyes", e.name));
@@ -134,14 +134,14 @@ fn choose(
     let this = this.clone();
     move |_, _, cx| {
         this.update(cx, |v, cx| {
-            v.cat_settings.set(agent, look);
+            v.settings.set(agent, look);
             cx.notify();
         })
         .ok();
     }
 }
 
-fn toggled(on: bool) -> Toggled {
+pub(super) fn toggled(on: bool) -> Toggled {
     if on { Toggled::True } else { Toggled::False }
 }
 

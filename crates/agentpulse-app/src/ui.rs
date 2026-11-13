@@ -1,6 +1,6 @@
 //! The window: Overview, Sessions (with a session's detail) and Usage screens
-//! over the hub's latest snapshot, and the Cats settings screen. Closing it
-//! does not quit; the menu bar item and the Dock icon reopen it.
+//! over the hub's latest snapshot, and the Cats and Settings screens. Closing
+//! it does not quit; the menu bar item and the Dock icon reopen it.
 
 mod charts;
 mod timeseries;
@@ -26,9 +26,10 @@ use gpui::{
 use crate::collector::{Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
-use crate::settings::CatSettings;
+use crate::settings::Settings;
 
 mod cats;
+mod settings;
 
 actions!(agentpulse, [Quit, CloseWindow, FocusNext, FocusPrev]);
 
@@ -41,13 +42,16 @@ pub struct Options {
     /// Window content size in points, instead of the default.
     #[cfg(feature = "screenshot")]
     pub window_size: Option<(f32, f32)>,
+    /// A saved GitHub releases reply, shown as if a check just finished.
+    #[cfg(feature = "screenshot")]
+    pub update_feed: Option<std::path::PathBuf>,
 }
 
 #[cfg(feature = "screenshot")]
 impl Options {
-    /// `--screenshot <dir> [--appearance light|dark] [--size <width>x<height>]`
+    /// `--screenshot <dir> [--appearance light|dark] [--size <width>x<height>] [--update-feed <file.json>]`
     pub fn screenshot(dir: &str, mut rest: &[&str]) -> anyhow::Result<Self> {
-        const USAGE: &str = "usage: agentpulse --screenshot <dir> [--appearance light|dark] [--size <width>x<height>]";
+        const USAGE: &str = "usage: agentpulse --screenshot <dir> [--appearance light|dark] [--size <width>x<height>] [--update-feed <file.json>]";
         let mut o = Options {
             screenshot_dir: Some(dir.into()),
             ..Options::default()
@@ -60,6 +64,7 @@ impl Options {
                     let (w, h) = v.split_once('x').context(USAGE)?;
                     o.window_size = Some((w.parse()?, h.parse()?));
                 }
+                ("--update-feed", v) => o.update_feed = Some(v.into()),
                 _ => anyhow::bail!(USAGE),
             }
             rest = tail;
@@ -75,7 +80,7 @@ struct Shared {
     appearance: Option<bool>,
     /// Asks the collector for one session's requests (None: no session).
     details: Sender<Option<Key>>,
-    cats: CatSettings,
+    settings: Settings,
 }
 
 impl Global for Shared {}
@@ -84,7 +89,7 @@ pub fn run(
     rx: async_channel::Receiver<Snapshot>,
     details: Sender<Option<Key>>,
     options: Options,
-    cats: CatSettings,
+    settings: Settings,
 ) {
     let app = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
     // Clicking the Dock icon.
@@ -123,17 +128,37 @@ pub fn run(
                 tx.try_send(action).ok();
             }),
         );
-        let hub = cx.new(|cx| Hub::new(rx, item, cx));
+        let hub = cx.new(|cx| Hub::new(rx, item, settings.clone(), cx));
+        #[cfg(feature = "screenshot")]
+        let screenshot = options.screenshot_dir.is_some();
+        #[cfg(not(feature = "screenshot"))]
+        let screenshot = false;
+        #[cfg(feature = "screenshot")]
+        if let Some(path) = &options.update_feed {
+            // Read from disk, never fetched: screenshot mode makes no network request.
+            let result = std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|body| crate::updates::parse(&body, crate::updates::CURRENT));
+            hub.update(cx, |hub, cx| hub.show_check(result, cx));
+        }
+        if !screenshot {
+            hub.update(cx, |hub, cx| hub.start_update_checks(cx));
+        }
         cx.set_global(Shared {
-            hub,
+            hub: hub.clone(),
             appearance: options.appearance,
             details,
-            cats,
+            settings,
         });
         cx.spawn(async move |cx| {
             while let Ok(action) = actions.recv().await {
                 cx.update(|cx| match action {
                     MenuAction::OpenDashboard => show(cx),
+                    MenuAction::OpenUpdate => {
+                        if let Some(r) = hub.read(cx).available() {
+                            cx.open_url(&r.url);
+                        }
+                    }
                     MenuAction::Quit => cx.quit(),
                 });
             }
@@ -164,6 +189,8 @@ fn show(cx: &mut App) {
                 screenshot_dir: None,
                 #[cfg(feature = "screenshot")]
                 window_size: None,
+                #[cfg(feature = "screenshot")]
+                update_feed: None,
             },
             cx,
         ),
@@ -172,7 +199,7 @@ fn show(cx: &mut App) {
 
 fn open_window(options: Options, cx: &mut App) {
     let hub = cx.global::<Shared>().hub.clone();
-    let cats = cx.global::<Shared>().cats.clone();
+    let settings = cx.global::<Shared>().settings.clone();
     #[cfg(feature = "screenshot")]
     let (w, h) = options.window_size.unwrap_or((1120., 720.));
     #[cfg(not(feature = "screenshot"))]
@@ -190,7 +217,7 @@ fn open_window(options: Options, cx: &mut App) {
             focus: true,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| AppView::new(hub, cats, options, window, cx)),
+        |window, cx| cx.new(|cx| AppView::new(hub, settings, options, window, cx)),
     );
     if let Err(e) = opened {
         tracing::error!(error = %format!("{e:#}"), "cannot open window");
@@ -371,6 +398,7 @@ enum Screen {
     Sessions,
     Usage,
     Cats,
+    Settings,
 }
 
 const STOPPED: &str = "Data collection stopped. Restart AgentPulse.";
@@ -396,7 +424,7 @@ struct AppView {
     bounce_seq: u64,
     /// Shown when no agent is live.
     empty_cat: CatAnimator,
-    cat_settings: CatSettings,
+    settings: Settings,
     /// Pointer over the Output rate chart, in window coordinates.
     rate_hover: Option<gpui::Point<gpui::Pixels>>,
     /// Whose cat the Cats screen edits.
@@ -417,7 +445,7 @@ struct AppView {
 impl AppView {
     fn new(
         hub: Entity<Hub>,
-        cat_settings: CatSettings,
+        settings: Settings,
         options: Options,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -456,7 +484,7 @@ impl AppView {
             bounced: HashMap::new(),
             bounce_seq: 0,
             empty_cat: CatAnimator::new(),
-            cat_settings,
+            settings,
             rate_hover: None,
             cats_agent: Provider::ClaudeCode,
             preview,
@@ -480,6 +508,8 @@ impl AppView {
         let hub = self.hub.read(cx);
         let stopped = hub.stopped;
         let Some(snap) = &hub.snapshot else {
+            // Settings and update changes still show before the first snapshot.
+            cx.notify();
             return;
         };
         let now = snap.taken_at_ms;
@@ -688,6 +718,18 @@ async fn screenshot(
         })?;
         cx.update(|window, cx| capture(window, cx, &dir.join(file)))??;
     }
+    this.update(cx, |this, cx| {
+        this.screen = Screen::Settings;
+        this.page_scroll.set_offset(point(px(0.), px(0.)));
+        this.schedule_animation(cx);
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("settings.png")))??;
+    this.update(cx, |this, cx| {
+        this.page_scroll.scroll_to_bottom();
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("settings-end.png")))??;
     tracing::info!(dir = %dir.display(), "saved screenshots");
     Ok(())
 }
@@ -882,6 +924,7 @@ impl Render for AppView {
             self.nav("Sessions", Screen::Sessions, t, cx),
             self.nav("Usage", Screen::Usage, t, cx),
             self.nav("Cats", Screen::Cats, t, cx),
+            self.nav("Settings", Screen::Settings, t, cx),
         ];
         let width = f32::from(window.viewport_size().width);
         let view = cx.weak_entity();
@@ -894,9 +937,15 @@ impl Render for AppView {
         if let Some(s) = &hub.snapshot {
             self.track_ranks(s, &order, hub.motion.enabled);
         }
+        let banner = (self.screen != Screen::Settings)
+            .then(|| settings::banner(hub, &self.hub, t, view.clone()))
+            .flatten();
         let content = match (self.screen, &hub.snapshot) {
             // Needs no agent data.
             (Screen::Cats, _) => self.cats_screen(t, view.clone()).into_any_element(),
+            (Screen::Settings, _) => {
+                settings::screen(hub, &self.hub, t, &self.page_scroll).into_any_element()
+            }
             (_, None) => div()
                 .flex_1()
                 .flex()
@@ -973,7 +1022,15 @@ impl Render for AppView {
                     .flex_col()
                     // Clear of the title bar, where the window is dragged.
                     .child(div().h(px(TITLEBAR_H - sp::M)).flex_none())
-                    .child(div().flex_1().min_h_0().flex().flex_col().child(content)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .children(banner)
+                            .child(content),
+                    ),
             )
     }
 }
@@ -1275,7 +1332,7 @@ impl AppView {
     /// session has ended. It hops once when its cell has just changed rank.
     fn stage(&self, x: &AgentSession, key: &CatKey, w: f32, h: f32, scale: f32, t: Theme) -> Div {
         let ended = !x.status.is_live();
-        let look = self.cat_settings.looks().get(x.provider);
+        let look = self.settings.looks().get(x.provider);
         let sprite = if ended {
             &frames(CatState::Sleeping)[0]
         } else {
@@ -1342,7 +1399,7 @@ impl AppView {
                         .pb(px(STAGE * 0.1))
                         .child(div().ml(px(-cat_overhang(STAGE_SCALE))).child(cat(
                             self.empty_cat.sprite(),
-                            self.cat_settings.looks().get(Provider::ClaudeCode),
+                            self.settings.looks().get(Provider::ClaudeCode),
                             STAGE_SCALE,
                         ))),
                 )
@@ -1872,7 +1929,7 @@ impl AppView {
                                         .get(&key)
                                         .map_or(self.empty_cat.sprite(), |c| c.sprite())
                                 };
-                                let look = self.cat_settings.looks().get(x.provider);
+                                let look = self.settings.looks().get(x.provider);
                                 let view = view.clone();
                                 div()
                                     .id(("session", i))
