@@ -203,6 +203,7 @@ not been measured.
   say which agent a session belongs to.
 
 ## Open decisions for the owner
-- Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.- Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
+- Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.
+- Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
   only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
   beside the estimate, and distribution is Developer ID rather than the App Store.
