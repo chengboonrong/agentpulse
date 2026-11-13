@@ -68,9 +68,10 @@ not been measured.
 - Not verified by a person: the menu-bar icon's actual pixels in the menu bar, a real click
   on it, closing the window and reopening it from the menu or Dock, and the widget placed
   on a desktop. No screen capture was available and synthetic clicks were ruled out.
-- Menu-bar cost: a still pose adds nothing measurable. While the cat sprints the app uses
-  3.0 to 3.7% of one core (collector 1.3%, animation the rest) against a 2% goal. Dropping
-  the menu-bar sprint to 5 frames a second would roughly halve the animation share.
+- Menu-bar cost: a still pose adds nothing measurable. The menu-bar cat is capped at 5 frames
+  a second. With the sprint forced on and the window open but inactive, the whole app used
+  2.7% of one core at 5 fps against 3.5 to 3.7% at 10 fps. That is still above the 2% goal;
+  the collector alone is about 1.3%.
 
 ## Phase 5 — Analytics and distribution: not started
 - Usage by agent, model and project; trends; cache efficiency.
@@ -97,7 +98,6 @@ not been measured.
 - The project column truncates long paths at the default window width.
 
 ## Open decisions for the owner
-- License for AgentPulse (MIT OR Apache-2.0 suggested). No `LICENSE` file exists yet.
 - Whether the undocumented IORegistry GPU key is acceptable in a production build.
 - Whether "heavy" for the cartoon sprint should include CPU load, or stay token rate only.
 - Whether to show Claude Code's own recorded cost next to the estimate.

@@ -115,3 +115,7 @@ minutes.
 - [docs/architecture.md](docs/architecture.md): crates, data flow and decisions.
 - [docs/telemetry-spec.md](docs/telemetry-spec.md): what is read, how each number is derived, and how sure it is.
 - [docs/roadmap.md](docs/roadmap.md): status and next steps.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.

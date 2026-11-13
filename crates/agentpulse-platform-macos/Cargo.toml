@@ -3,6 +3,7 @@ name = "agentpulse-platform-macos"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # AppKit and other macOS system APIs, kept out of the GPUI app crate.
 # Same objc2 versions as gpui_macos, so nothing new is compiled.

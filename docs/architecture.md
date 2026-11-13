@@ -116,8 +116,9 @@ read the same snapshot, so they cannot disagree.
 GPUI has no status item, so `agentpulse-platform-macos` wraps `NSStatusItem`. The cat is a
 template image (macOS tints it for light and dark menu bars) at a fixed width, so nothing in
 the menu bar shifts when its pose changes. A still pose runs no timer. Motion is capped at
-10 frames a second, frames are cached images, and menu rows are applied only when the menu
-opens. Most of the remaining per-frame cost is AppKit mirroring the status window.
+5 frames a second (at 10 a sprinting cat cost the app 3.5 to 3.7% of one core, at 5 it costs
+2.7%), frames are cached images, and menu rows are applied only when the menu opens.
+Most of the remaining per-frame cost is AppKit mirroring the status window.
 
 ### Widgets read a file, not the app
 A WidgetKit extension is a sandboxed process that cannot talk to the Rust app. When run

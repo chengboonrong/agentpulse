@@ -167,8 +167,8 @@ Gaps:
 
 ## Licensing strategy
 
-- AgentPulse code: original. MIT OR Apache-2.0 is compatible with every dependency below;
-  the final choice is the owner's.
+- AgentPulse code: original, licensed MIT OR Apache-2.0, which is compatible with every
+  dependency below.
 - GPUI (Apache-2.0), libc (MIT OR Apache-2.0), rusqlite (MIT, bundles public-domain SQLite): fine.
 - system-pulse (GPL-3.0-or-later): read for ideas, no code or assets copied.
 - ccdash, session-observer (MIT), tokenomics-viewer (ISC), macmon (MIT): parsing rules
