@@ -325,24 +325,28 @@ impl AppView {
         let Some(snap) = &hub.snapshot else {
             return;
         };
-        let live: Vec<(String, SessionStatus, f32)> = snap
+        let live: Vec<(String, SessionStatus, f32, Option<f32>)> = snap
             .sessions
             .iter()
             .filter(|s| s.status.is_live())
-            .map(|s| (s.session_id.clone(), s.status, s.output_rate))
+            .map(|s| {
+                let cpu = s.resources.value().and_then(|r| r.cpu_percent);
+                (s.session_id.clone(), s.status, s.output_rate, cpu)
+            })
             .collect();
         #[cfg(feature = "screenshot")]
         let indexing = snap.indexing;
         self.cats
             .retain(|id, _| live.iter().any(|(live_id, ..)| live_id == id));
-        for (id, status, rate) in &live {
+        for (id, status, rate, cpu) in &live {
             self.cats.entry(id.clone()).or_default().set_input(
                 (!stopped).then_some(*status),
                 if stopped { 0.0 } else { *rate },
+                cpu.filter(|_| !stopped),
             );
         }
         if live.is_empty() {
-            self.empty_cat.set_input(None, 0.0);
+            self.empty_cat.set_input(None, 0.0, None);
         }
         #[cfg(feature = "screenshot")]
         if !indexing && let Some(dir) = self.screenshot_dir.take() {
@@ -561,7 +565,7 @@ impl AgentColumns {
             col("Status", 112., false),
             col("Runtime", if self.detail { 124. } else { 64. }, true),
             col("Tokens", if self.detail { 76. } else { 56. }, true),
-            col("Est. cost", 76., true),
+            col("Est. cost", if self.detail { 128. } else { 76. }, true),
         ];
         if self.cpu {
             c.push(col("CPU / RAM", 64., true));
@@ -576,17 +580,24 @@ impl AgentColumns {
     }
 }
 
-const SESSION_COLUMNS: [Column; 8] = [
+const SESSION_COLUMNS: [Column; 9] = [
     col("Status", 92., false),
     col("Project", 0., false),
-    col("Model", 128., false),
+    col("Model", 116., false),
     col("Started", 92., true),
     col("Duration", 68., true),
     col("Active (est.)", 80., true),
     col("Tokens", 56., true),
     col("Est. cost", 72., true),
+    col("Claude Code", 76., true),
 ];
-const SESSION_MIN_WIDTH: f32 = 880.;
+/// The content width of the default 1120 pt window, so the table does not
+/// scroll sideways there.
+const SESSION_MIN_WIDTH: f32 = 896.;
+/// Below the Sessions table: what the two cost columns are.
+const COST_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Claude Code is the \
+    session's own cost record, covering the Claude Code run that last wrote it and written when a \
+    session ends or saves its state, so a running session often has none yet (—). +? means Claude Code had no price for a model it used.";
 
 /// Peak of the chart's y axis: the smallest 1, 2 or 5 times a power of ten
 /// at or above the history's peak. None when there is nothing to scale.
@@ -831,7 +842,12 @@ impl AppView {
                 detail(format!("{:.1} tok/s", s.output_rate)),
                 t,
             ))
-            .child(figures(w(5), format::approx_cost(s.cost_usd), None, t))
+            .child(figures(
+                w(5),
+                format::approx_cost(s.cost_usd),
+                detail(recorded_line(format::recorded_cost(s.recorded_cost))),
+                t,
+            ))
             .when(columns.cpu, |row| {
                 row.child(figures(
                     w(6),
@@ -888,6 +904,8 @@ fn status_line(s: &Snapshot, live: usize, t: Theme) -> Div {
     let word = |v: &'static str| div().text_color(rgb(t.muted)).child(v);
     let dot = || word("·");
     let cpu = s.agents_cpu_percent.map(|c| format!("{c:.1}%"));
+    let gpu = s.system_gpu_percent.value().map(|g| format!("{g}%"));
+    let has_gpu = gpu.is_some();
     // With no live agent the counts are all zero; the empty state says so.
     let counts = (live > 0).then(|| {
         div()
@@ -926,11 +944,18 @@ fn status_line(s: &Snapshot, live: usize, t: Theme) -> Div {
                 .child(
                     div()
                         .id("gpu")
-                        .text_color(rgb(t.muted))
-                        .child("GPU unavailable")
+                        .flex()
+                        .gap(px(sp::XS))
+                        .child(word("GPU"))
+                        .child(gpu.clone().map_or(word("unavailable"), fig))
+                        .when(gpu.is_some(), |d| d.child(word("whole Mac")))
                         .tooltip(move |_, cx| {
                             cx.new(|_| Tooltip {
-                                text: "Not collected in this build",
+                                text: if has_gpu {
+                                    "GPU use of the whole Mac, not of any one agent"
+                                } else {
+                                    "Not readable on this Mac"
+                                },
                                 t,
                             })
                             .into()
@@ -1204,7 +1229,14 @@ fn sessions(s: &Snapshot, notes: Vec<Div>, t: Theme) -> impl IntoElement {
                                     t,
                                 ))
                                 .child(figures(w(7), format::approx_cost(x.cost_usd), None, t))
-                        })),
+                                .child(figures(
+                                    w(8),
+                                    format::recorded_cost(x.recorded_cost),
+                                    None,
+                                    t,
+                                ))
+                        }))
+                        .child(secondary(COST_NOTE, t).mt(px(sp::M))),
                 ),
         )
 }
@@ -1265,7 +1297,13 @@ fn project_cell(s: &AgentSession, t: Theme) -> Div {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(format::project_name(path).to_string()),
         )
-        .child(secondary(path.unwrap_or("Project path unknown"), t).truncate())
+        .child(
+            secondary(
+                &path.map_or("Project path unknown".into(), format::display_path),
+                t,
+            )
+            .truncate(),
+        )
 }
 
 /// Dot and label: the label carries the meaning, not the colour alone.
@@ -1302,6 +1340,18 @@ fn figures(width: f32, top: Option<String>, below: Option<Option<String>>, t: Th
         .overflow_hidden()
         .child(value(top, ty::BODY, t.text))
         .children(below.map(|b| value(b, ty::LABEL, t.muted)))
+}
+
+/// Second line under the estimate. The Overview cost column is 128 pt, so a
+/// long figure ("$123.45 +?") takes the short label rather than lose its start.
+fn recorded_line(value: Option<String>) -> String {
+    let value = value.unwrap_or(DASH.into());
+    let label = if value.chars().count() > 8 {
+        "Claude"
+    } else {
+        "Claude Code"
+    };
+    format!("{label} {value}")
 }
 
 /// Paints a sprite with square pixels at an integer scale, one quad per run of
@@ -1421,6 +1471,17 @@ mod tests {
     }
 
     #[test]
+    fn recorded_line_keeps_the_figure_whole() {
+        assert_eq!(recorded_line(None), "Claude Code —");
+        assert_eq!(recorded_line(Some("$4.62".into())), "Claude Code $4.62");
+        assert_eq!(
+            recorded_line(Some("$1234.50".into())),
+            "Claude Code $1234.50"
+        );
+        assert_eq!(recorded_line(Some("$99.99 +?".into())), "Claude $99.99 +?");
+    }
+
+    #[test]
     fn agent_columns_drop_cpu_then_detail_and_keep_the_project_wide() {
         let full = AgentColumns {
             cpu: true,
@@ -1447,6 +1508,16 @@ mod tests {
         assert_eq!(full.columns().len(), 7);
         assert_eq!(bare.columns().len(), 6);
         assert!(bare.fixed_width() < no_cpu.fixed_width());
+        // The Sessions table fits the default window without sideways scrolling,
+        // and its project column keeps a usable width there.
+        let fixed: f32 = SESSION_COLUMNS.iter().map(|c| c.width).sum::<f32>()
+            + (SESSION_COLUMNS.len() - 1) as f32 * sp::M;
+        const { assert!(SESSION_MIN_WIDTH <= 1120. - SIDEBAR_W - 2. * CONTENT_PAD) };
+        assert!(
+            SESSION_MIN_WIDTH - fixed >= 140.,
+            "{}",
+            SESSION_MIN_WIDTH - fixed
+        );
         // The cat's overhang fits in the gutter, so sprint lines are not clipped.
         assert!(cat_overhang() > 0. && cat_overhang() <= CONTENT_PAD);
     }

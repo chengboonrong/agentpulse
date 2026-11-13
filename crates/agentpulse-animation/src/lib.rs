@@ -13,6 +13,11 @@ pub const SPRINT_ON: f32 = 30.0;
 /// Smoothed output tokens/s below which a sprinting cat drops back to running.
 /// Initial values: calibrate against real sessions.
 pub const SPRINT_OFF: f32 = 20.0;
+/// Smoothed process-tree CPU (percent of one core) above which an Active agent's
+/// cat sprints: a build or test run keeping at least one core busy.
+pub const CPU_SPRINT_ON: f32 = 100.0;
+/// Smoothed process-tree CPU below which the CPU no longer keeps the cat sprinting.
+pub const CPU_SPRINT_OFF: f32 = 60.0;
 
 /// Time constant of the activity moving average.
 const SMOOTHING_SECS: f32 = 2.0;
@@ -234,6 +239,10 @@ pub struct CatAnimator {
     activity: f32,
     smoothed: f32,
     sprinting: bool,
+    /// Process-tree CPU while Active and measured; None otherwise.
+    cpu: Option<f32>,
+    cpu_smoothed: f32,
+    cpu_sprinting: bool,
     state: CatState,
     frame: usize,
     /// Time spent on the current frame, in seconds.
@@ -259,6 +268,9 @@ impl CatAnimator {
             activity: 0.0,
             smoothed: 0.0,
             sprinting: false,
+            cpu: None,
+            cpu_smoothed: 0.0,
+            cpu_sprinting: false,
             state: CatState::Sleeping,
             frame: 0,
             elapsed: 0.0,
@@ -269,22 +281,34 @@ impl CatAnimator {
     }
 
     /// Latest telemetry. `status` is None when there is no session to show.
-    /// `activity` is output tokens per second over a rolling window.
-    pub fn set_input(&mut self, status: Option<SessionStatus>, activity: f32) {
+    /// `activity` is output tokens per second over a rolling window. `cpu` is
+    /// the process tree's CPU in percent of one core, None when not measured;
+    /// it counts only while the agent is Active, and starts from zero each time.
+    pub fn set_input(&mut self, status: Option<SessionStatus>, activity: f32, cpu: Option<f32>) {
         self.status = status;
         self.activity = if activity.is_finite() {
             activity.max(0.0)
         } else {
             0.0
         };
+        self.cpu = cpu
+            .filter(|c| c.is_finite() && status == Some(SessionStatus::Active))
+            .map(|c| c.max(0.0));
+        if self.cpu.is_none() {
+            self.cpu_smoothed = 0.0;
+        }
         self.resolve();
     }
 
     /// Advance time. Returns true when a repaint is needed.
     pub fn tick(&mut self, dt: Duration, motion: Motion) -> bool {
-        let dt = dt.as_secs_f32();
-        self.smoothed += (self.activity - self.smoothed) * (1.0 - (-dt / SMOOTHING_SECS).exp());
+        let k = 1.0 - (-dt.as_secs_f32() / SMOOTHING_SECS).exp();
+        self.smoothed += (self.activity - self.smoothed) * k;
+        if let Some(cpu) = self.cpu {
+            self.cpu_smoothed += (cpu - self.cpu_smoothed) * k;
+        }
         self.resolve();
+        let dt = dt.as_secs_f32();
         let mut changed = std::mem::take(&mut self.dirty);
         let pending = self.pending.take();
         if !motion.enabled {
@@ -351,14 +375,14 @@ impl CatAnimator {
             let left = (self.interval(motion) - self.elapsed).max(0.001);
             return Some(Duration::from_secs_f32(left));
         }
-        // Frames are frozen, but smoothing may still push activity across a
-        // sprint threshold, which changes the pose.
+        // Frames are frozen, but smoothing may still push activity or CPU
+        // across a sprint threshold, which changes the pose.
         let pending = self.status == Some(SessionStatus::Active)
-            && if self.sprinting {
-                self.activity < SPRINT_OFF
-            } else {
-                self.activity > SPRINT_ON
-            };
+            && (latch(self.sprinting, self.activity, SPRINT_ON, SPRINT_OFF) != self.sprinting
+                || self.cpu.is_some_and(|c| {
+                    latch(self.cpu_sprinting, c, CPU_SPRINT_ON, CPU_SPRINT_OFF)
+                        != self.cpu_sprinting
+                }));
         pending.then_some(SETTLE_POLL)
     }
 
@@ -387,18 +411,23 @@ impl CatAnimator {
 
     /// Recompute the state from the inputs; a change restarts the animation.
     fn resolve(&mut self) {
-        if self.sprinting {
-            self.sprinting = self.smoothed >= SPRINT_OFF;
-        } else {
-            self.sprinting = self.smoothed > SPRINT_ON;
-        }
+        self.sprinting = latch(self.sprinting, self.smoothed, SPRINT_ON, SPRINT_OFF);
+        self.cpu_sprinting = self.cpu.is_some()
+            && latch(
+                self.cpu_sprinting,
+                self.cpu_smoothed,
+                CPU_SPRINT_ON,
+                CPU_SPRINT_OFF,
+            );
         let state = match self.status {
             None => CatState::Sleeping,
             Some(SessionStatus::Idle) => CatState::Sitting,
             Some(SessionStatus::Waiting) => CatState::LookingAround,
             Some(SessionStatus::Completed) => CatState::Happy,
             Some(SessionStatus::Failed) => CatState::Surprised,
-            Some(SessionStatus::Active) if self.sprinting => CatState::Sprinting,
+            Some(SessionStatus::Active) if self.sprinting || self.cpu_sprinting => {
+                CatState::Sprinting
+            }
             Some(SessionStatus::Active) => CatState::Running,
         };
         if state != self.state {
@@ -413,6 +442,11 @@ impl CatAnimator {
             self.dirty = true;
         }
     }
+}
+
+/// Hysteresis: turns on above `on`, stays on until below `off`.
+fn latch(on: bool, value: f32, on_at: f32, off_at: f32) -> bool {
+    if on { value >= off_at } else { value > on_at }
 }
 
 #[cfg(test)]
@@ -450,7 +484,7 @@ mod tests {
 
     /// Feed a constant activity for `secs` seconds in 100 ms steps.
     fn feed(a: &mut CatAnimator, status: SessionStatus, activity: f32, secs: u32, m: Motion) {
-        a.set_input(Some(status), activity);
+        a.set_input(Some(status), activity, None);
         for _ in 0..secs * 10 {
             a.tick(STEP, m);
         }
@@ -469,7 +503,7 @@ mod tests {
         for (status, want) in cases {
             let mut a = CatAnimator::new();
             assert_eq!(a.state(), CatState::Sleeping);
-            a.set_input(status, 0.0);
+            a.set_input(status, 0.0, None);
             a.tick(STEP, ON);
             assert_eq!(a.state(), want, "{status:?}");
         }
@@ -564,6 +598,93 @@ mod tests {
         assert_eq!(a.state(), CatState::Running);
     }
 
+    /// Like `feed`, with no output tokens and a constant process-tree CPU.
+    fn feed_cpu(a: &mut CatAnimator, status: SessionStatus, cpu: Option<f32>, secs: u32) {
+        a.set_input(Some(status), 0.0, cpu);
+        for _ in 0..secs * 10 {
+            a.tick(STEP, ON);
+        }
+    }
+
+    #[test]
+    fn heavy_cpu_sprints_with_hysteresis() {
+        let mut a = CatAnimator::new();
+        feed_cpu(&mut a, SessionStatus::Active, Some(90.0), 10);
+        assert_eq!(a.state(), CatState::Running, "below CPU_SPRINT_ON");
+        feed_cpu(&mut a, SessionStatus::Active, Some(150.0), 10);
+        assert_eq!(a.state(), CatState::Sprinting);
+        feed_cpu(&mut a, SessionStatus::Active, Some(70.0), 10);
+        assert_eq!(a.state(), CatState::Sprinting, "above CPU_SPRINT_OFF");
+        feed_cpu(&mut a, SessionStatus::Active, Some(40.0), 10);
+        assert_eq!(a.state(), CatState::Running);
+    }
+
+    #[test]
+    fn cpu_counts_only_while_active() {
+        let mut a = CatAnimator::new();
+        feed_cpu(&mut a, SessionStatus::Idle, Some(400.0), 10);
+        assert_eq!(a.state(), CatState::Sitting);
+        // A busy background process while idle leaves nothing behind.
+        a.set_input(Some(SessionStatus::Active), 0.0, Some(0.0));
+        a.tick(STEP, ON);
+        assert_eq!(a.state(), CatState::Running);
+        // Sprinting on CPU, then the agent goes idle: it stops, and comes back running.
+        feed_cpu(&mut a, SessionStatus::Active, Some(400.0), 10);
+        assert_eq!(a.state(), CatState::Sprinting);
+        feed_cpu(&mut a, SessionStatus::Waiting, Some(400.0), 1);
+        assert_eq!(a.state(), CatState::LookingAround);
+        a.set_input(Some(SessionStatus::Active), 0.0, Some(0.0));
+        a.tick(STEP, ON);
+        assert_eq!(a.state(), CatState::Running);
+    }
+
+    #[test]
+    fn unavailable_cpu_never_sprints() {
+        let mut a = CatAnimator::new();
+        feed_cpu(&mut a, SessionStatus::Active, None, 10);
+        assert_eq!(a.state(), CatState::Running);
+        for bad in [f32::NAN, f32::INFINITY] {
+            feed_cpu(&mut a, SessionStatus::Active, Some(bad), 10);
+            assert_eq!(a.state(), CatState::Running, "{bad}");
+        }
+        // Losing the reading mid-sprint ends the CPU sprint at once.
+        feed_cpu(&mut a, SessionStatus::Active, Some(400.0), 10);
+        assert_eq!(a.state(), CatState::Sprinting);
+        a.set_input(Some(SessionStatus::Active), 0.0, None);
+        a.tick(STEP, ON);
+        assert_eq!(a.state(), CatState::Running);
+    }
+
+    #[test]
+    fn token_sprint_is_unchanged_by_idle_cpu() {
+        // Either latch sprints; a quiet CPU does not hold back the token sprint.
+        let mut a = CatAnimator::new();
+        a.set_input(Some(SessionStatus::Active), 35.0, Some(0.0));
+        for _ in 0..100 {
+            a.tick(STEP, ON);
+        }
+        assert_eq!(a.state(), CatState::Sprinting);
+        // CPU keeps it sprinting after the tokens stop, until the CPU drops too.
+        feed_cpu(&mut a, SessionStatus::Active, Some(150.0), 10);
+        assert_eq!(a.state(), CatState::Sprinting);
+        assert!(a.smoothed < SPRINT_OFF);
+        feed_cpu(&mut a, SessionStatus::Active, Some(10.0), 10);
+        assert_eq!(a.state(), CatState::Running);
+    }
+
+    #[test]
+    fn disabled_motion_waits_for_pending_cpu_sprint() {
+        let mut a = CatAnimator::new();
+        a.set_input(Some(SessionStatus::Active), 0.0, Some(300.0));
+        a.tick(STEP, OFF);
+        assert!(a.next_frame_in(OFF).is_some());
+        for _ in 0..200 {
+            a.tick(STEP, OFF);
+        }
+        assert_eq!(a.state(), CatState::Sprinting);
+        assert_eq!(a.next_frame_in(OFF), None);
+    }
+
     const T75: Duration = Duration::from_millis(75);
 
     fn is_in(s: &Sprite, set: &[Sprite]) -> bool {
@@ -573,9 +694,9 @@ mod tests {
     /// An animator that has settled into Running (no transition pending or playing).
     fn running() -> CatAnimator {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(STEP, ON);
-        a.set_input(Some(SessionStatus::Active), 0.0);
+        a.set_input(Some(SessionStatus::Active), 0.0, None);
         a.tick(STEP, ON);
         assert_eq!(a.state(), CatState::Running);
         a
@@ -605,7 +726,7 @@ mod tests {
     fn windup_plays_once_when_sprint_starts() {
         let mut a = running();
         // Smoothed activity crosses SPRINT_ON while Running: wind-up, then the loop.
-        a.set_input(Some(SessionStatus::Active), 60.0);
+        a.set_input(Some(SessionStatus::Active), 60.0, None);
         let mut seen = vec![];
         for _ in 0..60 {
             a.tick(Duration::from_millis(50), ON);
@@ -622,7 +743,7 @@ mod tests {
     #[test]
     fn windup_frames_are_shown_in_order() {
         let mut a = running();
-        a.set_input(Some(SessionStatus::Active), 60.0);
+        a.set_input(Some(SessionStatus::Active), 60.0, None);
         feed_until_sprint(&mut a);
         assert!(std::ptr::eq(a.sprite(), &windup_frames()[0]));
         for i in 1..4 {
@@ -647,14 +768,14 @@ mod tests {
     #[test]
     fn no_transition_for_entering_running_or_sprinting_to_running() {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(STEP, ON);
-        a.set_input(Some(SessionStatus::Active), 0.0);
+        a.set_input(Some(SessionStatus::Active), 0.0, None);
         a.tick(STEP, ON);
         assert!(is_in(a.sprite(), frames(CatState::Running)));
 
         let mut a = sprinting();
-        a.set_input(Some(SessionStatus::Active), 0.0);
+        a.set_input(Some(SessionStatus::Active), 0.0, None);
         for _ in 0..200 {
             a.tick(STEP, ON);
             let s = a.sprite();
@@ -666,7 +787,7 @@ mod tests {
     #[test]
     fn skid_plays_once_when_sprint_ends() {
         let mut a = sprinting();
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(Duration::from_millis(1), ON);
         assert_eq!(a.state(), CatState::Sitting);
         assert!(std::ptr::eq(a.sprite(), &skid_frames()[0]));
@@ -681,14 +802,14 @@ mod tests {
     #[test]
     fn stopping_mid_windup_skids_and_sprinting_mid_skid_winds_up() {
         let mut a = running();
-        a.set_input(Some(SessionStatus::Active), 60.0);
+        a.set_input(Some(SessionStatus::Active), 60.0, None);
         feed_until_sprint(&mut a);
         assert!(is_in(a.sprite(), windup_frames()));
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(Duration::from_millis(1), ON);
         assert!(std::ptr::eq(a.sprite(), &skid_frames()[0]));
         // Going straight on to another resting state drops the skid for the new loop.
-        a.set_input(Some(SessionStatus::Waiting), 0.0);
+        a.set_input(Some(SessionStatus::Waiting), 0.0, None);
         a.tick(Duration::from_millis(1), ON);
         assert!(is_in(a.sprite(), frames(CatState::LookingAround)));
     }
@@ -702,7 +823,7 @@ mod tests {
             SessionStatus::Idle,
             SessionStatus::Completed,
         ] {
-            a.set_input(Some(status), 100.0);
+            a.set_input(Some(status), 100.0, None);
             for _ in 0..80 {
                 a.tick(STEP, OFF);
                 let s = a.sprite();
@@ -715,12 +836,12 @@ mod tests {
     #[test]
     fn long_dt_during_windup_lands_in_the_loop() {
         let mut a = running();
-        a.set_input(Some(SessionStatus::Active), 60.0);
+        a.set_input(Some(SessionStatus::Active), 60.0, None);
         feed_until_sprint(&mut a);
         assert!(is_in(a.sprite(), windup_frames()));
         a.tick(Duration::from_secs(600), ON);
         assert!(is_in(a.sprite(), frames(CatState::Sprinting)));
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(Duration::from_millis(1), ON);
         a.tick(Duration::from_secs(600), ON);
         assert!(is_in(a.sprite(), frames(CatState::Sitting)));
@@ -737,7 +858,7 @@ mod tests {
     #[test]
     fn smoothing_is_gradual() {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Active), 100.0);
+        a.set_input(Some(SessionStatus::Active), 100.0, None);
         let rest = a.interval(ON);
         a.tick(STEP, ON);
         assert_eq!(a.state(), CatState::Running);
@@ -748,14 +869,14 @@ mod tests {
     #[test]
     fn disabled_motion_holds_frame_zero() {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Active), 10.0);
+        a.set_input(Some(SessionStatus::Active), 10.0, None);
         assert!(a.tick(STEP, OFF));
         for _ in 0..200 {
             assert!(!a.tick(STEP, OFF));
         }
         assert!(std::ptr::eq(a.sprite(), &frames(CatState::Running)[0]));
         assert_eq!(a.next_frame_in(OFF), None);
-        a.set_input(Some(SessionStatus::Failed), 0.0);
+        a.set_input(Some(SessionStatus::Failed), 0.0, None);
         assert!(a.tick(STEP, OFF));
         assert_eq!(a.state(), CatState::Surprised);
     }
@@ -763,7 +884,7 @@ mod tests {
     #[test]
     fn disabled_motion_waits_for_pending_sprint() {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Active), 100.0);
+        a.set_input(Some(SessionStatus::Active), 100.0, None);
         a.tick(STEP, OFF);
         assert!(a.next_frame_in(OFF).is_some());
         for _ in 0..200 {
@@ -791,7 +912,7 @@ mod tests {
     #[test]
     fn huge_dt_is_cheap_and_valid() {
         let mut a = CatAnimator::new();
-        a.set_input(Some(SessionStatus::Idle), 0.0);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
         a.tick(STEP, ON);
         a.tick(Duration::from_secs(600), ON);
         assert!(a.frame < frames(a.state()).len());

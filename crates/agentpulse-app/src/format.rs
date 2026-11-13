@@ -3,7 +3,7 @@
 use std::fmt::Display;
 use std::sync::LazyLock;
 
-use agentpulse_core::Reading;
+use agentpulse_core::{Reading, RecordedCost};
 use chrono::{DateTime, Local, TimeZone};
 
 /// Shown in place of a value that is not available.
@@ -100,12 +100,40 @@ pub fn approx_cost(c: Reading<f64>) -> Option<String> {
     })
 }
 
+/// Claude Code's own figure: `$1.24`, or `$1.24 +?` when it had no price for
+/// some model. Not prefixed with ≈: it is the agent's record, not an estimate.
+/// None when not recorded yet.
+pub fn recorded_cost(c: Reading<RecordedCost>) -> Option<String> {
+    c.value().map(|c| {
+        if c.unknown_models {
+            format!("{} +?", cost(c.usd))
+        } else {
+            cost(c.usd)
+        }
+    })
+}
+
 static HOME: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("HOME").ok());
 
 /// Last component of a project path, "~" for the home folder itself (whose
 /// name is the username), or the dash when the path is unknown.
 pub fn project_name(path: Option<&str>) -> &str {
     name_under(path, HOME.as_deref())
+}
+
+/// The path with the home folder written as `~`, as Finder and Terminal show it.
+pub fn display_path(path: &str) -> String {
+    tilde_under(path, HOME.as_deref())
+}
+
+fn tilde_under(path: &str, home: Option<&str>) -> String {
+    let home = home
+        .map(|h| h.trim_end_matches('/'))
+        .filter(|h| !h.is_empty());
+    match home.and_then(|h| path.strip_prefix(h)) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
 }
 
 fn name_under<'a>(path: Option<&'a str>, home: Option<&str>) -> &'a str {
@@ -140,6 +168,12 @@ mod tests {
         assert_eq!(name_under(Some("/Users/ab"), home), "ab");
         assert_eq!(name_under(Some("/Users/a"), None), "a");
         assert_eq!(name_under(Some("/"), Some("")), DASH);
+        assert_eq!(tilde_under("/Users/a/x/y", home), "~/x/y");
+        assert_eq!(tilde_under("/Users/a", Some("/Users/a/")), "~");
+        assert_eq!(tilde_under("/Users/ab/x", home), "/Users/ab/x");
+        assert_eq!(tilde_under("/opt/x", home), "/opt/x");
+        assert_eq!(tilde_under("/Users/a/x", None), "/Users/a/x");
+        assert_eq!(tilde_under("/x", Some("/")), "/x");
         assert_eq!(approx_cost(Reading::Estimated(55.554)).unwrap(), "≈ $55.55");
         assert_eq!(approx_cost(Reading::Unavailable), None);
         assert_eq!(approx_cost(Reading::Estimated(0.0)).unwrap(), "$0.00");
@@ -175,6 +209,21 @@ mod tests {
         assert_eq!(cost(0.005), "$0.01");
         assert_eq!(cost(1.234), "$1.23");
         assert_eq!(cost(1234.5), "$1234.50");
+    }
+
+    #[test]
+    fn recorded_costs() {
+        let rec = |usd, unknown_models| {
+            recorded_cost(Reading::Measured(RecordedCost {
+                usd,
+                as_of_ms: 0,
+                unknown_models,
+            }))
+        };
+        assert_eq!(rec(1.244, false).unwrap(), "$1.24");
+        assert_eq!(rec(0.0, false).unwrap(), "$0.00");
+        assert_eq!(rec(18.1075, true).unwrap(), "$18.11 +?");
+        assert_eq!(recorded_cost(Reading::Unavailable), None);
     }
 
     #[test]

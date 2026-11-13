@@ -122,9 +122,10 @@ MIT, last push 2026-11-11, 2.1k stars, also published as a library crate (v0.11.
   this project targets.
 - A system-wide GPU figure is readable with public IOKit calls only:
   `IOServiceMatching("IOAccelerator")` → `PerformanceStatistics` → `"Device Utilization %"`.
-  The key is present on this machine but is not a documented contract, and the
-  `IOAccelerator` and `AGXAccelerator` nodes returned different values at the same moment
-  (75 vs 0), so the right node must be confirmed before shipping it.
+  The key is present on this machine but is not a documented contract. `IOAccelerator` and
+  `AGXAccelerator` resolve to the same single node here (`AGXAcceleratorG13X`); the earlier
+  75 vs 0 was two reads at different moments, not two nodes. The value changes moment to
+  moment, so AgentPulse reads it once per sample.
 - The SDK's `rusage_info` structs carry no GPU time field. There is no documented
   per-process GPU measurement.
 

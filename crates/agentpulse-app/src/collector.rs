@@ -11,6 +11,7 @@ use agentpulse_core::{
     SessionStatus, TokenUsage, resolve_status,
 };
 use agentpulse_cost::PriceBook;
+use agentpulse_platform_macos::gpu_utilization;
 use agentpulse_process::{ProcTable, Sampler, attribute, verify};
 use agentpulse_storage::{SessionRow, Store, Totals};
 use chrono::{DateTime, Local};
@@ -41,6 +42,8 @@ pub struct Snapshot {
     pub agents_cpu_percent: Option<f32>,
     /// None when no live process.
     pub agents_rss_bytes: Option<u64>,
+    /// GPU busy percent of the whole Mac. Never attributed to an agent.
+    pub system_gpu_percent: Reading<u8>,
     /// Initial backfill still in progress.
     pub indexing: bool,
     /// Current adapter, storage and configuration problems; empty when healthy.
@@ -256,6 +259,7 @@ impl Collector {
         self.session_meters
             .retain(|id, _| snap.sessions.iter().any(|s| &s.session_id == id));
         snap.output_rate = self.meter.rate_per_sec(now) as f32;
+        snap.system_gpu_percent = gpu_utilization().map_or(Reading::Unavailable, Reading::Measured);
         if self.rate_history.len() == HISTORY_LEN {
             self.rate_history.pop_front();
         }
@@ -323,6 +327,7 @@ pub fn build_snapshot(
             cost_usd: 0.0,
             priced_events: 0,
             unpriced_events: 0,
+            recorded_cost: None,
         })
         .collect();
 
@@ -365,6 +370,9 @@ pub fn build_snapshot(
                 resources: process
                     .and_then(|p| usage.get(&p.pid))
                     .map_or(Reading::Unavailable, |u| Reading::Measured(*u)),
+                recorded_cost: r
+                    .recorded_cost
+                    .map_or(Reading::Unavailable, Reading::Measured),
             }
         })
         .collect();
@@ -405,6 +413,7 @@ pub fn build_snapshot(
         },
         agents_rss_bytes: (!measured.is_empty())
             .then(|| measured.iter().map(|u| u.rss_bytes).sum()),
+        system_gpu_percent: Reading::Unavailable,
         indexing: false,
         errors: Vec::new(),
         sessions,
@@ -575,6 +584,7 @@ mod tests {
             cost_usd: 0.5,
             priced_events: 1,
             unpriced_events: 0,
+            recorded_cost: None,
         }
     }
 
@@ -811,6 +821,30 @@ mod tests {
             NOW
         ));
         assert!(cache_stale(None, false, &live, NOW));
+    }
+
+    #[test]
+    fn recorded_cost_is_per_session_and_stays_out_of_today() {
+        let c = agentpulse_core::RecordedCost {
+            usd: 9.0,
+            as_of_ms: NOW - 5_000,
+            unknown_models: true,
+        };
+        let rows = [
+            SessionRow {
+                recorded_cost: Some(c),
+                ..row("costed", NOW - 1_000, 1)
+            },
+            row("plain", NOW - 2_000, 1),
+        ];
+        let mut t = totals();
+        t.cost_usd = 1.0;
+        t.priced_events = 2;
+        let s = build_snapshot(P, &rows, &t, &[], None, &HashMap::new(), NOW);
+        assert_eq!(get(&s, "costed").recorded_cost, Reading::Measured(c));
+        assert_eq!(get(&s, "costed").cost_usd, Reading::Estimated(0.5));
+        assert_eq!(get(&s, "plain").recorded_cost, Reading::Unavailable);
+        assert_eq!(s.today_cost_usd, Reading::Estimated(1.0));
     }
 
     #[test]

@@ -28,6 +28,19 @@ echo 'AGENTPULSE_TEAM_ID=XXXXXXXXXX' > macos/signing.local   # untracked
 scripts/bundle.sh
 ```
 
+`scripts/bundle.sh --dmg` also writes `AgentPulse-<version>.dmg`, signed with the same
+development certificate and not notarized. `scripts/bundle.sh --release` signs with the
+team's Developer ID Application certificate and a secure timestamp, then notarizes and
+staples the DMG so it opens on any Mac. It needs that certificate (Xcode > Settings >
+Accounts > Manage Certificates; a paid membership) and a notarytool keychain profile:
+
+```sh
+xcrun notarytool store-credentials agentpulse-notary --apple-id <your Apple ID> --team-id XXXXXXXXXX
+```
+
+(another name: `AGENTPULSE_NOTARY_PROFILE` in the environment or `macos/signing.local`).
+Every build uses the hardened runtime.
+
 The script builds the release binary and the Swift targets, assembles
 `target/bundle/AgentPulse.app` (under `$CARGO_TARGET_DIR` when set; the script asks
 `cargo metadata` for the target directory), signs it with the certificate whose OU is that team
@@ -52,8 +65,9 @@ provisioning profile is denied writing to the group container, with or without t
 `application-groups` entitlement and with no prompt (TCC
 `kTCCServiceSystemPolicyAppDataDetailed`, "does not allow prompting; recording
 denied"). With a provisioning profile that authorises an app group for both the app
-and the extension, a group container would be the cleaner route (and the only one the
-Mac App Store accepts).
+and the extension, a group container would be the cleaner route. It is the only one the
+Mac App Store accepts, but AgentPulse does not target the App Store: the store requires
+the app sandbox, and a sandboxed app cannot see other processes' CPU or memory.
 
 ## Refresh, and why the widget can lag the app
 

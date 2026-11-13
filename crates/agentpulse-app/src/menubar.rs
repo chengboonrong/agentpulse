@@ -28,20 +28,28 @@ const MASK: Palette = Palette {
 };
 
 /// Animator input for the one menu bar cat: any Active agent runs at the
-/// overall output rate; else any Waiting looks around; else any Idle sits;
-/// with no live session, no snapshot yet, or collection stopped it sleeps.
-pub fn cat_input(s: Option<&Snapshot>, stopped: bool) -> (Option<SessionStatus>, f32) {
+/// overall output rate, with the CPU of the Active agents' process trees
+/// summed (None when none of them has a CPU reading); else any Waiting looks
+/// around; else any Idle sits; with no live session, no snapshot yet, or
+/// collection stopped it sleeps.
+pub fn cat_input(s: Option<&Snapshot>, stopped: bool) -> (Option<SessionStatus>, f32, Option<f32>) {
     let Some(s) = s.filter(|_| !stopped) else {
-        return (None, 0.0);
+        return (None, 0.0, None);
     };
     let has = |st| s.sessions.iter().any(|x| x.status == st);
     if has(SessionStatus::Active) {
-        (Some(SessionStatus::Active), s.output_rate)
+        let cpu = s
+            .sessions
+            .iter()
+            .filter(|x| x.status == SessionStatus::Active)
+            .filter_map(|x| x.resources.value()?.cpu_percent)
+            .reduce(|a, b| a + b);
+        (Some(SessionStatus::Active), s.output_rate, cpu)
     } else {
         let status = [SessionStatus::Waiting, SessionStatus::Idle]
             .into_iter()
             .find(|&st| has(st));
-        (status, 0.0)
+        (status, 0.0, None)
     }
 }
 
@@ -240,7 +248,7 @@ mod tests {
     use std::time::Duration;
 
     use agentpulse_animation::Motion;
-    use agentpulse_core::{AgentSession, Provider, Reading, TokenUsage};
+    use agentpulse_core::{AgentSession, Provider, Reading, ResourceUsage, TokenUsage};
 
     use super::*;
 
@@ -261,6 +269,7 @@ mod tests {
             output_rate: 0.0,
             process: None,
             resources: Reading::Unavailable,
+            recorded_cost: Reading::Unavailable,
         }
     }
 
@@ -282,6 +291,7 @@ mod tests {
             rate_history: vec![],
             agents_cpu_percent: None,
             agents_rss_bytes: None,
+            system_gpu_percent: Reading::Unavailable,
             indexing: false,
             errors: vec![],
         }
@@ -291,14 +301,40 @@ mod tests {
     fn overall_cat_follows_the_busiest_agent() {
         use SessionStatus::*;
         let input = |st: &[SessionStatus]| cat_input(Some(&snapshot(st)), false);
-        assert_eq!(cat_input(None, false), (None, 0.0));
-        assert_eq!(input(&[]), (None, 0.0));
-        assert_eq!(input(&[Completed, Failed]), (None, 0.0));
-        assert_eq!(input(&[Idle, Completed]), (Some(Idle), 0.0));
-        assert_eq!(input(&[Idle, Waiting]), (Some(Waiting), 0.0));
-        assert_eq!(input(&[Idle, Active, Waiting]), (Some(Active), 28.8));
+        assert_eq!(cat_input(None, false), (None, 0.0, None));
+        assert_eq!(input(&[]), (None, 0.0, None));
+        assert_eq!(input(&[Completed, Failed]), (None, 0.0, None));
+        assert_eq!(input(&[Idle, Completed]), (Some(Idle), 0.0, None));
+        assert_eq!(input(&[Idle, Waiting]), (Some(Waiting), 0.0, None));
+        assert_eq!(input(&[Idle, Active, Waiting]), (Some(Active), 28.8, None));
         // A stopped collector's last snapshot no longer drives the cat.
-        assert_eq!(cat_input(Some(&snapshot(&[Active])), true), (None, 0.0));
+        assert_eq!(
+            cat_input(Some(&snapshot(&[Active])), true),
+            (None, 0.0, None)
+        );
+    }
+
+    #[test]
+    fn overall_cat_cpu_is_the_active_agents_sum() {
+        use SessionStatus::*;
+        let cpu = |x: &mut AgentSession, c: Option<f32>| {
+            x.resources = Reading::Measured(ResourceUsage {
+                cpu_percent: c,
+                rss_bytes: 1,
+                process_count: 1,
+            });
+        };
+        let mut s = snapshot(&[Active, Active, Active, Idle]);
+        cpu(&mut s.sessions[0], Some(70.0));
+        cpu(&mut s.sessions[1], Some(50.0));
+        cpu(&mut s.sessions[2], None); // not yet valid: left out, not counted as 0
+        cpu(&mut s.sessions[3], Some(500.0)); // idle: a background build does not count
+        assert_eq!(cat_input(Some(&s), false).2, Some(120.0));
+        // No Active agent with a reading: unavailable.
+        for i in 0..2 {
+            s.sessions[i].resources = Reading::Unavailable;
+        }
+        assert_eq!(cat_input(Some(&s), false).2, None);
     }
 
     #[test]
@@ -362,7 +398,7 @@ mod tests {
         };
         let mut cat = CatAnimator::new();
         assert_eq!(Pose::of(&cat), Pose::Still(CatState::Sleeping));
-        cat.set_input(Some(SessionStatus::Active), 100.0);
+        cat.set_input(Some(SessionStatus::Active), 100.0, None);
         cat.tick(Duration::from_millis(1), motion);
         assert_eq!(Pose::of(&cat), Pose::Loop(CatState::Running));
         // Step like the timer does until the smoothed rate crosses the sprint threshold.
@@ -375,7 +411,7 @@ mod tests {
         assert_eq!(Pose::of(&cat), Pose::Windup);
         cat.tick(Duration::from_secs(1), motion);
         assert_eq!(Pose::of(&cat), Pose::Loop(CatState::Sprinting));
-        cat.set_input(Some(SessionStatus::Idle), 0.0);
+        cat.set_input(Some(SessionStatus::Idle), 0.0, None);
         cat.tick(Duration::from_millis(1), motion);
         assert_eq!(Pose::of(&cat), Pose::Skid);
         assert!(Pose::Skid.animated());

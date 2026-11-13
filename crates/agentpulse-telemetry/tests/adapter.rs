@@ -540,3 +540,90 @@ fn unfound_live_session_forces_one_rescan_only() {
     let b = a.poll(&off, 0).unwrap();
     assert_eq!(ids(&b, "fresh"), ["msg_f"]);
 }
+
+fn cost_state(sid: &str, usd: f64, start: i64, duration: i64, unknown: bool) -> String {
+    format!(
+        r#"{{"type":"cost-state","sessionId":"{sid}","totalCostUSD":{usd},"totalAPIDuration":1,"totalDuration":{duration},"startTime":{start},"modelUsage":{{"m-a":{{"inputTokens":2,"costUSD":{usd}}}}},"hasUnknownModelCost":{unknown}}}"#
+    )
+}
+
+fn recorded(b: &PollBatch, sid: &str) -> Option<agentpulse_core::RecordedCost> {
+    b.sessions
+        .iter()
+        .find(|s| s.session_id == sid)?
+        .recorded_cost
+}
+
+#[test]
+fn latest_cost_state_wins_and_belongs_to_its_session() {
+    let (_d, mut a, proj) = setup();
+    write(
+        &proj.join("s1.jsonl"),
+        &[
+            asst(T1, "msg_1", "m-a", 1),
+            cost_state("s1", 1.25, 1_000, 5_000, false),
+            // Cumulative: the later flush has the larger duration and total.
+            cost_state("s1", 2.5, 1_000, 9_000, true),
+            // An older record appended after a newer one does not win.
+            cost_state("s1", 0.5, 1_000, 2_000, false),
+            // A copied record keeps its own session.
+            cost_state("other", 7.0, 50, 50, false),
+            // A later record naming no model is a $0 placeholder, not a figure.
+            cost_state("s1", 0.0, 1_000, 20_000, false)
+                .replace(r#""m-a":{"inputTokens":2,"costUSD":0}"#, ""),
+            cost_state("s1", 0.0, 1_000, 21_000, false)
+                .replace(r#","modelUsage":{"m-a":{"inputTokens":2,"costUSD":0}}"#, ""),
+        ],
+    );
+    let b = a.poll(&HashMap::new(), 0).unwrap();
+    let s1 = recorded(&b, "s1").unwrap();
+    assert_eq!(
+        (s1.usd, s1.as_of_ms, s1.unknown_models),
+        (2.5, 10_000, true)
+    );
+    let other = recorded(&b, "other").unwrap();
+    assert_eq!((other.usd, other.as_of_ms), (7.0, 100));
+    // Cost records are not activity and not usage.
+    assert_eq!(b.events.len(), 1);
+    let ts = |sid: &str| {
+        b.sessions
+            .iter()
+            .find(|s| s.session_id == sid)
+            .unwrap()
+            .timestamps_ms
+            .len()
+    };
+    assert_eq!((ts("s1"), ts("other")), (1, 0));
+}
+
+#[test]
+fn incomplete_cost_state_is_ignored() {
+    let (_d, mut a, proj) = setup();
+    let no_start = cost_state("s1", 1.0, 0, 10, false).replace(r#""startTime":0,"#, "");
+    let negative = cost_state("s1", -1.0, 1, 10, false);
+    write(
+        &proj.join("s1.jsonl"),
+        &[asst(T1, "msg_1", "m-a", 1), no_start, negative],
+    );
+    let b = a.poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(recorded(&b, "s1"), None);
+    // Without a cost record a session reports none.
+    write(&proj.join("s2.jsonl"), &[asst(T2, "msg_2", "m-a", 1)]);
+    assert_eq!(recorded(&a.poll(&HashMap::new(), 0).unwrap(), "s2"), None);
+}
+
+#[test]
+fn cost_state_appended_later_is_read_from_the_offset() {
+    let (_d, mut a, proj) = setup();
+    let path = proj.join("s1.jsonl");
+    write(&path, &[asst(T1, "msg_1", "m-a", 1)]);
+    let b1 = a.poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(recorded(&b1, "s1"), None);
+    append(
+        &path,
+        &format!("{}\n", cost_state("s1", 3.0, 10, 20, false)),
+    );
+    let b2 = a.poll(&offsets(&b1), 0).unwrap();
+    assert_eq!(recorded(&b2, "s1").map(|c| c.usd), Some(3.0));
+    assert!(b2.events.is_empty());
+}

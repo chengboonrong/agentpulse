@@ -8,7 +8,7 @@ exists and compiles but the condition was never produced to watch it work.
 
 | Check | Result |
 |---|---|
-| Automated tests | 99 pass across 7 crates; clippy clean with warnings denied |
+| Automated tests | 135 pass across 8 crates; clippy clean with warnings denied |
 | Token totals vs an independent count | Exact match on all 6 sessions of the last 24 h |
 | Estimated cost vs Claude Code's own record | $1.6456 vs $1.6457, and $18.1074 vs $18.1075 |
 | Process tree vs `ps` | Same process count, same resident memory |
@@ -36,15 +36,18 @@ not been measured.
 
 ## Phase 2 — Agent monitoring: Claude Code done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
+- Done: Claude Code's own recorded session cost (`cost-state`) beside the estimate, in the
+  Sessions table and under the estimate in Overview rows; "—" until Claude Code writes one,
+  "+?" when it had no price for a model. Migration 2 stores it and backfills existing installs.
 - Next: Codex adapter, then OpenCode. Rules are in `telemetry-spec.md`. The collector then
   takes a list of adapters and the tables gain a provider column.
 
 ## Phase 3 — Resources: live process metrics done
 - Done: PID + start-time correlation, process-tree CPU and resident memory per live session.
 - Next: `resource_samples` table, per-session CPU/RAM history, process-tree view.
-- Next: system-wide GPU from IORegistry `PerformanceStatistics` behind an "unavailable"
-  fallback, once the right accelerator node is confirmed. Create
-  `agentpulse-platform-macos` for it. The GPU card says "Unavailable" until then.
+- Done: system-wide GPU from IORegistry `PerformanceStatistics` / `"Device Utilization %"`
+  (undocumented key, accepted by the owner), shown as "GPU n% whole Mac" and in `--dump`,
+  "unavailable" when the key cannot be read. About 0.05 ms per read. Never per agent.
 
 ## Phase 4 — Cats: dashboard cats done
 - Done: original sprites for seven states, state machine with smoothing and hysteresis, one
@@ -57,8 +60,12 @@ not been measured.
 - Not verified by eye: animation playback. Frames were reviewed as stills and the timing is
   covered by tests, but nobody has watched the cats move in the window, and the sprint was
   not triggered during a capture.
-- Next: calibrate the sprint thresholds (30 tok/s on, 20 off) against recorded sessions;
-  decide whether heavy CPU should also trigger the sprint.
+- Done: heavy CPU also makes the cat sprint, only while the agent is Active (process-tree
+  CPU smoothed like the token rate, on above 100% of one core, off below 60%). Window cats
+  use their session's CPU; the menu-bar cat the sum over Active agents. The widget's still
+  cat still follows the token rate only.
+- Next: calibrate the sprint thresholds (30 tok/s and 100% CPU on; 20 tok/s and 60% off)
+  against recorded sessions.
 - Done: menu-bar companion. A template-image cat for overall activity, the active-agent
   count, and a menu with today's figures, the live sessions, Open and Quit. Read back from
   the running app through Accessibility; Quit confirmed.
@@ -78,10 +85,17 @@ not been measured.
 - Retention setting and pruning.
 - Settings screen (animation speed and on/off are environment variables today).
 - Alerts and thresholds.
-- App icon, Developer ID signing and notarization for distribution (the current bundle is
-  development-signed for this Mac). Build-time shaders need Xcode's Metal Toolchain.
-- App Store route for widgets: an app group with provisioning profiles, replacing the
-  sandbox exception.
+- Distribution outside the App Store (owner's choice, 2026-11-13). Done:
+  `scripts/bundle.sh` signs with the hardened runtime and builds a DMG; `--release` signs
+  with Developer ID, notarizes and staples. Waiting on: a Developer ID Application
+  certificate for the team and a notarytool keychain profile. Until then the DMG is
+  development-signed and another Mac blocks it until the user allows it in System
+  Settings > Privacy & Security.
+- Not pursued: the Mac App Store. It requires the app sandbox, and a sandboxed build
+  tested on macOS 27 sees no other processes (`proc_listallpids` returns 0,
+  `proc_pid_rusage` fails) and cannot open `~/.claude` without a user grant, so per-agent
+  CPU and memory, and the CPU sprint, would be lost.
+- App icon. Build-time shaders need Xcode's Metal Toolchain.
 
 ## Known limits of this slice
 - Widgets are snapshots: WidgetKit budgets reloads, so a widget can lag the app and always
@@ -98,6 +112,6 @@ not been measured.
 - The project column truncates long paths at the default window width.
 
 ## Open decisions for the owner
-- Whether the undocumented IORegistry GPU key is acceptable in a production build.
-- Whether "heavy" for the cartoon sprint should include CPU load, or stay token rate only.
-- Whether to show Claude Code's own recorded cost next to the estimate.
+- None outstanding. Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
+  only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
+  beside the estimate, and distribution is Developer ID rather than the App Store.
