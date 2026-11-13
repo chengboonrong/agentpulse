@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-animation"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "png 0.18.1",
@@ -87,11 +87,12 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-app"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-animation",
  "agentpulse-core",
  "agentpulse-cost",
+ "agentpulse-platform-macos",
  "agentpulse-process",
  "agentpulse-storage",
  "agentpulse-telemetry",
@@ -101,7 +102,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "libc",
- "objc2-app-kit 0.3.2",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tracing",
@@ -110,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -118,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-cost"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "anyhow",
@@ -127,8 +128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentpulse-platform-macos"
+version = "0.0.2"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "agentpulse-process"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "libc",
@@ -136,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-storage"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "anyhow",
@@ -146,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "agentpulse-telemetry"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "agentpulse-core",
  "anyhow",

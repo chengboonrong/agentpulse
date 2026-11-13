@@ -1,2 +1,6 @@
 /target
 .omc/
+
+# macOS bundle: local signing settings and generated Xcode project
+macos/signing.local
+macos/*.xcodeproj

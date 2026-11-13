@@ -29,6 +29,8 @@ not been measured.
 ## Phase 1 — Foundation: partly done
 - Done: workspace, GPUI window, sidebar with Overview and Sessions, light and dark themes
   following the system, logging, headless `--dump` and `--bench`.
+- Done: layout redesign. The live agents lead the Overview as rows with large cats; totals
+  moved to a status line and a Today block in the sidebar; the rate chart has real axes.
 - Not started: Agents, Usage & Cost, Timeline, Insights and Settings screens. Keyboard
   navigation in the sidebar.
 
@@ -57,18 +59,33 @@ not been measured.
   not triggered during a capture.
 - Next: calibrate the sprint thresholds (30 tok/s on, 20 off) against recorded sessions;
   decide whether heavy CPU should also trigger the sprint.
-- Next: menu-bar companion. GPUI has no status-item support, so this is an `NSStatusItem`
-  bridge fed with rasterized frames.
+- Done: menu-bar companion. A template-image cat for overall activity, the active-agent
+  count, and a menu with today's figures, the live sessions, Open and Quit. Read back from
+  the running app through Accessibility; Quit confirmed.
+- Done: small and medium WidgetKit widgets in a signed `AgentPulse.app`
+  (`scripts/bundle.sh`). The extension registers with macOS and the app writes live data
+  for it.
+- Not verified by a person: the menu-bar icon's actual pixels in the menu bar, a real click
+  on it, closing the window and reopening it from the menu or Dock, and the widget placed
+  on a desktop. No screen capture was available and synthetic clicks were ruled out.
+- Menu-bar cost: a still pose adds nothing measurable. While the cat sprints the app uses
+  3.0 to 3.7% of one core (collector 1.3%, animation the rest) against a 2% goal. Dropping
+  the menu-bar sprint to 5 frames a second would roughly halve the animation share.
 
 ## Phase 5 — Analytics and distribution: not started
 - Usage by agent, model and project; trends; cache efficiency.
 - Retention setting and pruning.
 - Settings screen (animation speed and on/off are environment variables today).
 - Alerts and thresholds.
-- `.app` bundle, icon, signing, notarization. Needs Xcode's Metal Toolchain so shaders
-  compile at build time.
+- App icon, Developer ID signing and notarization for distribution (the current bundle is
+  development-signed for this Mac). Build-time shaders need Xcode's Metal Toolchain.
+- App Store route for widgets: an app group with provisioning profiles, replacing the
+  sandbox exception.
 
 ## Known limits of this slice
+- Widgets are snapshots: WidgetKit budgets reloads, so a widget can lag the app and always
+  shows its "as of" time.
+- The widget data path is fixed and ignores `AGENTPULSE_DATA_DIR`.
 - Active time is a floor: a long tool call with no intermediate records is not counted.
 - A process that starts and exits between two samples (2 s apart) is never seen.
 - Processes owned by other users are invisible to the sampler.

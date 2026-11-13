@@ -2,6 +2,7 @@
 //! processes and turns it all into a [`Snapshot`]. Knows nothing about GPUI.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::panic::AssertUnwindSafe;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,8 @@ use agentpulse_cost::PriceBook;
 use agentpulse_process::{ProcTable, Sampler, attribute, verify};
 use agentpulse_storage::{SessionRow, Store, Totals};
 use chrono::{DateTime, Local};
+
+use crate::widget_export::WidgetExporter;
 
 const RATE_WINDOW_MS: i64 = 30_000;
 pub const HISTORY_LEN: usize = 120;
@@ -427,23 +430,44 @@ fn local_midnight_ms(now_ms: i64) -> i64 {
         .map_or(now_ms - DAY_MS, |t| t.timestamp_millis())
 }
 
-/// Runs the collector on its own thread until the receiver is dropped.
+/// Runs the collector on its own thread until the receiver is dropped,
+/// publishing each snapshot to the widgets when `widgets` is set. If the loop
+/// panics, the widgets are marked stopped and the thread ends, which closes
+/// the channel.
 pub fn spawn(
     mut collector: Collector,
     sender: async_channel::Sender<Snapshot>,
+    mut widgets: Option<WidgetExporter>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("agentpulse-collector".into())
         .spawn(move || {
-            loop {
-                let snap = collector.tick();
-                let indexing = snap.indexing;
-                let live = snap.sessions.iter().any(|s| s.status.is_live());
-                if sender.send_blocking(snap).is_err() {
-                    return;
+            // The collector is dropped right after a panic, so its state is never reused.
+            let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                loop {
+                    let snap = collector.tick();
+                    let indexing = snap.indexing;
+                    let live = snap.sessions.iter().any(|s| s.status.is_live());
+                    if let Some(w) = &mut widgets {
+                        w.publish(&snap);
+                    }
+                    if sender.send_blocking(snap).is_err() {
+                        return;
+                    }
+                    if !indexing {
+                        thread::sleep(Duration::from_secs(if live { 1 } else { 5 }));
+                    }
                 }
-                if !indexing {
-                    thread::sleep(Duration::from_secs(if live { 1 } else { 5 }));
+            }));
+            if let Err(panic) = run {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                tracing::error!(panic = %msg, "collector thread panicked; data collection stopped");
+                if let Some(w) = &widgets {
+                    w.stop();
                 }
             }
         })

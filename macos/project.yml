@@ -1,0 +1,57 @@
+# XcodeGen spec. scripts/bundle.sh generates the project (macos/*.xcodeproj,
+# untracked), builds it unsigned into target/xcode, and signs the assembled
+# AgentPulse.app itself, so no team id appears here.
+name: AgentPulseWidgets
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.0.0"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGN_IDENTITY: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+targets:
+  AgentPulseWidgets:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Widgets
+        excludes: [Info.plist]
+      - Shared
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.Widgets
+        INFOPLIST_FILE: Widgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+  AgentPulseWidgetBridge:
+    type: library.dynamic
+    platform: macOS
+    sources: [Bridge]
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseWidgetBridge
+        EXECUTABLE_PREFIX: lib
+        LD_DYLIB_INSTALL_NAME: "@rpath/libAgentPulseWidgetBridge.dylib"
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: WidgetKit.framework
+  widget-preview:
+    type: tool
+    platform: macOS
+    sources: [Shared, Preview]
+    settings:
+      base:
+        PRODUCT_NAME: widget-preview
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework

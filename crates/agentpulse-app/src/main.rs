@@ -1,6 +1,9 @@
 mod collector;
 mod format;
+mod hub;
+mod menubar;
 mod ui;
+mod widget_export;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -32,16 +35,11 @@ fn main() -> anyhow::Result<()> {
         [] => gui(ui::Options::default()),
         ["--dump"] => dump(),
         ["--bench"] => bench(),
+        ["--widget-placeholder"] => widget_export::print_placeholder(),
         #[cfg(feature = "screenshot")]
-        ["--screenshot", dir, ref rest @ ..] => gui(ui::Options {
-            screenshot_dir: Some(PathBuf::from(dir)),
-            appearance: match rest {
-                [] => None,
-                ["--appearance", "light"] => Some(false),
-                ["--appearance", "dark"] => Some(true),
-                _ => bail!("usage: agentpulse --screenshot <dir> [--appearance light|dark]"),
-            },
-        }),
+        ["--menubar-preview", dir] => menubar::preview(std::path::Path::new(dir)),
+        #[cfg(feature = "screenshot")]
+        ["--screenshot", dir, ref rest @ ..] => gui(ui::Options::screenshot(dir, rest)?),
         _ => bail!(USAGE),
     }
 }
@@ -74,7 +72,8 @@ fn open_collector() -> anyhow::Result<Collector> {
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(1);
-    collector::spawn(open_collector()?, tx)?;
+    let widgets = widget_export::WidgetExporter::detect();
+    collector::spawn(open_collector()?, tx, widgets)?;
     ui::run(rx, options);
     Ok(())
 }

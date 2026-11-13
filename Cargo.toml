@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 publish = false
 
@@ -14,6 +14,7 @@ agentpulse-cost = { path = "crates/agentpulse-cost" }
 agentpulse-process = { path = "crates/agentpulse-process" }
 agentpulse-storage = { path = "crates/agentpulse-storage" }
 agentpulse-animation = { path = "crates/agentpulse-animation" }
+agentpulse-platform-macos = { path = "crates/agentpulse-platform-macos" }
 
 anyhow = "1.0.104"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
