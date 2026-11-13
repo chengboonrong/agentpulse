@@ -1,5 +1,6 @@
 //! A menu bar status item: a template icon, an optional short title, and a
-//! menu of informational rows above "Open AgentPulse" and "Quit AgentPulse".
+//! menu of informational rows above an optional update item, "Open AgentPulse"
+//! and "Quit AgentPulse".
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSSt
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     OpenDashboard,
+    OpenUpdate,
     Quit,
 }
 
@@ -71,6 +73,11 @@ define_class!(
         #[unsafe(method(openDashboard:))]
         fn open_dashboard(&self, _sender: Option<&AnyObject>) {
             (self.ivars().on_action)(MenuAction::OpenDashboard);
+        }
+
+        #[unsafe(method(openUpdate:))]
+        fn open_update(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().on_action)(MenuAction::OpenUpdate);
         }
 
         #[unsafe(method(quit:))]
@@ -137,6 +144,9 @@ pub struct StatusItem {
     /// Menu items and the menu hold their target weakly, so it is kept alive here.
     target: Retained<Target>,
     cat: Retained<CatView>,
+    /// "Update Available: …", hidden while there is none.
+    update: Retained<NSMenuItem>,
+    update_version: RefCell<Option<Option<String>>>,
     /// One image per distinct bitmap, built once.
     // ponytail: unbounded, fine for the few dozen sprite frames; add eviction if callers vary pixels freely.
     images: RefCell<HashMap<Vec<u8>, Retained<NSImage>>>,
@@ -154,15 +164,20 @@ impl StatusItem {
         menu.setAutoenablesItems(false);
         menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        for (title, action, key) in [
+        let entries = [
+            ("", sel!(openUpdate:), ""),
             ("Open AgentPulse", sel!(openDashboard:), ""),
             ("Quit AgentPulse", sel!(quit:), "q"),
-        ] {
+        ]
+        .map(|(title, action, key)| {
             let entry = menu_item(mtm, title, Some(action), key);
             // SAFETY: Target implements the action selector.
             unsafe { entry.setTarget(Some(&target)) };
             menu.addItem(&entry);
-        }
+            entry
+        });
+        let [update, ..] = entries;
+        update.setHidden(true);
         item.setMenu(Some(&menu));
         if let Some(button) = item.button(mtm) {
             // Monospaced digits, so a count takes the same width as the padding.
@@ -192,6 +207,8 @@ impl StatusItem {
             menu,
             target,
             cat,
+            update,
+            update_version: RefCell::new(None),
             images: RefCell::new(HashMap::new()),
             icon: RefCell::new(None),
             fitted: Cell::new(None),
@@ -269,6 +286,19 @@ impl StatusItem {
         if target.ivars().open.get() {
             target.apply_lines(&self.menu);
         }
+    }
+
+    /// Shows "Update Available: AgentPulse <version>…", or hides it with None.
+    pub fn set_update(&self, version: Option<&str>) {
+        if !replace_if_changed(&self.update_version, version.map(str::to_owned)) {
+            return;
+        }
+        if let Some(v) = version {
+            self.update.setTitle(&NSString::from_str(&format!(
+                "Update Available: AgentPulse {v}…"
+            )));
+        }
+        self.update.setHidden(version.is_none());
     }
 }
 

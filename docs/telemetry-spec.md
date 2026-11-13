@@ -262,6 +262,23 @@ counts only while the agent is Active and restarts from zero each time, so an id
 with a busy background process does not sprint, and an unavailable CPU reading never
 triggers it. The menu-bar cat uses the CPU summed over the Active agents that have a reading.
 
+## Network
+
+The update check is AgentPulse's only network request: an HTTPS GET of
+`https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10` through an
+ephemeral NSURLSession (no cookies or cache kept). Its headers are `User-Agent:
+AgentPulse/<version>`, `Accept: application/vnd.github+json` and `Accept-Language: en` (so
+the Mac's language is not sent), plus the standard `Accept-Encoding` that macOS adds; there
+is no body. GitHub sees the IP address, as with any connection. The reply is the public
+release list; AgentPulse reads each release's tag, page URL, notes, draft flag and date,
+ignores drafts and releases whose page is not under
+`https://github.com/chengboonrong/agentpulse/releases/` (or contains `..` or `%2e`), and
+compares the newest version with its own. It runs every 2 hours while "Check for updates
+automatically" is on (the default), at the next data refresh if a check became due while the
+Mac slept, and whenever "Check Now" is clicked, on or off. A failed check keeps any update
+already found. Nothing is downloaded or installed: a newer release shows a notice and a link
+to its page.
+
 ## Planned adapters
 
 | Agent | Source | Notes from the audit |
