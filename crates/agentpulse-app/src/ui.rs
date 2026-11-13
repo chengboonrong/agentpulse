@@ -478,7 +478,8 @@ impl AppView {
         let Some(snap) = &hub.snapshot else {
             return;
         };
-        let live: Vec<(CatKey, SessionStatus, f32, Option<f32>)> = snap
+        let now = snap.taken_at_ms;
+        let live: Vec<(CatKey, SessionStatus, f32, Option<f32>, bool)> = snap
             .sessions
             .iter()
             .filter(|s| s.status.is_live())
@@ -489,6 +490,7 @@ impl AppView {
                     s.status,
                     s.output_rate,
                     cpu,
+                    dozes(s, now),
                 )
             })
             .collect();
@@ -496,8 +498,10 @@ impl AppView {
         let indexing = snap.indexing;
         self.cats
             .retain(|id, _| live.iter().any(|(live_id, ..)| live_id == id));
-        for (id, status, rate, cpu) in &live {
-            self.cats.entry(id.clone()).or_default().set_input(
+        for (id, status, rate, cpu, dozing) in &live {
+            let cat = self.cats.entry(id.clone()).or_default();
+            cat.set_dozing(*dozing);
+            cat.set_input(
                 (!stopped).then_some(*status),
                 if stopped { 0.0 } else { *rate },
                 cpu.filter(|_| !stopped),
@@ -1013,6 +1017,17 @@ fn rate_text(r: f32) -> String {
     } else {
         format!("{r:.1} tok/s")
     }
+}
+
+/// An idle session's cat falls asleep after this long without activity.
+const DOZE_AFTER_MS: i64 = 10 * 60_000;
+
+/// Idle for at least [`DOZE_AFTER_MS`], timed like the card's "Idle …" note.
+/// Unknown activity time never dozes.
+fn dozes(x: &AgentSession, now_ms: i64) -> bool {
+    x.status == SessionStatus::Idle
+        && x.last_activity_at_ms
+            .is_some_and(|t| now_ms - t >= DOZE_AFTER_MS)
 }
 
 /// One honest line about what the session is doing, from measured fields only.
@@ -2287,6 +2302,37 @@ mod tests {
         assert_eq!(ago((3 * 24 + 4) * 3_600_000), "3 d 4 h");
         assert_eq!(rate_text(118.4), "118 tok/s");
         assert_eq!(rate_text(4.25), "4.2 tok/s");
+    }
+
+    #[test]
+    fn idle_cats_doze_after_ten_minutes() {
+        use agentpulse_core::{Reading, TokenUsage};
+        let session = |status, last| AgentSession {
+            provider: Provider::Codex,
+            session_id: "s".into(),
+            project_path: None,
+            model: None,
+            status,
+            started_at_ms: None,
+            last_activity_at_ms: last,
+            ended_at_ms: None,
+            active_ms: 0,
+            tokens: TokenUsage::default(),
+            cost_usd: Reading::Unavailable,
+            unpriced_events: 0,
+            output_rate: 0.,
+            process: None,
+            resources: Reading::Unavailable,
+            recorded_cost: Reading::Unavailable,
+        };
+        let now = 100 * 60_000;
+        let at = |min: i64| Some(now - min * 60_000);
+        assert!(!dozes(&session(SessionStatus::Idle, at(9)), now));
+        assert!(dozes(&session(SessionStatus::Idle, at(10)), now));
+        assert!(dozes(&session(SessionStatus::Idle, at(90)), now));
+        // Unknown activity time, or not idle: awake.
+        assert!(!dozes(&session(SessionStatus::Idle, None), now));
+        assert!(!dozes(&session(SessionStatus::Waiting, at(90)), now));
     }
 
     #[test]

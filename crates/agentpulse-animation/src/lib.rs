@@ -245,6 +245,8 @@ pub struct CatAnimator {
     cpu: Option<f32>,
     cpu_smoothed: f32,
     cpu_sprinting: bool,
+    /// Idle long enough to sleep; ignored in every other state.
+    dozing: bool,
     state: CatState,
     frame: usize,
     /// Time spent on the current frame, in seconds.
@@ -273,6 +275,7 @@ impl CatAnimator {
             cpu: None,
             cpu_smoothed: 0.0,
             cpu_sprinting: false,
+            dozing: false,
             state: CatState::Sleeping,
             frame: 0,
             elapsed: 0.0,
@@ -412,6 +415,12 @@ impl CatAnimator {
     }
 
     /// Recompute the state from the inputs; a change restarts the animation.
+    /// An idle session's cat sleeps instead of sitting. Takes effect at the next
+    /// `set_input`; any other status wakes it regardless.
+    pub fn set_dozing(&mut self, dozing: bool) {
+        self.dozing = dozing;
+    }
+
     fn resolve(&mut self) {
         self.sprinting = latch(self.sprinting, self.smoothed, SPRINT_ON, SPRINT_OFF);
         self.cpu_sprinting = self.cpu.is_some()
@@ -423,6 +432,7 @@ impl CatAnimator {
             );
         let state = match self.status {
             None => CatState::Sleeping,
+            Some(SessionStatus::Idle) if self.dozing => CatState::Sleeping,
             Some(SessionStatus::Idle) => CatState::Sitting,
             Some(SessionStatus::Waiting) => CatState::LookingAround,
             Some(SessionStatus::Completed) => CatState::Happy,
@@ -509,6 +519,29 @@ mod tests {
             a.tick(STEP, ON);
             assert_eq!(a.state(), want, "{status:?}");
         }
+    }
+
+    #[test]
+    fn only_an_idle_cat_dozes() {
+        for (status, want) in [
+            (SessionStatus::Idle, CatState::Sleeping),
+            (SessionStatus::Waiting, CatState::LookingAround),
+            (SessionStatus::Active, CatState::Running),
+        ] {
+            let mut a = CatAnimator::new();
+            a.set_dozing(true);
+            a.set_input(Some(status), 0.0, None);
+            a.tick(STEP, ON);
+            assert_eq!(a.state(), want, "{status:?}");
+        }
+        // Waking: no longer dozing, the idle cat sits again.
+        let mut a = CatAnimator::new();
+        a.set_dozing(true);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
+        a.set_dozing(false);
+        a.set_input(Some(SessionStatus::Idle), 0.0, None);
+        a.tick(STEP, ON);
+        assert_eq!(a.state(), CatState::Sitting);
     }
 
     fn check_set(label: &str, fs: &[Sprite], min: usize, eyes: bool, size: (usize, usize)) {
