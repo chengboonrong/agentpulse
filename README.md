@@ -7,7 +7,58 @@ per agent whose behaviour follows the agent's real activity.
 This is an early build: **Claude Code** sessions, two screens (Overview and Sessions), a
 menu-bar cat, and desktop widgets. See [docs/roadmap.md](docs/roadmap.md) for what is and is not built.
 
-![Overview](docs/screenshots/dark/overview.png)
+![Overview, dark](docs/screenshots/dark/overview.png)
+
+## Screenshots
+
+Rendered by the app and its widget views from live Claude Code sessions. They are not
+screen captures of a real menu bar or desktop.
+
+### Window
+
+| Overview, light | Sessions |
+|---|---|
+| ![Overview, light](docs/screenshots/light/overview.png) | ![Sessions](docs/screenshots/dark/sessions.png) |
+| **Minimum size, 880 × 560.** Fewer columns, no sideways scroll. | **No agents.** The empty state. |
+| ![Overview at minimum size](docs/screenshots/light/overview-min.png) | ![Empty overview](docs/screenshots/light/overview-empty.png) |
+
+### Menu bar
+
+One cat follows overall activity, next to the number of active agents. Each preview shows
+the template image on a light and a dark bar, enlarged 8×.
+
+| Sleeping | Sitting | Looking around | Running | Wind-up | Sprinting | Skid |
+|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| ![Sleeping](docs/screenshots/menubar/sleeping.png) | ![Sitting](docs/screenshots/menubar/sitting.png) | ![Looking around](docs/screenshots/menubar/lookingaround.png) | ![Running](docs/screenshots/menubar/running.png) | ![Wind-up](docs/screenshots/menubar/windup.png) | ![Sprinting](docs/screenshots/menubar/sprinting.png) | ![Skid](docs/screenshots/menubar/skid.png) |
+| No agents | Idle | Waiting on you | Working | Before a sprint | Heavy output | Stopping |
+
+### Widgets
+
+<p>
+  <img src="docs/screenshots/widgets/data-small-light.png" alt="Small widget, light" height="170">
+  <img src="docs/screenshots/widgets/data-small-dark.png" alt="Small widget, dark" height="170">
+  <img src="docs/screenshots/widgets/data-small-accented.png" alt="Small widget, tinted style" height="170">
+</p>
+<p>
+  <img src="docs/screenshots/widgets/data-medium-light.png" alt="Medium widget, light" height="170">
+  <img src="docs/screenshots/widgets/data-medium-dark.png" alt="Medium widget, dark" height="170">
+</p>
+<p>
+  <img src="docs/screenshots/widgets/stale-medium-light.png" alt="Medium widget with old data" height="170">
+  <img src="docs/screenshots/widgets/not-running-medium-light.png" alt="Medium widget when AgentPulse isn't running" height="170">
+</p>
+
+Small and medium, light, dark and tinted; then the old-data state (nothing for 75 minutes)
+and the app-not-running state.
+
+### Cat in motion
+
+Sprite loops at their real frame timing, on a light and a dark half. The sprint appears only
+under heavy output, with a wind-up when it starts and a skid when it stops.
+
+| Running | Wind-up | Sprinting | Skid |
+|:-:|:-:|:-:|:-:|
+| <img src="assets/cats/anim-running.png" alt="Run cycle" width="128"> | <img src="assets/cats/anim-windup.png" alt="Wind-up" width="128"> | <img src="assets/cats/anim-sprinting.png" alt="Sprint" width="128"> | <img src="assets/cats/anim-skid.png" alt="Skid stop" width="128"> |
 
 ## What it does
 
