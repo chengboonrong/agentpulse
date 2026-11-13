@@ -1,31 +1,34 @@
 //! The window: Overview, Sessions (with a session's detail) and Usage screens
-//! over the hub's latest snapshot. Closing it does not quit; the menu bar item
-//! and the Dock icon reopen it.
+//! over the hub's latest snapshot, and the Cats settings screen. Closing it
+//! does not quit; the menu bar item and the Dock icon reopen it.
 
 mod charts;
 
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
-use agentpulse_animation::{CatAnimator, CatState, Ink, Palette, Sprite, frames, palette};
+use agentpulse_animation::{CatAnimator, CatState, Ink, Look, Sprite, frames};
 use agentpulse_core::{AgentSession, Provider, SessionStatus};
 use agentpulse_platform_macos::{MainThreadMarker, MenuAction, StatusItem};
 #[cfg(feature = "screenshot")]
 use anyhow::Context as _;
 use gpui::{
-    App, Bounds, Context, Div, Entity, FontFeatures, FontWeight, Global, KeyBinding, Menu,
-    MenuItem, PathBuilder, QuitMode, Rgba, SharedString, Task, TitlebarOptions, WeakEntity, Window,
-    WindowAppearance, WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*,
-    px, rgb, size,
+    App, Bounds, Context, Div, Entity, FocusHandle, FontFeatures, FontWeight, Global, KeyBinding,
+    Menu, MenuItem, PathBuilder, QuitMode, Rgba, Role, SharedString, Task, TitlebarOptions,
+    WeakEntity, Window, WindowAppearance, WindowBounds, WindowOptions, actions, canvas, div, fill,
+    point, prelude::*, px, rgb, size, transparent_black,
 };
 
 use crate::collector::{HISTORY_LEN, Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
+use crate::settings::CatSettings;
 
-actions!(agentpulse, [Quit, CloseWindow]);
+mod cats;
+
+actions!(agentpulse, [Quit, CloseWindow, FocusNext, FocusPrev]);
 
 #[derive(Default)]
 pub struct Options {
@@ -70,11 +73,17 @@ struct Shared {
     appearance: Option<bool>,
     /// Asks the collector for one session's requests (None: no session).
     details: Sender<Option<Key>>,
+    cats: CatSettings,
 }
 
 impl Global for Shared {}
 
-pub fn run(rx: async_channel::Receiver<Snapshot>, details: Sender<Option<Key>>, options: Options) {
+pub fn run(
+    rx: async_channel::Receiver<Snapshot>,
+    details: Sender<Option<Key>>,
+    options: Options,
+    cats: CatSettings,
+) {
     let app = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
     // Clicking the Dock icon.
     app.on_reopen(show);
@@ -98,6 +107,8 @@ pub fn run(rx: async_channel::Receiver<Snapshot>, details: Sender<Option<Key>>, 
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("tab", FocusNext, None),
+            KeyBinding::new("shift-tab", FocusPrev, None),
         ]);
         cx.set_menus([Menu::new("AgentPulse").items([
             MenuItem::action("Close Window", CloseWindow),
@@ -115,6 +126,7 @@ pub fn run(rx: async_channel::Receiver<Snapshot>, details: Sender<Option<Key>>, 
             hub,
             appearance: options.appearance,
             details,
+            cats,
         });
         cx.spawn(async move |cx| {
             while let Ok(action) = actions.recv().await {
@@ -153,6 +165,7 @@ fn show(cx: &mut App) {
 
 fn open_window(options: Options, cx: &mut App) {
     let hub = cx.global::<Shared>().hub.clone();
+    let cats = cx.global::<Shared>().cats.clone();
     #[cfg(feature = "screenshot")]
     let (w, h) = options.window_size.unwrap_or((1120., 720.));
     #[cfg(not(feature = "screenshot"))]
@@ -170,7 +183,7 @@ fn open_window(options: Options, cx: &mut App) {
             focus: true,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| AppView::new(hub, options, window, cx)),
+        |window, cx| cx.new(|cx| AppView::new(hub, cats, options, window, cx)),
     );
     if let Err(e) = opened {
         tracing::error!(error = %format!("{e:#}"), "cannot open window");
@@ -262,6 +275,7 @@ enum Screen {
     Overview,
     Sessions,
     Usage,
+    Cats,
 }
 
 const STOPPED: &str = "Data collection stopped. Restart AgentPulse.";
@@ -282,6 +296,13 @@ struct AppView {
     cats: HashMap<CatKey, CatAnimator>,
     /// Shown when no agent is live.
     empty_cat: CatAnimator,
+    cat_settings: CatSettings,
+    /// Whose cat the Cats screen edits.
+    cats_agent: Provider,
+    /// The Cats screen's preview: sitting and running.
+    preview: [CatAnimator; 2],
+    /// Holds keyboard focus when no control does, so Tab reaches the controls.
+    focus: FocusHandle,
     last_tick: Instant,
     active: bool,
     visible: bool,
@@ -294,6 +315,7 @@ struct AppView {
 impl AppView {
     fn new(
         hub: Entity<Hub>,
+        cat_settings: CatSettings,
         options: Options,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -313,6 +335,13 @@ impl AppView {
             }),
             cx.observe_in(&hub, window, |this, _, window, cx| this.sync(window, cx)),
         ];
+        let preview = [SessionStatus::Idle, SessionStatus::Active].map(|status| {
+            let mut a = CatAnimator::new();
+            a.set_input(Some(status), 0.0, None);
+            a
+        });
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         let mut view = Self {
             hub,
             screen: Screen::Overview,
@@ -322,6 +351,10 @@ impl AppView {
             forced_dark: options.appearance,
             cats: HashMap::new(),
             empty_cat: CatAnimator::new(),
+            cat_settings,
+            cats_agent: Provider::ClaudeCode,
+            preview,
+            focus,
             last_tick: Instant::now(),
             active: window.is_window_active(),
             visible: window.visibility().is_visible(),
@@ -389,6 +422,9 @@ impl AppView {
 
     /// Cats currently on screen.
     fn visible_cats(&self) -> Vec<&CatAnimator> {
+        if self.screen == Screen::Cats {
+            return self.preview.iter().collect();
+        }
         if self.screen != Screen::Overview {
             return vec![];
         }
@@ -423,7 +459,10 @@ impl AppView {
                 this.last_tick = Instant::now();
                 let motion = this.hub.read(cx).motion;
                 let mut repaint = false;
-                for cat in this.cats.values_mut().chain([&mut this.empty_cat]) {
+                let all = this.cats.values_mut().chain([&mut this.empty_cat]);
+                // The preview only moves while it is on screen.
+                let preview = (this.screen == Screen::Cats).then_some(&mut this.preview);
+                for cat in all.chain(preview.into_iter().flatten()) {
                     repaint |= cat.tick(dt, motion);
                 }
                 if repaint {
@@ -516,6 +555,18 @@ async fn screenshot(
             cx.notify();
         })?;
         cx.update(|window, cx| capture(window, cx, &dir.join("session-detail-end.png")))??;
+    }
+    for (agent, file) in [
+        (Provider::ClaudeCode, "cats.png"),
+        (Provider::Codex, "cats-codex.png"),
+    ] {
+        this.update(cx, |this, cx| {
+            this.screen = Screen::Cats;
+            this.cats_agent = agent;
+            this.schedule_animation(cx);
+            cx.notify();
+        })?;
+        cx.update(|window, cx| capture(window, cx, &dir.join(file)))??;
     }
     tracing::info!(dir = %dir.display(), "saved screenshots");
     Ok(())
@@ -719,12 +770,15 @@ impl Render for AppView {
             self.nav("Overview", Screen::Overview, t, cx),
             self.nav("Sessions", Screen::Sessions, t, cx),
             self.nav("Usage", Screen::Usage, t, cx),
+            self.nav("Cats", Screen::Cats, t, cx),
         ];
         let columns = AgentColumns::for_window(f32::from(window.viewport_size().width));
-        let view = cx.entity().downgrade();
+        let view = cx.weak_entity();
         let hub = self.hub.read(cx);
-        let content = match &hub.snapshot {
-            None => div()
+        let content = match (self.screen, &hub.snapshot) {
+            // Needs no agent data.
+            (Screen::Cats, _) => self.cats_screen(t, view.clone()).into_any_element(),
+            (_, None) => div()
                 .flex_1()
                 .flex()
                 .items_center()
@@ -736,27 +790,32 @@ impl Render for AppView {
                     "Reading agent data…"
                 })
                 .into_any_element(),
-            Some(s) => {
-                let notes = notes(s, hub.stopped, t);
-                match self.screen {
-                    Screen::Overview => self.overview(s, notes, columns, t).into_any_element(),
-                    Screen::Sessions => match &self.detail {
-                        Some(key) => {
-                            charts::session_detail(s, key, notes, t, view, &self.page_scroll)
-                                .into_any_element()
-                        }
-                        None => sessions(s, notes, t, view).into_any_element(),
-                    },
-                    Screen::Usage => {
-                        charts::usage(s, notes, t, &self.page_scroll).into_any_element()
-                    }
-                }
+            (Screen::Overview, Some(s)) => self
+                .overview(s, notes(s, hub.stopped, t), columns, t)
+                .into_any_element(),
+            (Screen::Sessions, Some(s)) => match &self.detail {
+                Some(key) => charts::session_detail(
+                    s,
+                    key,
+                    notes(s, hub.stopped, t),
+                    t,
+                    view,
+                    &self.page_scroll,
+                )
+                .into_any_element(),
+                None => sessions(s, notes(s, hub.stopped, t), t, view).into_any_element(),
+            },
+            (Screen::Usage, Some(s)) => {
+                charts::usage(s, notes(s, hub.stopped, t), t, &self.page_scroll).into_any_element()
             }
         };
         let today = hub.snapshot.as_ref().map(|s| today(s, t));
         div()
             .size_full()
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
+            .track_focus(&self.focus)
+            .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
+            .on_action(|_: &FocusPrev, window, cx| window.focus_prev(cx))
             .flex()
             .flex_col()
             .bg(rgb(t.window))
@@ -814,9 +873,15 @@ impl AppView {
     ) -> gpui::Stateful<Div> {
         div()
             .id(label)
-            .px(px(sp::S))
-            .py(px(sp::XS))
+            .role(Role::Tab)
+            .aria_label(label)
+            .aria_selected(self.screen == screen)
+            // One point less padding makes room for the focus ring's border,
+            // so the sidebar lays out exactly as it did without one.
+            .px(px(sp::S - 1.))
+            .py(px(sp::XS - 1.))
             .rounded_md()
+            .with_focus_ring(t)
             .when(self.screen == screen, |d| {
                 d.bg(rgb(t.selected)).font_weight(FontWeight::MEDIUM)
             })
@@ -845,7 +910,7 @@ impl AppView {
                 .py(px(sp::XXL))
                 .child(cat(
                     self.empty_cat.sprite(),
-                    palette(Provider::ClaudeCode),
+                    self.cat_settings.looks().get(Provider::ClaudeCode),
                     4.,
                 ))
                 .child(
@@ -909,7 +974,7 @@ impl AppView {
                     .flex_none()
                     .child(div().ml(px(-cat_overhang())).child(cat(
                         sprite,
-                        palette(s.provider),
+                        self.cat_settings.looks().get(s.provider),
                         ROW_CAT_SCALE,
                     ))),
             )
@@ -1478,38 +1543,87 @@ fn recorded_line(provider: Provider, value: Option<String>) -> String {
     format!("{label} {value}")
 }
 
+/// A keyboard focus ring that takes no extra room: the border is always there,
+/// coloured only while focused from the keyboard.
+trait FocusRing: StatefulInteractiveElement + Styled {
+    fn with_focus_ring(self, t: Theme) -> Self {
+        self.tab_index(0)
+            .border_1()
+            .border_color(transparent_black())
+            .focus_visible(|s| s.border_color(rgb(t.text)))
+    }
+}
+
+impl<E: StatefulInteractiveElement + Styled> FocusRing for E {}
+
+fn rgba([r, g, b, a]: [u8; 4]) -> Rgba {
+    Rgba {
+        r: r as f32 / 255.,
+        g: g as f32 / 255.,
+        b: b as f32 / 255.,
+        a: a as f32 / 255.,
+    }
+}
+
+/// One run of equal colour in a sprite row: x, y, length, colour.
+type Run = (usize, usize, usize, Rgba);
+
+/// A look's sprite as runs, memoised: a pattern costs a pass over every pixel,
+/// and the Cats screen repaints all its swatches on each preview frame.
+fn runs(sprite: &'static Sprite, look: Look) -> Arc<[Run]> {
+    type Key = (&'static str, Option<&'static str>, usize);
+    static CACHE: LazyLock<Mutex<HashMap<Key, Arc<[Run]>>>> = LazyLock::new(Default::default);
+    let key = (
+        look.coat.id,
+        look.eye.map(|e| e.id),
+        std::ptr::from_ref(sprite) as usize,
+    );
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // ponytail: dropped wholesale when full; an LRU if anyone browses that many looks.
+    if cache.len() >= 4096 {
+        cache.clear();
+    }
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            let w = sprite.width();
+            let pixels = look.paint(sprite);
+            let mut runs = Vec::new();
+            for (y, row) in pixels.chunks(w).enumerate() {
+                let mut x = 0;
+                while x < w {
+                    let (start, color) = (x, row[x]);
+                    while x < w && row[x] == color {
+                        x += 1;
+                    }
+                    if let Some(c) = color {
+                        runs.push((start, y, x - start, rgba(c)));
+                    }
+                }
+            }
+            runs.into()
+        })
+        .clone()
+}
+
 /// Paints a sprite with square pixels at an integer scale, one quad per run of
-/// equal ink in a row.
-fn cat(sprite: &'static Sprite, palette: Palette, scale: f32) -> impl IntoElement {
+/// equal colour in a row.
+fn cat(sprite: &'static Sprite, look: Look, scale: f32) -> impl IntoElement {
     let (w, h) = (sprite.width(), sprite.height());
+    let runs = runs(sprite, look);
     canvas(
         |_, _, _| {},
         move |b, _, window, _| {
             // Whole-point origin keeps every sprite pixel on device-pixel edges.
             let origin = point(b.origin.x.round(), b.origin.y.round());
-            for y in 0..h {
-                let mut x = 0;
-                while x < w {
-                    let (start, ink) = (x, sprite.ink(x, y));
-                    while x < w && sprite.ink(x, y) == ink {
-                        x += 1;
-                    }
-                    if let Some([r, g, bl, a]) = palette.color(ink) {
-                        let color = Rgba {
-                            r: r as f32 / 255.,
-                            g: g as f32 / 255.,
-                            b: bl as f32 / 255.,
-                            a: a as f32 / 255.,
-                        };
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                origin + point(px(start as f32 * scale), px(y as f32 * scale)),
-                                size(px((x - start) as f32 * scale), px(scale)),
-                            ),
-                            color,
-                        ));
-                    }
-                }
+            for &(x, y, len, color) in runs.iter() {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        origin + point(px(x as f32 * scale), px(y as f32 * scale)),
+                        size(px(len as f32 * scale), px(scale)),
+                    ),
+                    color,
+                ));
             }
         },
     )
@@ -1537,6 +1651,31 @@ mod tests {
     fn contrast(a: u32, b: u32) -> f64 {
         let (la, lb) = (luminance(a), luminance(b));
         (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn runs_rebuild_the_painted_pixels_and_are_memoised() {
+        use agentpulse_animation::{find_coat, find_eye};
+        let sprite = &frames(CatState::Sitting)[0];
+        let look = Look {
+            coat: find_coat("calico").unwrap(),
+            eye: find_eye("blue"),
+        };
+        let first = runs(sprite, look);
+        assert!(Arc::ptr_eq(&first, &runs(sprite, look)));
+        let own_eyes = runs(sprite, Look { eye: None, ..look });
+        assert!(!Arc::ptr_eq(&first, &own_eyes));
+        let w = sprite.width();
+        let mut rebuilt = vec![None; w * sprite.height()];
+        for &(x, y, len, color) in first.iter() {
+            rebuilt[y * w + x..][..len].fill(Some(color));
+        }
+        let painted: Vec<_> = look
+            .paint(sprite)
+            .into_iter()
+            .map(|p| p.map(rgba))
+            .collect();
+        assert!(rebuilt == painted);
     }
 
     #[test]

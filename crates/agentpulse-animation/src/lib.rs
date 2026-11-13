@@ -1,11 +1,13 @@
 //! Original pixel-art cats and the animation state machine that drives them
 //! from agent telemetry. No UI framework dependency.
 
+mod coats;
 mod sprites;
 
 use std::time::Duration;
 
 use agentpulse_core::{Provider, SessionStatus};
+pub use coats::{COATS, Coat, EYES, Eye, GROUPS, Look, find_coat, find_eye};
 
 /// Smoothed output tokens/s above which a running cat starts sprinting.
 /// Initial values: calibrate against real sessions.
