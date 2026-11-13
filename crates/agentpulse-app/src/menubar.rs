@@ -335,8 +335,8 @@ mod tests {
         cpu(&mut s.sessions[3], Some(500.0)); // idle: a background build does not count
         assert_eq!(cat_input(Some(&s), false).2, Some(120.0));
         // No Active agent with a reading: unavailable.
-        for i in 0..2 {
-            s.sessions[i].resources = Reading::Unavailable;
+        for x in s.sessions.iter_mut().take(2) {
+            x.resources = Reading::Unavailable;
         }
         assert_eq!(cat_input(Some(&s), false).2, None);
     }

@@ -45,8 +45,8 @@ pub struct Snapshot {
     pub today_unpriced_events: u64,
     /// Output tokens/s over the last 30 s, all sessions.
     pub output_rate: f32,
-    /// One sample per tick, most recent last, at most 120.
-    pub rate_history: Vec<f32>,
+    /// One (unix ms, output tokens/s) sample per tick, most recent last, at most 120.
+    pub rate_history: Vec<(i64, f32)>,
     /// Sum over live sessions' process trees; None when no live process or CPU not yet valid.
     pub agents_cpu_percent: Option<f32>,
     /// None when no live process.
@@ -161,7 +161,7 @@ pub struct Collector {
     metered: HashMap<Key, (i64, u64)>,
     table: Option<(Instant, ProcTable)>,
     cache: Option<Cache>,
-    rate_history: VecDeque<f32>,
+    rate_history: VecDeque<(i64, f32)>,
     config_errors: Vec<String>,
     query_error: Option<String>,
     history_error: Option<(Instant, String)>,
@@ -454,7 +454,7 @@ impl Collector {
         if self.rate_history.len() == HISTORY_LEN {
             self.rate_history.pop_front();
         }
-        self.rate_history.push_back(snap.output_rate);
+        self.rate_history.push_back((now, snap.output_rate));
         snap.rate_history = self.rate_history.iter().copied().collect();
         snap.indexing = indexing;
         snap.usage = self.usage_charts(now);
@@ -1163,7 +1163,9 @@ mod tests {
         let s = c.tick();
         assert_eq!(s.output_rate, 10.0);
         assert_eq!(get(&s, "s1").output_rate, 10.0);
-        assert_eq!(s.rate_history, [0.0, 10.0]);
+        let rates: Vec<f32> = s.rate_history.iter().map(|&(_, v)| v).collect();
+        assert_eq!(rates, [0.0, 10.0]);
+        assert!(s.rate_history.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
     #[test]

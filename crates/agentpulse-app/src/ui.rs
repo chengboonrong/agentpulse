@@ -3,6 +3,7 @@
 //! does not quit; the menu bar item and the Dock icon reopen it.
 
 mod charts;
+mod timeseries;
 
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
@@ -16,13 +17,13 @@ use agentpulse_platform_macos::{MainThreadMarker, MenuAction, StatusItem};
 use anyhow::Context as _;
 use gpui::{
     Animation, AnimationExt, App, Bounds, Context, Div, ElementId, Entity, FocusHandle,
-    FontFeatures, FontWeight, Global, KeyBinding, Menu, MenuItem, PathBuilder, QuitMode, Rgba,
-    Role, SharedString, Stateful, Task, TitlebarOptions, WeakEntity, Window, WindowAppearance,
+    FontFeatures, FontWeight, Global, KeyBinding, Menu, MenuItem, QuitMode, Rgba, Role,
+    SharedString, Stateful, Task, TitlebarOptions, WeakEntity, Window, WindowAppearance,
     WindowBounds, WindowOptions, actions, canvas, div, fill, point, prelude::*, px, rgb, size,
     transparent_black,
 };
 
-use crate::collector::{HISTORY_LEN, Key, Snapshot};
+use crate::collector::{Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
 use crate::settings::CatSettings;
@@ -146,7 +147,7 @@ pub fn run(
 /// The rounded design of the system font (SF Pro Rounded) in every weight,
 /// named by CoreText as the plain one is `.AppleSystemUIFont`. Where it is
 /// missing, GPUI falls back to the system font.
-const FONT_FAMILY: &str = ".AppleSystemUIFontRounded";
+pub(super) const FONT_FAMILY: &str = ".AppleSystemUIFontRounded";
 
 /// Brings the window forward, or opens a new one if it was closed.
 fn show(cx: &mut App) {
@@ -396,6 +397,8 @@ struct AppView {
     /// Shown when no agent is live.
     empty_cat: CatAnimator,
     cat_settings: CatSettings,
+    /// Pointer over the Output rate chart, in window coordinates.
+    rate_hover: Option<gpui::Point<gpui::Pixels>>,
     /// Whose cat the Cats screen edits.
     cats_agent: Provider,
     /// The Cats screen's preview: sitting and running.
@@ -454,6 +457,7 @@ impl AppView {
             bounce_seq: 0,
             empty_cat: CatAnimator::new(),
             cat_settings,
+            rate_hover: None,
             cats_agent: Provider::ClaudeCode,
             preview,
             focus,
@@ -1183,7 +1187,7 @@ impl AppView {
             .child(
                 card(t)
                     .mt(px(sp::XL))
-                    .child(rate(s, t))
+                    .child(rate(s, t, self.rate_hover, view.clone()))
                     .child(machine_line(s, t).mt(px(sp::L))),
             )
     }
@@ -1661,9 +1665,25 @@ impl Render for Tooltip {
     }
 }
 
+/// Time span of the output rate chart.
+const RATE_SPAN_MS: i64 = 120_000;
+
 /// The output rate: current value and a chart of the last two minutes.
-fn rate(s: &Snapshot, t: Theme) -> Div {
-    let max = axis_max(&s.rate_history);
+fn rate(
+    s: &Snapshot,
+    t: Theme,
+    hover: Option<gpui::Point<gpui::Pixels>>,
+    view: WeakEntity<AppView>,
+) -> Div {
+    let end = s.rate_history.last().map_or(0, |&(at, _)| at);
+    let in_span: Vec<f32> = s
+        .rate_history
+        .iter()
+        .filter(|&&(at, _)| at >= end - RATE_SPAN_MS)
+        .map(|&(_, v)| v)
+        .collect();
+    let max = axis_max(&in_span);
+    let move_view = view.clone();
     let axis_w = px(40.);
     div()
         .flex()
@@ -1716,7 +1736,46 @@ fn rate(s: &Snapshot, t: Theme) -> Div {
                                         .child(max.map(axis_label).unwrap_or_default())
                                         .child("0"),
                                 )
-                                .child(chart(s.rate_history.clone(), max, t)),
+                                .child(
+                                    div()
+                                        .id("rate-chart")
+                                        .flex_1()
+                                        .h(px(CHART_H))
+                                        .on_mouse_move(move |e, _, cx| {
+                                            move_view
+                                                .update(cx, |v, cx| {
+                                                    if v.rate_hover != Some(e.position) {
+                                                        v.rate_hover = Some(e.position);
+                                                        cx.notify();
+                                                    }
+                                                })
+                                                .ok();
+                                        })
+                                        .on_hover(move |over, _, cx| {
+                                            if !*over {
+                                                view.update(cx, |v, cx| {
+                                                    if v.rate_hover.take().is_some() {
+                                                        cx.notify();
+                                                    }
+                                                })
+                                                .ok();
+                                            }
+                                        })
+                                        .child(timeseries::time_series(
+                                            s.rate_history.clone(),
+                                            end,
+                                            RATE_SPAN_MS,
+                                            max,
+                                            hover,
+                                            timeseries::Colors {
+                                                line: t.text,
+                                                base: t.muted,
+                                                grid: t.border,
+                                                text: t.text,
+                                                card: t.card,
+                                            },
+                                        )),
+                                ),
                         )
                         .child(
                             div()
@@ -1730,49 +1789,6 @@ fn rate(s: &Snapshot, t: Theme) -> Div {
                         ),
                 ),
         )
-}
-
-/// Baseline, a hairline at the axis maximum and the rate path scaled to it.
-fn chart(history: Vec<f32>, max: Option<f32>, t: Theme) -> impl IntoElement {
-    let (line, base, grid) = (rgb(t.text), rgb(t.muted), rgb(t.border));
-    canvas(
-        |_, _, _| {},
-        move |b, _, window, _| {
-            let hairline = |y, color| {
-                fill(
-                    Bounds::new(point(b.left(), y), size(b.size.width, px(1.))),
-                    color,
-                )
-            };
-            window.paint_quad(hairline(b.bottom() - px(1.), base));
-            let Some(max) = max else { return };
-            window.paint_quad(hairline(b.top(), grid));
-            if history.len() < 2 {
-                return;
-            }
-            // Fixed spacing, so the line grows in from the right as samples arrive.
-            let step = b.size.width * (1.0 / (HISTORY_LEN - 1) as f32);
-            let x0 = b.right() - step * (history.len() - 1) as f32;
-            let height = b.size.height - px(1.5);
-            let mut path = PathBuilder::stroke(px(2.));
-            for (i, v) in history.iter().enumerate() {
-                let p = point(
-                    x0 + step * i as f32,
-                    b.bottom() - px(1.) - height * (v / max),
-                );
-                if i == 0 {
-                    path.move_to(p);
-                } else {
-                    path.line_to(p);
-                }
-            }
-            if let Ok(path) = path.build() {
-                window.paint_path(path, line);
-            }
-        },
-    )
-    .flex_1()
-    .h(px(CHART_H))
 }
 
 // ---------------------------------------------------------------- sessions

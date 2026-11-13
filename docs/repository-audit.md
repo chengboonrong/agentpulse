@@ -15,6 +15,7 @@ read in source.
 | Session ↔ process mapping? | `~/.claude/sessions/<pid>.json` + PID start time | No audited tool does macOS correlation |
 | Prices? | Config file, validated against Claude Code's own cost records | All three tools hardcode tables in source |
 | GPU? | System-wide only, later phase, labelled | Per-process GPU needs undocumented keys; power/temps need private APIs |
+| Chart library? | No. Own `canvas` component ([E](#e-gpui-chart-crates)) | None builds unmodified on our GPUI; the closest is about 30× slower at 43k points |
 
 ## A. system-pulse (`eas4ai/system-pulse`)
 
@@ -165,6 +166,39 @@ Gaps:
   sets it from the system. AgentPulse reads
   `NSWorkspace.accessibilityDisplayShouldReduceMotion` itself.
 - **No window snapshot in release builds.** `Window::render_to_image()` is test-only.
+
+## E. GPUI chart crates
+
+Prototyped 2026-11-13 against our pinned Zed rev (`27bbbc1c`), each built in a scratch
+workspace with its GPUI dependency pointed at that rev.
+
+| | gpui-px / gpui-d3rs | plotters-gpui |
+|---|---|---|
+| Source | `pierreaubert/gpui-toolkit`: crates.io 0.5.10 (2026-01), repo 0.11 (active) | `JakkuSakura/plotters-gpui` 0.1.1, last commit 2025-04 |
+| GPUI it targets | crates.io 0.5.10: `gpui ^0.2`. Repo: the author's GPUI fork | Zed rev `044eb7b` (2024-12) |
+| Builds on our GPUI? | No. 0.5.10: 70 errors in its required `gpui-ui-kit` (`gpui::Component` removed, `Menu`, `BoxShadow`, `Application` changed). 0.11: needs fork-only APIs (`CustomDraw`, `register_custom_draw`, `gpui_wgpu` `headless-qa`); 23 errors in `gpui-d3rs` alone | After a 5-line port (`Pixels` field now private, `shape_line`/`ShapedLine::paint` signatures) |
+| Weight | Minimal feature set: 383 packages incl. wgpu 30, naga, vello, parley, 9 toolkit crates (AgentPulse: 302 in total) | A personal fork of `plotters` by git tag; the crates.io release ships with no dependencies listed, so it cannot be used as published |
+| Interactivity | Not reached (did not build) | None: plotters draws a static picture. Hover meant keeping plotters' coordinate spec from each paint and re-plotting the whole chart per mouse move |
+| Customisation | Not reached | Colours and label styles yes; tick placement is plotters' own (3 x labels asked, 2 at uneven values given); text is measured with plotters' font engine but painted with GPUI's, bridged by a fixed 1.24 factor |
+
+CPU time of a full window redraw (`Window::draw`), 900×360 window, one series at one sample
+per second, median of 300 redraws after 30 warm-up, release build, Apple M1 Max. An empty
+window costs 4 µs. GPU time was not measured.
+
+| Samples | Native `canvas`, min/max per pixel column | plotters-gpui |
+|---|---|---|
+| 720 | 0.40 ms | 0.74 ms |
+| 3,600 | 0.79 ms | 2.85 ms |
+| 43,200 | 1.10 ms | 32.2 ms |
+
+Redraws on hover cost the same as redraws with new data for both. At 120 Hz a frame has
+8.3 ms.
+
+**For AgentPulse:** no chart crate. Charts stay as `canvas` elements on the APIs already
+listed under [D](#d-gpui) (`PathBuilder`, `paint_path`, `paint_quad`, `shape_line`), which
+are the same APIs plotters-gpui needed porting for, so a library adds a second place to
+port on every GPUI bump without removing the first. The time-series chart is
+`crates/agentpulse-app/src/ui/timeseries.rs`.
 
 ## Licensing strategy
 
