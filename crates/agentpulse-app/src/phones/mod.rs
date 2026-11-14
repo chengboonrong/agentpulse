@@ -842,8 +842,8 @@ impl Core {
         p.up_seq = seq;
         match msg["type"].as_str() {
             Some("seen") => p.last_seen_ms = Some(now),
-            // The phone removed the pairing and the relay with it.
-            Some("unpair") => return self.forget(id, false, now),
+            // The phone removed the pairing; the Mac removes it at the relay too.
+            Some("unpair") => return self.forget(id, true, now),
             _ => {}
         }
         self.save();

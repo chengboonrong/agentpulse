@@ -79,9 +79,15 @@ JSON objects with `seq` (a counter per pairing and direction, from 0) and `type`
 | down | `state` | `payload`: the widget payload |
 | down | `heartbeat` | `sentAtMs`; direct connections only, with the `seq` of the latest `state`, so it never advances a receiver's record |
 | up | `seen` | `sentAtMs`; sent when the app opens, every 6 hours from background refresh, and as the first frame of a direct connection |
-| up | `unpair` | none; the Mac removes the pairing |
+| up | `unpair` | none; the Mac removes the pairing, and deletes it at the relay |
 
 The phone's pairing hello is the one message without `type`; it is described below.
+
+Removing a pairing on the phone: it posts `unpair` and, once that succeeds, does nothing
+more; the Mac, on reading it, removes the pairing and deletes it at the relay. If the post
+fails (any error, including still 429 after waiting), the phone sends a best-effort
+`DELETE /v1/pairings/{id}` with its own token, and the Mac then finds the pairing gone
+(401 or 404). Either way the phone deletes the pairing and its keys locally.
 
 ## Pairing
 
@@ -192,10 +198,11 @@ Handshake (TCP, every message length-prefixed: 4-byte big-endian length, then by
    and the length prefix as associated data. Each side counts its own frames; any frame
    that fails to open, or arrives out of order, closes the connection.
 5. The Mac's first frame is the latest state; the phone's first frame is a `seen`
-   message (see Messages). A peer without the pairing's private key cannot derive the
-   keys, so neither side counts the connection as live until it has opened the other's
-   first frame: the phone within 5 s of connecting, the Mac within the same 5 s
-   handshake window, after which the slot is closed.
+   message (see Messages). The first direct frame may repeat the last accepted seq; a
+   phone treats an equal-seq state as alive, not new. A peer without the pairing's
+   private key cannot derive the keys, so neither side counts the connection as live
+   until it has opened the other's first frame: the phone within 5 s of connecting, the
+   Mac within the same 5 s handshake window, after which the slot is closed.
 
 Forward secrecy: the ephemeral keys and both frame keys live only for the connection,
 so a private key stolen later does not open recorded direct traffic.
@@ -250,7 +257,8 @@ pushes only go through the relay. Widgets use the relay only.
    tested with `swift test` over loopback.
 2. Crypto bridge and the Mac client against a locally run relay. Done:
    `scripts/e2e-phones.sh` pairs, publishes and unpairs through it with a simulated phone.
-3. iPhone app and widgets, in the simulator against the local relay.
+3. iPhone app and widgets, in the simulator against the local relay. Done:
+   `scripts/e2e-ios.sh` pairs the app with the Mac through it and connects directly.
 4. Live Activity and push. Needs the paid program and a deployed relay to test for
    real; until then only the request the relay would send is checked.
 

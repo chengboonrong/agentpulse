@@ -607,8 +607,8 @@ fn up_messages_follow_the_seq_rule_and_unpair_removes() {
     assert!(!r.bridge.has_keys(&id));
     assert_eq!(
         r.relay.count("DELETE", &id),
-        0,
-        "the phone already deleted it"
+        1,
+        "the Mac deletes it at the relay"
     );
     assert_eq!(store::load(&r.dir), []);
     assert!(!r.core.shared.publishing.load(Ordering::Relaxed));
