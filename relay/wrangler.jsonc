@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agentpulse-relay",
+  "main": "src/index.ts",
+  // Not newer than the workerd that @cloudflare/vitest-pool-workers runs the tests in.
+  "compatibility_date": "2026-08-15",
+  "durable_objects": {
+    "bindings": [{ "name": "PAIRINGS", "class_name": "Pairing" }]
+  },
+  // Optional: limit pairing creation and hellos per client IP (CF-Connecting-IP). Without
+  // this binding they are not limited per IP. namespace_id is a positive integer of your
+  // choice, unique in the account; period is 10 or 60 seconds.
+  // "ratelimits": [
+  //   { "name": "CREATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  // ],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Pairing"] }]
+}

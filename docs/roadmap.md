@@ -174,9 +174,10 @@ not been measured.
     each Mac's agents under its name, and one Mac pairs with several phones or iPads. Every
     pairing has its own key, is listed by device name and last seen time on both sides, and
     can be removed alone, which stops that device at once without touching the others.
-  It needs the paid Apple Developer Program for TestFlight or the App Store. Still open:
-  who runs the relay (self-hosted or third party) and whether a local-network-only mode is
-  enough for a first version.
+  It needs the paid Apple Developer Program for TestFlight or the App Store. Decided
+  (owner, 2026-11-13): relay and push from the start, not a local-network-only first
+  version. The design, protocol and build order are in `mobile.md`. In progress: the
+  relay (step 1). Still open: who hosts the default relay.
 - Done: new updates notice. Tell the user when a newer AgentPulse release exists, in the
   window and the menu-bar menu, with its version, its release notes and a link to download
   it. It is AgentPulse's only network request, and it is:
@@ -220,7 +221,8 @@ not been measured.
   say which agent a session belongs to.
 
 ## Open decisions for the owner
-- Phase 6 relay: who hosts it, and whether a local-network-only first version is enough.
+- Phase 6 relay: who hosts the default one (the owner deploys it once the paid Apple
+  Developer Program is in place).
 - Decided 2026-11-13: the undocumented GPU key is acceptable (whole Mac
   only), heavy CPU triggers the sprint while Active, Claude Code's own cost is shown
   beside the estimate, and distribution is Developer ID rather than the App Store.
