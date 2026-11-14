@@ -1,5 +1,5 @@
-//! The Settings screen: the animation and the update check. Also the banner
-//! that announces a new release on the other screens.
+//! The Settings screen: the animation, the update check and the phones. Also the
+//! banner that announces a new release on the other screens.
 
 use agentpulse_platform_macos::reduce_motion;
 use gpui::ClickEvent;
@@ -7,11 +7,20 @@ use gpui::ClickEvent;
 use super::cats::toggled;
 use super::*;
 use crate::hub::{self, now_ms};
+use crate::phones::{Phone, Qr, Started, State};
 use crate::settings::SPEEDS;
 use crate::updates::{CURRENT, Check, Release};
 
 const CARD_MAX_W: f32 = 640.;
 const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
+const DIRECT_DETAIL: &str = "Phones on the same Wi-Fi get updates straight from this Mac.";
+const PHONES_PRIVACY: &str =
+    "Updates go through your relay sealed for your phone: the relay can't read them.";
+/// The QR code's side, about; modules are whole points so none blur.
+const QR_SIDE: f32 = 220.;
+/// Light modules added around the code: with the generator's own 1-module margin, the
+/// 4 the QR standard asks for.
+const QR_QUIET: usize = 3;
 
 /// One click handler that calls `f` on the hub, reading its state at click time.
 fn on_hub(
@@ -43,6 +52,7 @@ pub(super) fn screen(
         .child(heading("Settings"))
         .child(animation_card(hub, entity, t).mt(px(sp::XL)))
         .child(updates_card(hub, entity, t).mt(px(sp::L)))
+        .child(phones_card(hub, entity, t).mt(px(sp::L)))
 }
 
 fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
@@ -176,6 +186,295 @@ fn updates_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
         .children(hub.available().map(|r| release(r, t)))
 }
 
+fn phones_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
+    let (v, p) = hub.phone_state();
+    let card = card(t)
+        .max_w(px(CARD_MAX_W))
+        .gap(px(sp::M))
+        .child(card_title("Phones"));
+    if !v.available {
+        return card.child(
+            secondary("Phones need AgentPulse.app (run scripts/bundle.sh).", t).px(px(sp::S)),
+        );
+    }
+    let now = now_ms();
+    let errors = hub.phone_error.iter().chain(&v.error);
+    let relay_set = p.relay.is_some();
+    card.child(
+        field("Relay", p.relay.as_deref().unwrap_or("Not set"), t)
+            .child(
+                button("paste-relay", "Paste Address", t)
+                    .on_click(on_hub(entity, |h, cx| h.paste_relay(cx))),
+            )
+            .when(relay_set, |d| {
+                d.child(
+                    button("clear-relay", "Clear", t)
+                        .aria_label("Clear relay address")
+                        .on_click(on_hub(entity, |h, cx| h.clear_relay(cx))),
+                )
+            }),
+    )
+    // Known only once a relay is set: with none, nothing touches the Keychain.
+    .when(relay_set, |d| {
+        let state = match v.relay_key {
+            Some(true) => "Key saved",
+            Some(false) => "No key",
+            None => DASH,
+        };
+        d.child(
+            field("Relay key", state, t)
+                .child(
+                    button("paste-key", "Paste Key", t)
+                        .on_click(on_hub(entity, |h, cx| h.paste_relay_key(cx))),
+                )
+                .when(v.relay_key == Some(true), |d| {
+                    d.child(
+                        button("forget-key", "Forget Key", t)
+                            .on_click(on_hub(entity, |h, _| h.phones.set_relay_key(None))),
+                    )
+                }),
+        )
+    })
+    .children(errors.map(|e| secondary(e, t).px(px(sp::S)).text_color(rgb(t.failed))))
+    .child(match &v.pending {
+        Some(s) => pairing_sheet(s, entity, t, now),
+        None => {
+            let label = if hub.pairing_starting {
+                "Pairing…"
+            } else {
+                "Pair a Phone"
+            };
+            let pair = if relay_set && !hub.pairing_starting {
+                button("pair", label, t)
+                    .on_click(on_hub(entity, |h, cx| h.pair_phone(cx)))
+                    .into_any_element()
+            } else {
+                // Inert, as the Animation card's speeds are: no focus, no click.
+                div()
+                    .px(px(sp::M))
+                    .py(px(sp::XS))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(transparent_black())
+                    .bg(rgb(t.card))
+                    .text_color(rgb(t.muted))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(label)
+                    .into_any_element()
+            };
+            div()
+                .px(px(sp::S))
+                .flex()
+                .child(pair)
+                .when(!relay_set, |d| {
+                    d.items_center()
+                        .gap(px(sp::M))
+                        .child(secondary("Set the relay address first.", t))
+                })
+        }
+    })
+    .children(
+        v.phones
+            .iter()
+            .enumerate()
+            .filter_map(|(i, phone)| phone_row(i, phone, entity, t, now)),
+    )
+    .child(switch(
+        "direct",
+        "Direct connection",
+        Some(DIRECT_DETAIL),
+        p.direct,
+        t,
+        on_hub(entity, |h, cx| h.toggle_direct(cx)),
+    ))
+    .child(secondary(PHONES_PRIVACY, t).px(px(sp::S)))
+}
+
+/// A label, its value, then whatever buttons the caller adds.
+fn field(label: &'static str, value: &str, t: Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(sp::M))
+        .px(px(sp::S))
+        .child(
+            div()
+                .w(px(76.))
+                .flex_none()
+                .font_weight(FontWeight::MEDIUM)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(t.muted))
+                .child(value.to_string()),
+        )
+}
+
+/// The QR code, its countdown and Cancel, while the code is out.
+fn pairing_sheet(s: &Started, entity: &Entity<Hub>, t: Theme, now: i64) -> Div {
+    let left = (s.expires_at_ms - now).max(0) / 1000;
+    div()
+        .p(px(sp::L))
+        .rounded(px(10.))
+        .bg(rgb(t.window))
+        .border_1()
+        .border_color(rgb(t.keyline))
+        .flex()
+        .items_center()
+        .gap(px(sp::XL))
+        .child(qr_code(&s.qr))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(sp::S))
+                .child(
+                    div()
+                        .text_size(px(ty::ROW_TITLE))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Scan with AgentPulse on your iPhone"),
+                )
+                .child(secondary(
+                    &format!("Expires in {}:{:02}", left / 60, left % 60),
+                    t,
+                ))
+                .child(
+                    div().flex().child(
+                        button("cancel-pairing", "Cancel", t)
+                            .aria_label("Cancel pairing")
+                            .on_click(on_hub(entity, |h, _| h.phones.cancel_pairing())),
+                    ),
+                ),
+        )
+}
+
+/// Black modules on a white square in both themes, so any camera reads it.
+fn qr_code(qr: &Qr) -> Stateful<Div> {
+    let qr = qr.clone();
+    let n = qr.size + 2 * QR_QUIET;
+    let module = (QR_SIDE / n as f32).round().max(1.);
+    div()
+        .id("pair-qr")
+        .role(Role::Image)
+        .aria_label("Pairing QR code")
+        .flex_none()
+        .size(px(module * n as f32))
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |b, _, window, _| {
+                    window.paint_quad(fill(b, rgb(0xFFFFFF)));
+                    for (i, _) in qr.dark.iter().enumerate().filter(|(_, d)| **d) {
+                        let (x, y) = (i % qr.size + QR_QUIET, i / qr.size + QR_QUIET);
+                        let at = b.origin + point(px(module * x as f32), px(module * y as f32));
+                        window.paint_quad(fill(
+                            Bounds::new(at, size(px(module), px(module))),
+                            rgb(0x000000),
+                        ));
+                    }
+                },
+            )
+            .size_full(),
+        )
+}
+
+/// A paired or confirming phone; None for one still waiting (the sheet shows it).
+fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> Option<Div> {
+    let name = p.name.clone().unwrap_or_else(|| "iPhone".into());
+    let row = div().px(px(sp::S)).flex().items_center().gap(px(sp::M));
+    let id = p.id.clone();
+    if p.state == State::Confirming {
+        let code = p.code.as_deref().filter(|c| c.len() == 6 && c.is_ascii());
+        let decline = id.clone();
+        return Some(
+            row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .child(format!("Pair with {name}?")),
+                    )
+                    .child(secondary(
+                        &code.map_or("Working out the code…".into(), |c| {
+                            format!("Check that your phone shows {} {}.", &c[..3], &c[3..])
+                        }),
+                        t,
+                    )),
+            )
+            // Confirm only once there is a code to compare.
+            .when(code.is_some(), |d| {
+                d.child(
+                    // The primary action: `button` in the accent colour.
+                    div()
+                        .id(("confirm", i))
+                        .role(Role::Button)
+                        .aria_label(format!("Confirm pairing with {name}"))
+                        .flex_none()
+                        .px(px(sp::M))
+                        .py(px(sp::XS))
+                        .rounded(px(8.))
+                        .with_focus_ring(t)
+                        .bg(rgb(t.work))
+                        .text_color(rgb(ON_RIBBON))
+                        .font_weight(FontWeight::MEDIUM)
+                        .hover(|s| s.opacity(0.9))
+                        .child("Confirm")
+                        .on_click(on_hub(entity, move |h, _| h.phones.confirm(&id))),
+                )
+            })
+            .child(
+                button(("decline", i), "Decline", t)
+                    .aria_label(format!("Decline pairing with {name}"))
+                    .on_click(on_hub(entity, move |h, _| h.phones.decline(&decline))),
+            ),
+        );
+    }
+    let lines: Vec<String> = match p.state {
+        State::Waiting => return None,
+        State::Gone => vec!["The relay no longer has this pairing.".into()],
+        _ => {
+            let seen = match p.last_seen_ms {
+                Some(ms) if now - ms < 60_000 => "Last seen just now".to_string(),
+                Some(ms) => format!("Last seen {} ago", ago(now - ms)),
+                None => "Not seen yet".to_string(),
+            };
+            let direct = p.direct.then(|| "Connected on this network".to_string());
+            [seen].into_iter().chain(direct).collect()
+        }
+    };
+    Some(
+        row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .truncate()
+                        .child(name.clone()),
+                )
+                .children(lines.iter().map(|l| secondary(l, t))),
+        )
+        .child(
+            button(("remove", i), "Remove", t)
+                .aria_label(format!("Remove {name}"))
+                .on_click(on_hub(entity, move |h, _| h.phones.remove(&id))),
+        ),
+    )
+}
+
 /// The newer release: its version, date and notes, and where to get it.
 fn release(r: &Release, t: Theme) -> Div {
     let url = r.url.clone();
@@ -281,7 +580,7 @@ fn card_title(text: &'static str) -> Div {
         .child(text)
 }
 
-pub(super) fn button(id: &'static str, label: &'static str, t: Theme) -> Stateful<Div> {
+pub(super) fn button(id: impl Into<ElementId>, label: &'static str, t: Theme) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)

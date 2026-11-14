@@ -4,11 +4,13 @@
 //!
 //! One worker thread makes every bridge and network call. It is driven by commands, by
 //! [`PhoneLink::publish`] and by the bridge's listener events. Off by default: with no
-//! pairing and none in progress it makes no call at all and only waits on its channel.
+//! relay address and no pairing it makes no call at all and only waits on its channel.
 //! Secrets stay in the Keychain behind the bridge; `phones.json` holds no secret and
 //! nothing here logs one. The Mac's relay tokens are cached in memory only.
 
 mod bridge;
+#[cfg(feature = "e2e")]
+pub mod e2e;
 mod relay;
 mod store;
 #[cfg(test)]
@@ -69,6 +71,30 @@ pub struct Started {
     pub id: String,
     pub link: String,
     pub expires_at_ms: i64,
+    pub qr: Qr,
+}
+
+/// The link's QR code: `size` × `size` modules, row by row, true for dark, including the
+/// 1-module light margin CIQRCodeGenerator leaves around the symbol.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Qr {
+    pub size: usize,
+    pub dark: Vec<bool>,
+}
+
+impl Qr {
+    /// From the bridge's `qr` reply at scale 1: one RGBA pixel per module.
+    fn from_bridge(v: &Value) -> Result<Qr, String> {
+        let size = v["width"].as_u64().unwrap_or(0) as usize;
+        let rgba = v["rgba"].as_str().and_then(from_b64url).unwrap_or_default();
+        if size == 0 || v["height"].as_u64() != Some(size as u64) || rgba.len() != size * size * 4 {
+            return Err("bad QR image from the bridge".into());
+        }
+        Ok(Qr {
+            size,
+            dark: rgba.chunks(4).map(|px| px[0] < 128).collect(),
+        })
+    }
 }
 
 /// What the Settings card shows.
@@ -79,6 +105,9 @@ pub struct View {
     pub phones: Vec<Phone>,
     pub pending: Option<Started>,
     pub error: Option<String>,
+    /// The relay's `RELAY_KEY` is in the Keychain; None until known (read once a relay
+    /// address is set).
+    pub relay_key: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,8 +132,6 @@ pub struct PhoneLink {
     settings: Settings,
 }
 
-// The Settings card (step 2b) uses the commands and the view.
-#[allow(dead_code)]
 impl PhoneLink {
     /// Starts the worker. The bridge is used only when running from inside
     /// AgentPulse.app; otherwise phones are unavailable, logged once here.
@@ -204,6 +231,11 @@ impl PhoneLink {
 }
 
 fn bundle_bridge() -> Option<PathBuf> {
+    // The end-to-end test's bridge, built outside a bundle (scripts/e2e-phones.sh).
+    #[cfg(feature = "e2e")]
+    if let Some(path) = std::env::var_os("AGENTPULSE_LINK_BRIDGE") {
+        return Some(path.into());
+    }
     let exe = std::env::current_exe().ok()?;
     let contents = exe.parent()?.parent()?;
     if contents.file_name()? != "Contents" || contents.parent()?.extension()? != "app" {
@@ -281,6 +313,8 @@ struct Core {
     listener_retry_ms: i64,
     /// Live direct connections: connection number to pairing id.
     connections: HashMap<i64, String>,
+    /// Whether the relay key is in the Keychain; None until read, once a relay is set.
+    relay_key: Option<bool>,
     shared: Shared,
 }
 
@@ -309,6 +343,7 @@ impl Core {
             listener: None,
             listener_retry_ms: 0,
             connections: HashMap::new(),
+            relay_key: None,
             shared,
         };
         // A code no longer shown (the app restarted) can't be shown again.
@@ -338,8 +373,9 @@ impl Core {
             Msg::Command(Command::Remove(id)) => self.remove(&id, now),
             Msg::Command(Command::CancelPairing) => self.cancel_pairing(now),
             Msg::Command(Command::SetRelayKey(key)) => {
-                if let Err(e) = self.bridge(&json!({"op": "relaykey.set", "key": key})) {
-                    self.error = Some(format!("Cannot keep the relay key: {e}"));
+                match self.bridge(&json!({"op": "relaykey.set", "key": key})) {
+                    Ok(_) => self.relay_key = Some(key.is_some()),
+                    Err(e) => self.error = Some(format!("Cannot keep the relay key: {e}")),
                 }
             }
         }
@@ -404,11 +440,23 @@ impl Core {
             self.forget(&id, false, now);
             return Err(failure);
         }
+        let link = field("link");
+        let qr = self
+            .bridge(&json!({"op": "qr", "text": link, "scale": 1}))
+            .and_then(|v| Qr::from_bridge(&v));
+        let qr = match qr {
+            Ok(qr) => qr,
+            Err(e) => {
+                self.forget(&id, true, now);
+                return Err(format!("Cannot make the QR code: {e}"));
+            }
+        };
         self.live.entry(id.clone()).or_default().next_poll_ms = now + POLL_WAITING_MS;
         let started = Started {
             id,
-            link: field("link"),
+            link,
             expires_at_ms: now + EXPIRY_MS,
+            qr,
         };
         self.pending = Some(started.clone());
         Ok(started)
@@ -471,6 +519,13 @@ impl Core {
     fn tick(&mut self, now: i64) {
         if self.bridge.is_none() {
             return;
+        }
+        if self.relay_key.is_none() && self.settings.phones().relay.is_some() {
+            // A failure leaves it unknown, so a later tick tries again.
+            match self.bridge(&json!({"op": "relaykey.get"})) {
+                Ok(v) => self.relay_key = Some(v["key"].is_string()),
+                Err(e) => tracing::warn!(error = %e, "cannot read the relay key"),
+            }
         }
         let ids: Vec<(String, State)> = self
             .pairings
@@ -974,6 +1029,7 @@ impl Core {
                 .collect(),
             pending: self.pending.clone(),
             error: self.error.clone(),
+            relay_key: self.relay_key,
         };
         let paired = self.pairings.iter().any(|p| p.state == State::Paired);
         self.shared.publishing.store(paired, Ordering::Relaxed);

@@ -14,6 +14,9 @@ path = "src/main.rs"
 # `Window::render_to_image` with its test-support feature.
 # `--menubar-preview <dir>`: writes the menu bar icon bitmaps as PNGs.
 screenshot = ["gpui/test-support", "gpui_platform/test-support", "dep:png"]
+# `--phone-e2e <relay>`: the phone link's end-to-end driver for scripts/e2e-phones.sh,
+# with the bridge from AGENTPULSE_LINK_BRIDGE. Never in a shipped build.
+e2e = []
 
 [dependencies]
 agentpulse-core.workspace = true

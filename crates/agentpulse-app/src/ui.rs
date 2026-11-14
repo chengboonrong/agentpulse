@@ -26,6 +26,7 @@ use gpui::{
 use crate::collector::{Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
+use crate::phones::PhoneLink;
 use crate::settings::Settings;
 
 mod cats;
@@ -90,6 +91,7 @@ pub fn run(
     details: Sender<Option<Key>>,
     options: Options,
     settings: Settings,
+    phones: PhoneLink,
 ) {
     let app = gpui_platform::application().with_quit_mode(QuitMode::Explicit);
     // Clicking the Dock icon.
@@ -128,7 +130,7 @@ pub fn run(
                 tx.try_send(action).ok();
             }),
         );
-        let hub = cx.new(|cx| Hub::new(rx, item, settings.clone(), cx));
+        let hub = cx.new(|cx| Hub::new(rx, item, settings.clone(), phones, cx));
         #[cfg(feature = "screenshot")]
         let screenshot = options.screenshot_dir.is_some();
         #[cfg(not(feature = "screenshot"))]
@@ -730,8 +732,127 @@ async fn screenshot(
         cx.notify();
     })?;
     cx.update(|window, cx| capture(window, cx, &dir.join("settings-end.png")))??;
+    // The Phones card from fixtures: no bridge, no network.
+    for (file, fixture) in phone_fixtures(crate::hub::now_ms()) {
+        this.update(cx, |this, cx| {
+            this.hub.update(cx, |hub, cx| {
+                hub.phone_fixture = Some(fixture);
+                hub.phones_changed(cx);
+            });
+            // The card is the page's fourth child, after the heading and two cards.
+            this.page_scroll.scroll_to_item(3);
+            cx.notify();
+        })?;
+        cx.update(|window, cx| capture(window, cx, &dir.join(file)))??;
+    }
     tracing::info!(dir = %dir.display(), "saved screenshots");
     Ok(())
+}
+
+/// The Phones card's states for screenshots, each with its `phones` settings.
+#[cfg(feature = "screenshot")]
+fn phone_fixtures(now: i64) -> [(&'static str, (crate::phones::View, crate::settings::Phones)); 4] {
+    use crate::phones::{Phone, Qr, Started, State, View};
+    use crate::settings::Phones;
+    // Any 25×25 pattern does for layout: three finder squares and a scatter.
+    let dark = (0..25 * 25usize)
+        .map(|i| {
+            let (x, y) = (i % 25, i / 25);
+            let ring = |cx: usize, cy: usize| {
+                let d = x.abs_diff(cx).max(y.abs_diff(cy));
+                d <= 3 && d != 2
+            };
+            if !(8..17).contains(&x) && y < 8 || x < 8 && y >= 17 {
+                ring(3, 3) || ring(21, 3) || ring(3, 21)
+            } else {
+                (x * 7 + y * 13 + x * y) % 3 == 0
+            }
+        })
+        .collect();
+    let relay = Phones {
+        relay: Some("https://relay.example.com".into()),
+        direct: true,
+    };
+    let phone = |id: &str, name: Option<&str>, state, code: Option<&str>, seen, direct| Phone {
+        id: id.into(),
+        name: name.map(str::to_owned),
+        state,
+        code: code.map(str::to_owned),
+        last_seen_ms: seen,
+        direct,
+    };
+    let view = View {
+        available: true,
+        ..View::default()
+    };
+    [
+        ("phones-no-relay.png", (view.clone(), Phones::default())),
+        (
+            "phones-qr.png",
+            (
+                View {
+                    pending: Some(Started {
+                        id: "fixture".into(),
+                        link: String::new(),
+                        expires_at_ms: now + 9 * 60_000 + 41_000,
+                        qr: Qr { size: 25, dark },
+                    }),
+                    relay_key: Some(true),
+                    ..view.clone()
+                },
+                relay.clone(),
+            ),
+        ),
+        (
+            "phones-confirm.png",
+            (
+                View {
+                    // The second one's code is still being worked out.
+                    phones: vec![
+                        phone(
+                            "a",
+                            Some("Work iPhone"),
+                            State::Confirming,
+                            Some("123456"),
+                            None,
+                            false,
+                        ),
+                        phone("b", None, State::Confirming, None, None, false),
+                    ],
+                    ..view.clone()
+                },
+                relay.clone(),
+            ),
+        ),
+        (
+            "phones-paired.png",
+            (
+                View {
+                    phones: vec![
+                        phone(
+                            "a",
+                            Some("Work iPhone"),
+                            State::Paired,
+                            None,
+                            Some(now - 6 * 60_000),
+                            true,
+                        ),
+                        phone(
+                            "b",
+                            None,
+                            State::Gone,
+                            None,
+                            Some(now - 3 * 86_400_000),
+                            false,
+                        ),
+                    ],
+                    relay_key: Some(true),
+                    ..view
+                },
+                relay,
+            ),
+        ),
+    ]
 }
 
 /// Draws a fresh frame and reads it back. Drawing here rather than waiting
@@ -2296,6 +2417,8 @@ mod tests {
                 ),
                 (&[ON_RIBBON], &[t.need, t.sprint, t.work, t.idle, t.fail]),
                 (&[t.ended_text], &[t.ended]),
+                // The Phones card's errors.
+                (&[t.failed], &[t.card]),
             ];
             for (fgs, bgs) in pairs {
                 for (&fg, &bg) in fgs.iter().flat_map(|f| bgs.iter().map(move |b| (f, b))) {

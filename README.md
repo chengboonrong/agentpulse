@@ -96,8 +96,9 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
   wears the coat of the agent it follows, so with default settings a widget driven by Codex
   shows Codex's dark cat, not the ginger one.
 
-Everything stays on this machine. AgentPulse never reads or stores prompt, response or file
-content, and makes one kind of network request: the update check, an HTTPS
+Everything stays on this machine unless you pair a phone (below). AgentPulse never reads or
+stores prompt, response or file content. Without a paired phone it makes one kind of network
+request: the update check, an HTTPS
 `GET https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10` with the
 headers `User-Agent: AgentPulse/<version>`, `Accept: application/vnd.github+json` and
 `Accept-Language: en`, plus the standard `Accept-Encoding` that macOS adds. It sends no
@@ -108,6 +109,15 @@ default; turn off "Check for updates automatically" in Settings to stop that. "C
 works either way. Nothing is downloaded or installed by itself: a new release only shows a
 notice with a link to its GitHub page. Values AgentPulse cannot measure are shown as
 unavailable, not as zero.
+
+Phones (Settings, Phones; opt-in, see [docs/mobile.md](docs/mobile.md)) make no request until
+a relay address is set and a phone is being paired or is paired. A paired phone gets the
+widget's metadata (live sessions with their project's folder name, today's tokens and cost,
+the output rate, the cat), never paths, prompts or code, sealed end to end for that phone.
+The relay, at the address you set and only there, stores that ciphertext and passes on the
+phone's sealed replies; it can't read either. "Direct connection" (on by default) also sends
+it straight to the phone on the same network: the Mac advertises Bonjour `_agentpulse._tcp`
+while a phone is paired, and the connection is encrypted with the pairing's keys.
 
 ## Requirements
 

@@ -216,6 +216,22 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
     Some((map, state))
 }
 
+/// A relay address from pasted text, without a trailing slash: `https://…`, or for
+/// testing `http://localhost` (the only plain-HTTP host the link accepts). None for anything else.
+pub fn relay_address(text: &str) -> Option<String> {
+    let s = text.trim().trim_end_matches('/');
+    let (plain, rest) = match s.strip_prefix("https://") {
+        Some(rest) => (false, rest),
+        None => (true, s.strip_prefix("http://")?),
+    };
+    let host = rest.split(['/', ':']).next().unwrap_or_default();
+    // No user info, query or fragment: `http://localhost:80@evil.example` is evil.example.
+    let ok = !host.is_empty()
+        && !s.contains(|c: char| c.is_whitespace() || matches!(c, '@' | '?' | '#'))
+        && (!plain || host == "localhost");
+    ok.then(|| s.to_string())
+}
+
 fn blank_is_none(s: String) -> Option<String> {
     let s = s.trim();
     (!s.is_empty()).then(|| s.to_string())
@@ -345,8 +361,6 @@ impl Settings {
         self.change(Part::Updates, |s| s.updates = u);
     }
 
-    // The Settings card (step 2b) sets it.
-    #[allow(dead_code)]
     pub fn set_phones(&self, p: Phones) {
         let p = Phones {
             relay: p.relay.and_then(blank_is_none),
@@ -475,6 +489,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentpulse-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn relay_addresses_are_https_or_this_mac() {
+        let ok = |text: &str| relay_address(text).unwrap_or_default();
+        assert_eq!(ok(" https://relay.example/ \n"), "https://relay.example");
+        assert_eq!(ok("http://localhost:8787"), "http://localhost:8787");
+        for bad in [
+            "",
+            "http://127.0.0.1:8787",
+            "relay.example",
+            "https://",
+            "https://a b",
+            "http://relay.example",
+            "http://localhost.example",
+            "ftp://localhost",
+            "http://localhost:80@evil.example",
+            "https://u:p@r.example",
+            "https://r.example/?x",
+        ] {
+            assert_eq!(relay_address(bad), None, "{bad}");
+        }
     }
 
     #[test]

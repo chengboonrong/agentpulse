@@ -8,5 +8,7 @@ let package = Package(
     targets: [
         .target(name: "AgentPulseLink"),
         .testTarget(name: "AgentPulseLinkTests", dependencies: ["AgentPulseLink"]),
+        // scripts/e2e-phones.sh's phone.
+        .executableTarget(name: "phone-sim", dependencies: ["AgentPulseLink"]),
     ]
 )

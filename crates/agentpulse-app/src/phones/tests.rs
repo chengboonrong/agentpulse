@@ -105,6 +105,12 @@ impl Bridge for FakeBridge {
                 Ok(json!({}))
             }
             "relaykey.get" => Ok(json!({"key": s.relay_key})),
+            // A 2×2 code, dark only at the top left.
+            "qr" => {
+                let mut rgba = vec![255u8; 2 * 2 * 4];
+                rgba[..3].fill(0);
+                Ok(json!({"width": 2, "height": 2, "rgba": b64url(&rgba)}))
+            }
             op => Err(format!("unexpected op {op}")),
         }
     }
@@ -356,6 +362,7 @@ impl Rig {
 #[test]
 fn nothing_happens_without_pairings() {
     let mut r = rig("idle");
+    r.settings.set_phones(Phones::default());
     r.core.handle(Msg::Publish(Box::new(payload(1, 1))), T0);
     r.core.handle(Msg::Wake, T0);
     r.core.tick(T0);
@@ -366,6 +373,26 @@ fn nothing_happens_without_pairings() {
     assert!(!r.dir.join(store::FILE_NAME).exists());
     assert!(!r.core.shared.publishing.load(Ordering::Relaxed));
     assert_eq!(view(&r).phones, []);
+}
+
+#[test]
+fn a_relay_address_alone_only_reads_the_relay_key() {
+    let mut r = rig("relay-only");
+    for t in [T0, T0 + 1_000, T0 + 3_600_000] {
+        r.core.tick(t);
+    }
+    assert_eq!(r.bridge.ops(), ["relaykey.get"]);
+    assert!(r.relay.requests().is_empty());
+    assert_eq!(view(&r).relay_key, Some(false));
+
+    // A failed read leaves it unknown, and the next tick tries again.
+    let mut r = rig("relay-key-retry");
+    r.bridge.fail("relaykey.get", Some("keychain: locked"));
+    r.core.tick(T0);
+    assert_eq!(view(&r).relay_key, None);
+    r.bridge.fail("relaykey.get", None);
+    r.core.tick(T0 + 1_000);
+    assert_eq!(view(&r).relay_key, Some(false));
 }
 
 #[test]
@@ -387,6 +414,8 @@ fn a_full_pairing() {
     let started = result.try_recv().unwrap().unwrap();
     let id = started.id.clone();
     assert_eq!(started.expires_at_ms, T0 + EXPIRY_MS);
+    let dark = vec![true, false, false, false];
+    assert_eq!(started.qr, Qr { size: 2, dark });
     assert!(
         started
             .link
@@ -852,11 +881,14 @@ fn base64url_round_trips() {
 fn the_relay_key_goes_only_on_create() {
     let mut r = rig("relay-key");
     r.relay.0.lock().unwrap().relay_key = Some("deployer-key".into());
+    r.core.tick(T0);
+    assert_eq!(view(&r).relay_key, Some(false));
     assert!(r.core.start_pairing(T0).unwrap_err().contains("401"));
     r.core.handle(
         Msg::Command(Command::SetRelayKey(Some("deployer-key".into()))),
         T0,
     );
+    assert_eq!(view(&r).relay_key, Some(true));
     let id = r.pair();
     r.publish(payload(1, 1), T0 + 60_000);
     r.core
@@ -875,6 +907,7 @@ fn the_relay_key_goes_only_on_create() {
     assert!(!saved.contains("deployer-key"));
     r.core.handle(Msg::Command(Command::SetRelayKey(None)), T0);
     assert_eq!(r.bridge.0.lock().unwrap().relay_key, None);
+    assert_eq!(view(&r).relay_key, Some(false));
 }
 
 #[test]

@@ -294,21 +294,47 @@ private final class LinkBridge: @unchecked Sendable {
     // Every Keychain failure's text starts with "keychain:", which the Rust side reads as
     // transient (a pairing is kept for another try).
 
+    #if AGENTPULSE_E2E
+    /// Only in scripts/e2e-phones.sh's build of the bridge, never in the bundle's:
+    /// `AGENTPULSE_KEYCHAIN=<absolute path to a .keychain-db>` keeps every item in that file
+    /// instead of the login keychain. Set but not an absolute path to an openable file,
+    /// every Keychain call fails; it never falls back to the login keychain.
+    private let testKeychain: Result<SecKeychain?, BridgeError> = {
+        guard let path = ProcessInfo.processInfo.environment["AGENTPULSE_KEYCHAIN"] else { return .success(nil) }
+        var keychain: SecKeychain?
+        // SecKeychainOpen is deprecated along with file keychains; this test-only call is
+        // the bridge's one use of that API and its one deprecation warning.
+        let usable = path.hasPrefix("/") && FileManager.default.fileExists(atPath: path)
+        let status = usable ? SecKeychainOpen(path, &keychain) : errSecNoSuchKeychain
+        guard status == errSecSuccess, let keychain else {
+            return .failure(BridgeError("keychain: cannot open AGENTPULSE_KEYCHAIN (\(status))"))
+        }
+        return .success(keychain)
+    }()
+    #endif
+
     private func account(_ id: Data, _ kind: String) -> String { "\(id.base64URLEncodedString()).\(kind)" }
 
-    private func query(_ account: String) -> Json {
-        [
+    /// One item's query, for adding it or for finding it.
+    private func query(_ account: String, adding: Bool = false) throws -> Json {
+        var q: Json = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: account,
         ]
+        #if AGENTPULSE_E2E
+        if let keychain = try testKeychain.get() {
+            if adding { q[kSecUseKeychain as String] = keychain } else { q[kSecMatchSearchList as String] = [keychain] }
+        }
+        #endif
+        return q
     }
 
     /// Updates in place, so a failure keeps the old value.
     private func keychainSet(_ account: String, _ value: Data) throws {
-        var status = SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: value] as CFDictionary)
+        var status = SecItemUpdate(try query(account) as CFDictionary, [kSecValueData as String: value] as CFDictionary)
         if status == errSecItemNotFound {
-            var q = query(account)
+            var q = try query(account, adding: true)
             q[kSecValueData as String] = value
             status = SecItemAdd(q as CFDictionary, nil)
         }
@@ -317,7 +343,7 @@ private final class LinkBridge: @unchecked Sendable {
 
     /// nil when there is no such item.
     private func keychainRead(_ account: String) throws -> Data? {
-        var q = query(account)
+        var q = try query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -335,7 +361,7 @@ private final class LinkBridge: @unchecked Sendable {
     }
 
     private func keychainDelete(_ account: String) throws {
-        let status = SecItemDelete(query(account) as CFDictionary)
+        let status = SecItemDelete(try query(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw BridgeError("keychain: cannot delete (\(status))")
         }
