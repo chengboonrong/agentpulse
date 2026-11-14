@@ -1,7 +1,8 @@
 //! `--phone-e2e <relay>`, scripts/e2e-phones.sh's Mac side: the real bridge and worker
 //! against a running relay and the phone simulator (`link/Sources/phone-sim`). Headless.
 //! Prints `LINK <link>` and `CODE <code>` for the script, then `OK`, or `FAIL <why>`
-//! and exits 1.
+//! and exits 1. `SEEN` in between, once the phone has sent `seen` and is connected directly
+//! (scripts/e2e-ios.sh screenshots the app then, before it removes the Mac).
 
 use std::io::Write;
 use std::path::Path;
@@ -99,6 +100,7 @@ fn drive(dir: &Path, relay: &str) -> Result<(), String> {
             .any(|p| p.id == id && p.last_seen_ms.is_some() && p.direct)
             .then_some(())
     })?;
+    say("SEEN");
     wait(&link, deadline, "the phone's unpair", |v| {
         v.phones.is_empty().then_some(())
     })

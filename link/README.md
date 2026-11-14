@@ -12,6 +12,12 @@ CryptoKit values or raw bytes, and storing them (Keychain) is the caller's job.
 - `LinkListener` (Mac), `LinkClient` and `LinkBrowser` (phone): the direct connection
   over Network.framework.
 
+`AgentPulsePhone`, a second library, is the phone's side on top of it, shared by the iPhone
+app (`ios/`), its widgets and `phone-sim` (scripts/e2e-phones.sh's phone): `PhoneStore`
+(pairings and the `seq` records in a JSON file in the App Group container, secrets in a
+`SecretStore`: the Keychain, or memory) and `PhoneClient` (pairing, `GET down`, `POST up`,
+remove, the direct connection).
+
 The protocol is specified in [docs/mobile.md](../docs/mobile.md) ("Cryptography",
 "Pairing" and "Direct connection"). CryptoKit, Foundation and Network only; macOS 14,
 iOS 17.
@@ -22,5 +28,7 @@ iOS 17.
 cd link && swift test
 ```
 
-The transport tests run over 127.0.0.1 with Bonjour off, so they need no network
-permission. One of them waits out the 5 s handshake timeout.
+`AgentPulsePhoneTests` run against a relay faked with `URLProtocol` and secrets in memory,
+so they touch neither the network nor the Keychain. The transport tests run over 127.0.0.1
+with Bonjour off, so they need no network permission. One of them waits out the 5 s
+handshake timeout.

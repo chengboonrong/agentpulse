@@ -1,0 +1,71 @@
+# XcodeGen spec for the iPhone app and its widgets. `xcodegen generate --spec ios/project.yml
+# --project ios` writes AgentPulsePhone.xcodeproj (untracked, like macos/). Simulator builds
+# only, signed "to run locally" (ad hoc), so no team id appears here.
+name: AgentPulsePhone
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  AgentPulseLink:
+    path: ../link
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  AgentPulse:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: [Info.plist, AgentPulse.entitlements]
+      - ../macos/Shared
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulse
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.phone
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/AgentPulse.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: AgentPulse
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: AgentPulse uses the camera to scan the pairing code your Mac shows.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: AgentPulse connects directly to your paired Macs on the same network.
+    dependencies:
+      - target: AgentPulseWidget
+      - package: AgentPulseLink
+        product: AgentPulseLink
+      - package: AgentPulseLink
+        product: AgentPulsePhone
+    scheme: {}
+  AgentPulseWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+        excludes: [Info.plist, AgentPulseWidget.entitlements]
+      - ../macos/Shared
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseWidget
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.phone.Widgets
+        INFOPLIST_FILE: Widget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Widget/AgentPulseWidget.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: AgentPulse
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: AgentPulseLink
+        product: AgentPulsePhone
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    scheme: {}
