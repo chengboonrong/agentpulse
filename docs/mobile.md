@@ -77,7 +77,7 @@ JSON objects with `seq` (a counter per pairing and direction, from 0) and `type`
 | Direction | `type` | Other fields |
 |---|---|---|
 | down | `state` | `payload`: the widget payload |
-| down | `heartbeat` | `sentAtMs` |
+| down | `heartbeat` | `sentAtMs`; direct connections only, with the `seq` of the latest `state`, so it never advances a receiver's record |
 | up | `seen` | `sentAtMs`; sent when the app opens, every 6 hours from background refresh, and as the first frame of a direct connection |
 | up | `unpair` | none; the Mac removes the pairing |
 
@@ -214,8 +214,14 @@ pushes only go through the relay. Widgets use the relay only.
   seen time and whether they are connected directly, and Remove per phone.
 - The direct listener (see above), sending the same state messages to connected phones.
 - Publishing, per confirmed pairing: the widget payload, sealed, `PUT down` when it
-  changed (ignoring `generatedAtMs`) and at most every 10 s, plus a heartbeat every
-  5 minutes. Reads `up` on every publish and every 30 s while a pairing awaits its hello.
+  changed (ignoring `generatedAtMs`) and at most every 10 s. Every 5 minutes it re-sends
+  the state with a fresh `generatedAtMs` instead of a heartbeat, because the relay keeps
+  one slot and a heartbeat there would replace the state. Reads `up` after every publish
+  and every 30 s, and every 2 s while a pairing's QR code is shown.
+- The direct listener starts once there is a state to send, so a phone's first frame is
+  always a state.
+- A relay that sets `RELAY_KEY`: Settings takes the key, kept in the Keychain and sent
+  only when creating a pairing.
 - Live Activity pushes, when the phone has sent tokens:
   - `start` when the first agent becomes active (iOS 17.2 push-to-start);
   - `update` when the glance changes, at most once a minute unless urgent;

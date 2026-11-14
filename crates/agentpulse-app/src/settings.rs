@@ -1,10 +1,11 @@
 //! `settings.json` in the data directory: each agent's cat coat and eye colour,
-//! the animation, and the update check.
+//! the animation, the update check, and the phone link.
 //!
 //! ```json
 //! {"cats": {"claude-code": {"coat": "calico", "eye": "blue"}, "codex": {"coat": "tuxedo", "eye": null}},
 //!  "animation": {"enabled": true, "speed": 1.0},
-//!  "updates": {"auto": true, "last_checked_ms": 0, "dismissed": "0.0.5"}}
+//!  "updates": {"auto": true, "last_checked_ms": 0, "dismissed": "0.0.5"},
+//!  "phones": {"relay": "https://relay.example", "direct": true}}
 //! ```
 //!
 //! `eye: null` keeps the coat's own eyes. A missing file, section, entry or
@@ -20,10 +21,10 @@
 //!
 //! Every change first takes up what is on disk (another instance may have
 //! written it), then writes back only what it changed: one agent's entry in
-//! `cats`, or the whole `animation` or `updates` section. Unknown top-level
-//! keys and the other entries in `cats`, including agents this version does not
-//! know, are kept; unknown fields inside `animation` or `updates` are dropped
-//! when that section is saved.
+//! `cats`, or the whole `animation`, `updates` or `phones` section. Unknown
+//! top-level keys and the other entries in `cats`, including agents this version
+//! does not know, are kept; unknown fields inside `animation`, `updates` or
+//! `phones` are dropped when that section is saved. A blank relay is null.
 
 use std::fs;
 use std::io::Write;
@@ -113,11 +114,30 @@ impl Default for Updates {
     }
 }
 
+/// The phone link (docs/mobile.md, "Mac client").
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Phones {
+    /// The relay's base URL; none until the user sets one.
+    pub relay: Option<String>,
+    /// The direct connection on the same network.
+    pub direct: bool,
+}
+
+impl Default for Phones {
+    fn default() -> Self {
+        Phones {
+            relay: None,
+            direct: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct State {
     looks: Looks,
     animation: Animation,
     updates: Updates,
+    phones: Phones,
 }
 
 /// What one change touches; only that part of the file is rewritten.
@@ -126,6 +146,7 @@ enum Part {
     Cat(Provider),
     Animation,
     Updates,
+    Phones,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -164,7 +185,8 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
         v.as_object()
     };
     let (cats, animation, updates) = (section("cats"), section("animation"), section("updates"));
-    let (a, u) = (Animation::default(), Updates::default());
+    let phones = section("phones");
+    let (a, u, p) = (Animation::default(), Updates::default(), Phones::default());
     let speed = field(animation, "animation", "speed", Value::as_f64).map_or(a.speed, |v| v as f32);
     let speed = if speed.is_finite() {
         speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1)
@@ -185,8 +207,18 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
                 v.as_str().map(str::to_owned)
             }),
         },
+        phones: Phones {
+            relay: field(phones, "phones", "relay", |v| v.as_str().map(str::to_owned))
+                .and_then(blank_is_none),
+            direct: field(phones, "phones", "direct", Value::as_bool).unwrap_or(p.direct),
+        },
     };
     Some((map, state))
+}
+
+fn blank_is_none(s: String) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
 }
 
 /// `section.name`, if present, null or of the right type; a wrong type is warned about.
@@ -251,6 +283,10 @@ fn sections(state: &State) -> Map<String, Value> {
             "updates".into(),
             serde_json::to_value(&state.updates).expect("plain values"),
         ),
+        (
+            "phones".into(),
+            serde_json::to_value(&state.phones).expect("plain values"),
+        ),
     ])
 }
 
@@ -293,6 +329,10 @@ impl Settings {
         self.read().updates.clone()
     }
 
+    pub fn phones(&self) -> Phones {
+        self.read().phones.clone()
+    }
+
     pub fn set(&self, p: Provider, look: Look) {
         self.change(Part::Cat(p), |s| s.looks.set(p, look));
     }
@@ -303,6 +343,16 @@ impl Settings {
 
     pub fn set_updates(&self, u: Updates) {
         self.change(Part::Updates, |s| s.updates = u);
+    }
+
+    // The Settings card (step 2b) sets it.
+    #[allow(dead_code)]
+    pub fn set_phones(&self, p: Phones) {
+        let p = Phones {
+            relay: p.relay.and_then(blank_is_none),
+            ..p
+        };
+        self.change(Part::Phones, |s| s.phones = p);
     }
 
     /// Applies at once and saves the part it changed; a failed save is warned
@@ -354,11 +404,11 @@ impl Settings {
                 cats.insert(p.as_str().into(), Choice::of(state.looks.get(p)));
                 file.insert("cats".into(), Value::Object(cats));
             }
-            Part::Animation | Part::Updates => {
-                let name = if matches!(part, Part::Animation) {
-                    "animation"
-                } else {
-                    "updates"
+            Part::Animation | Part::Updates | Part::Phones => {
+                let name = match part {
+                    Part::Animation => "animation",
+                    Part::Updates => "updates",
+                    _ => "phones",
                 };
                 file.insert(name.into(), sections(state)[name].clone());
             }
@@ -513,6 +563,9 @@ mod tests {
         assert_eq!(s.looks.get(Provider::Codex).coat.id, "tuxedo");
         assert_eq!(s.animation, Animation::default());
         assert_eq!(s.updates, Updates::default());
+        assert_eq!(s.phones, Phones::default());
+        assert_eq!(s.phones.relay, None);
+        assert!(s.phones.direct);
     }
 
     #[test]
@@ -528,12 +581,30 @@ mod tests {
             last_checked_ms: 1_763_000_000_000,
             dismissed: Some("0.0.5".into()),
         };
+        let phones = Phones {
+            relay: Some("https://relay.example".into()),
+            direct: false,
+        };
         s.set_animation(animation);
         s.set_updates(updates.clone());
+        s.set_phones(phones.clone());
         let again = Settings::load(&dir);
         assert_eq!(again.animation(), animation);
         assert_eq!(again.updates(), updates);
+        assert_eq!(again.phones(), phones);
         assert_eq!(again.looks(), Looks::default());
+        // A blank relay is stored as null.
+        s.set_phones(Phones {
+            relay: Some("  ".into()),
+            direct: true,
+        });
+        let v: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(
+            v["phones"],
+            serde_json::json!({"relay": null, "direct": true})
+        );
+        assert_eq!(Settings::load(&dir).phones(), Phones::default());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -569,9 +640,14 @@ mod tests {
             }
         );
         assert_eq!(
-            state(r#"{"cats": 3, "animation": 3, "updates": null}"#),
+            state(r#"{"cats": 3, "animation": 3, "updates": null, "phones": []}"#),
             State::default()
         );
+        let p = state(r#"{"phones": {"relay": 5, "direct": "yes"}}"#).phones;
+        assert_eq!(p, Phones::default());
+        let p = state(r#"{"phones": {"relay": " https://r.example ", "direct": false}}"#).phones;
+        assert_eq!(p.relay.as_deref(), Some("https://r.example"));
+        assert!(!p.direct);
     }
 
     fn backups(dir: &Path) -> Vec<String> {

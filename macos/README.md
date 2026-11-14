@@ -5,10 +5,11 @@ macOS 14+), and the pieces that put them in a signed `AgentPulse.app`.
 
 | Path | What |
 |---|---|
-| `project.yml` | XcodeGen spec: the widget extension, the bridge dylib, the preview tool. The generated `AgentPulseWidgets.xcodeproj` is not committed. |
+| `project.yml` | XcodeGen spec: the widget extension, the two bridge dylibs, the preview tool. The generated `AgentPulseWidgets.xcodeproj` is not committed. |
 | `Shared/` | The `widget.json` model (`Payload.swift`) and the SwiftUI views (`WidgetViews.swift`). Used by both the extension and the preview tool. |
 | `Widgets/` | The extension: timeline provider, widget, `Info.plist`. |
 | `Bridge/` | `libAgentPulseWidgetBridge.dylib`: one C function, `agentpulse_reload_widgets`, that calls `WidgetCenter.shared.reloadAllTimelines()`. The Rust app `dlopen`s it. |
+| `LinkBridge/` | `libAgentPulseLinkBridge.dylib`: the phone link's Mac side (Keychain, sealing through `link/`, the QR image, the direct listener) behind `aplink_call`, `aplink_free` and `aplink_set_event_handler`. The Rust app `dlopen`s it (`crates/agentpulse-app/src/phones/`). |
 | `Preview/` | `widget-preview <widget.json> <out-dir>`: renders the same views to PNG (data, no update since, not running, gallery placeholder; small and medium; light, dark, and a flattened "accented" approximation) for review without a desktop. |
 
 The gallery placeholder and the cat in "isn't running" come from `placeholder.json`,
@@ -52,6 +53,13 @@ To add the widget, open the app once (`open target/bundle/AgentPulse.app`) so ma
 registers the extension, then right-click the desktop > Edit Widgets > AgentPulse.
 
 Previews: `target/xcode/build/Release/widget-preview <widget.json> docs/screenshots/widgets`.
+
+Phone pairing secrets (each pairing's private key, relay token and one-time secret, and
+the relay's `RELAY_KEY`) are generic passwords in the login keychain, service
+`io.github.chengboonrong.AgentPulse.pairing`, with the default access control: the app
+that created an item may read it. A rebuilt development-signed app can count as another
+app, so macOS may ask to allow access to them; "Always Allow" keeps working until the
+next rebuild.
 
 ## How data reaches the widget
 

@@ -111,7 +111,7 @@ VERSION="$(awk '/^\[workspace.package\]/ {p=1; next} /^\[/ {p=0} p && /^version 
 step "Building the Rust app (release)"
 cargo build --release -p agentpulse-app
 
-step "Building the widget extension, bridge and preview tool"
+step "Building the widget extension, bridges and preview tool"
 xcodegen generate --quiet --spec macos/project.yml --project macos
 xcodebuild -quiet -project macos/AgentPulseWidgets.xcodeproj -alltargets -configuration Release \
     SYMROOT="$XC/build" OBJROOT="$XC/obj" ARCHS="$(uname -m)" \
@@ -128,6 +128,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/PlugIns"
 cp "$BIN" "$APP/Contents/MacOS/agentpulse"
 cp "$PRODUCTS/libAgentPulseWidgetBridge.dylib" "$APP/Contents/Frameworks/"
+cp "$PRODUCTS/libAgentPulseLinkBridge.dylib" "$APP/Contents/Frameworks/"
 cp -R "$PRODUCTS/AgentPulseWidgets.appex" "$APP/Contents/PlugIns/"
 mkdir -p "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources"
 cp "$PRODUCTS/placeholder.json" "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources/"
@@ -147,6 +148,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
 	<key>CFBundleVersion</key><string>$VERSION</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>NSHighResolutionCapable</key><true/>
+	<key>NSLocalNetworkUsageDescription</key><string>AgentPulse connects directly to your paired iPhone on this network.</string>
+	<key>NSBonjourServices</key><array><string>_agentpulse._tcp</string></array>
 	<key>CFBundleURLTypes</key>
 	<array><dict>
 		<key>CFBundleURLName</key><string>$APP_ID</string>
@@ -185,6 +188,7 @@ sign() {
 }
 step "Signing (inner code first)"
 sign "$APP/Contents/Frameworks/libAgentPulseWidgetBridge.dylib"
+sign "$APP/Contents/Frameworks/libAgentPulseLinkBridge.dylib"
 sign --entitlements "$WIDGET_ENT" "$APP/Contents/PlugIns/AgentPulseWidgets.appex"
 sign "$APP"
 

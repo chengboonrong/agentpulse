@@ -6,6 +6,9 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+packages:
+  AgentPulseLink:
+    path: ../link
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -45,6 +48,22 @@ targets:
         SKIP_INSTALL: YES
     dependencies:
       - sdk: WidgetKit.framework
+  AgentPulseLinkBridge:
+    type: library.dynamic
+    platform: macOS
+    sources: [LinkBridge]
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseLinkBridge
+        EXECUTABLE_PREFIX: lib
+        LD_DYLIB_INSTALL_NAME: "@rpath/libAgentPulseLinkBridge.dylib"
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: AgentPulseLink
+        product: AgentPulseLink
+      - sdk: CoreImage.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
   widget-preview:
     type: tool
     platform: macOS
