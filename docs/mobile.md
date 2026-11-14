@@ -248,7 +248,8 @@ pushes only go through the relay. Widgets use the relay only.
 1. This document, then the relay with its tests (local, `wrangler` and Vitest pinned).
    Then `link/`: relay sealing, the direct handshake, framing, listener and client,
    tested with `swift test` over loopback.
-2. Crypto bridge and the Mac client against a locally run relay.
+2. Crypto bridge and the Mac client against a locally run relay. Done:
+   `scripts/e2e-phones.sh` pairs, publishes and unpairs through it with a simulated phone.
 3. iPhone app and widgets, in the simulator against the local relay.
 4. Live Activity and push. Needs the paid program and a deployed relay to test for
    real; until then only the request the relay would send is checked.

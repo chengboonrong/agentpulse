@@ -44,6 +44,8 @@ fn main() -> anyhow::Result<()> {
         ["--menubar-preview", dir] => menubar::preview(std::path::Path::new(dir)),
         #[cfg(feature = "screenshot")]
         ["--screenshot", dir, ref rest @ ..] => gui(ui::Options::screenshot(dir, rest)?),
+        #[cfg(feature = "e2e")]
+        ["--phone-e2e", relay] => phones::e2e::run(&data_dir()?, relay),
         _ => bail!(USAGE),
     }
 }
@@ -82,8 +84,14 @@ fn gui(options: ui::Options) -> anyhow::Result<()> {
     let settings = settings::Settings::load(&dir);
     let widgets = widget_export::WidgetExporter::detect(settings.clone());
     let phones = phones::PhoneLink::spawn(&dir, settings.clone())?;
-    collector::spawn(open_collector()?, tx, detail_rx, widgets, Some(phones))?;
-    ui::run(rx, detail_tx, options, settings);
+    collector::spawn(
+        open_collector()?,
+        tx,
+        detail_rx,
+        widgets,
+        Some(phones.clone()),
+    )?;
+    ui::run(rx, detail_tx, options, settings, phones);
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 //! App-level state that outlives the window: the snapshot stream, the motion
-//! settings, the update check and the menu bar item with its cat. The window
-//! observes it.
+//! settings, the update check, the phone link and the menu bar item with its cat.
+//! The window observes it.
 
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,8 @@ use gpui::{Context, Task, prelude::*};
 
 use crate::collector::Snapshot;
 use crate::menubar::{self, POINTS_HIGH, Pose};
-use crate::settings::Settings;
+use crate::phones::{self, PhoneLink};
+use crate::settings::{self, Settings};
 use crate::updates::{self, Check, Release};
 
 /// Shortest time between menu bar icon frames.
@@ -36,6 +37,16 @@ pub struct Hub {
     auto_checks: bool,
     update_timer: Option<Task<()>>,
     check_task: Option<Task<()>>,
+    pub phones: PhoneLink,
+    /// The Phones card's own error: a bad paste or a pairing that did not start.
+    pub phone_error: Option<String>,
+    /// "Pair a Phone" was clicked and the worker has not answered yet.
+    pub pairing_starting: bool,
+    /// Repaints each second while a QR code's countdown runs.
+    countdown: Option<Task<()>>,
+    /// The Phones card's view and settings in screenshot mode, instead of the real ones.
+    #[cfg(feature = "screenshot")]
+    pub phone_fixture: Option<(phones::View, settings::Phones)>,
     cat: CatAnimator,
     pose: Pose,
     last_tick: Instant,
@@ -44,6 +55,7 @@ pub struct Hub {
     lines: Vec<MenuLine>,
     timer: Option<Task<()>>,
     _snapshots: Task<()>,
+    _phone_changes: Task<()>,
 }
 
 impl Hub {
@@ -51,6 +63,7 @@ impl Hub {
         rx: async_channel::Receiver<Snapshot>,
         item: StatusItem,
         settings: Settings,
+        phones: PhoneLink,
         cx: &mut Context<Self>,
     ) -> Self {
         let snapshots = cx.spawn(async move |this, cx| {
@@ -66,6 +79,14 @@ impl Hub {
                 hub.follow(cx);
             })
             .ok();
+        });
+        let changes = phones.changes();
+        let phone_changes = cx.spawn(async move |this, cx| {
+            while changes.recv().await.is_ok() {
+                if this.update(cx, |hub, cx| hub.phones_changed(cx)).is_err() {
+                    return;
+                }
+            }
         });
         let motion = motion(&settings);
         tracing::info!(
@@ -86,6 +107,12 @@ impl Hub {
             auto_checks: false,
             update_timer: None,
             check_task: None,
+            phones,
+            phone_error: None,
+            pairing_starting: false,
+            countdown: None,
+            #[cfg(feature = "screenshot")]
+            phone_fixture: None,
             pose: Pose::of(&cat),
             cat,
             last_tick: Instant::now(),
@@ -94,6 +121,7 @@ impl Hub {
             lines: Vec::new(),
             timer: None,
             _snapshots: snapshots,
+            _phone_changes: phone_changes,
         };
         hub.refresh_icon();
         hub.refresh_text();
@@ -238,6 +266,103 @@ impl Hub {
                 .await;
             this.update(cx, |hub, cx| hub.check_now(cx)).ok();
         }));
+    }
+
+    /// What the Phones card shows: the worker's view and the `phones` settings.
+    pub fn phone_state(&self) -> (phones::View, settings::Phones) {
+        #[cfg(feature = "screenshot")]
+        if let Some(fixture) = &self.phone_fixture {
+            return fixture.clone();
+        }
+        (self.phones.view(), self.settings.phones())
+    }
+
+    pub fn phones_changed(&mut self, cx: &mut Context<Self>) {
+        let counting = self.phone_state().0.pending.is_some();
+        self.countdown = counting.then(|| {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                }
+            })
+        });
+        cx.notify();
+    }
+
+    /// Saves the `phones` settings changed by `f` and tells the worker.
+    fn change_phones(&mut self, f: impl FnOnce(&mut settings::Phones), cx: &mut Context<Self>) {
+        let mut p = self.settings.phones();
+        f(&mut p);
+        self.settings.set_phones(p);
+        self.phones.settings_changed();
+        cx.notify();
+    }
+
+    /// Takes the relay address from the clipboard.
+    pub fn paste_relay(&mut self, cx: &mut Context<Self>) {
+        let text = cx.read_from_clipboard().and_then(|c| c.text());
+        match text.as_deref().and_then(settings::relay_address) {
+            Some(relay) => {
+                self.phone_error = None;
+                self.change_phones(|p| p.relay = Some(relay), cx);
+            }
+            None => {
+                self.phone_error =
+                    Some("Copy the relay's address first: it starts with https://.".into());
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn clear_relay(&mut self, cx: &mut Context<Self>) {
+        self.phone_error = None;
+        self.change_phones(|p| p.relay = None, cx);
+    }
+
+    pub fn toggle_direct(&mut self, cx: &mut Context<Self>) {
+        self.change_phones(|p| p.direct = !p.direct, cx);
+    }
+
+    /// Takes the relay key from the clipboard, straight to the Keychain. Never shown or logged.
+    pub fn paste_relay_key(&mut self, cx: &mut Context<Self>) {
+        let key = cx.read_from_clipboard().and_then(|c| c.text());
+        let key = key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty() && k.len() <= 256 && !k.contains(char::is_whitespace));
+        self.phone_error = key
+            .is_none()
+            .then(|| "Copy the relay key first: one word, at most 256 characters.".to_string());
+        if key.is_some() {
+            self.phones.set_relay_key(key);
+        }
+        cx.notify();
+    }
+
+    pub fn pair_phone(&mut self, cx: &mut Context<Self>) {
+        if self.pairing_starting {
+            return;
+        }
+        self.pairing_starting = true;
+        self.phone_error = None;
+        let result = self.phones.start_pairing();
+        cx.spawn(async move |this, cx| {
+            let result = result.recv().await;
+            this.update(cx, |hub, cx| {
+                hub.pairing_starting = false;
+                hub.phone_error = match result {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(e)) => Some(e),
+                    Err(_) => Some("The phone link stopped. Restart AgentPulse.".into()),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Applies the current snapshot and stopped flag to the cat, title and rows.
