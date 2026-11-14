@@ -27,6 +27,30 @@ struct WidgetPayload: Decodable {
         let palette: [String: [Int]]
     }
 
+    /// Codex's plan limit. Absent from older files and when Codex sent no reading.
+    struct Limit: Decodable {
+        let label: String
+        let usedPercent: Double
+        let resetsAtMs: Int64?
+        /// When Codex reported it.
+        let asOfMs: Int64
+
+        var resetsAt: Date? { resetsAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
+        var asOf: Date { Date(timeIntervalSince1970: Double(asOfMs) / 1000) }
+        /// The share used, 0...100, as a whole number.
+        var percent: Int { Int(min(max(usedPercent, 0), 100).rounded()) }
+
+        /// Past its reset time the reading no longer describes the window.
+        func outOfDate(at now: Date) -> Bool {
+            resetsAt.map { $0 < now } ?? false
+        }
+
+        /// Over an hour old: worth saying when it was taken.
+        func old(at now: Date) -> Bool {
+            now.timeIntervalSince(asOf) > 60 * 60
+        }
+    }
+
     struct Session: Decodable {
         let project: String
         let status: String
@@ -44,14 +68,33 @@ struct WidgetPayload: Decodable {
     let outputRate: String
     let cat: Cat
     let sessions: [Session]
+    let codexLimit: Limit?
 
     var generatedAt: Date { Date(timeIntervalSince1970: Double(generatedAtMs) / 1000) }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, generatedAtMs, stopped, agents, today, outputRate, cat, sessions, codexLimit
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        generatedAtMs = try c.decode(Int64.self, forKey: .generatedAtMs)
+        stopped = try c.decode(Bool.self, forKey: .stopped)
+        agents = try c.decode(Agents.self, forKey: .agents)
+        today = try c.decode(Today.self, forKey: .today)
+        outputRate = try c.decode(String.self, forKey: .outputRate)
+        cat = try c.decode(Cat.self, forKey: .cat)
+        sessions = try c.decode([Session].self, forKey: .sessions)
+        // Optional and lenient: a malformed limit drops the bar, not the whole widget.
+        codexLimit = try? c.decodeIfPresent(Limit.self, forKey: .codexLimit)
+    }
 }
 
 /// What a widget shows.
 enum WidgetState {
-    /// Data as of `asOf`; nil for the gallery's generic preview.
-    case live(WidgetPayload, asOf: Date?)
+    /// Data as of `asOf`, seen at `now`; nil for the gallery's generic preview.
+    case live(WidgetPayload, asOf: Date?, now: Date = .now)
     /// The app wrote data but nothing newer than `ageLimit`: it may have
     /// crashed, or be alive and out of reload budget, so claim neither.
     case stale(since: Date)
@@ -64,7 +107,7 @@ enum WidgetState {
     static func from(data: Data?, now: Date) -> WidgetState {
         guard let p = data.flatMap(WidgetPayload.decode), !p.stopped else { return .notRunning }
         if now.timeIntervalSince(p.generatedAt) > ageLimit { return .stale(since: p.generatedAt) }
-        return .live(p, asOf: p.generatedAt)
+        return .live(p, asOf: p.generatedAt, now: now)
     }
 
     /// The gallery's generic preview; text-only "isn't running" without the resource.

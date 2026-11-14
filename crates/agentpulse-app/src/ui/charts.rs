@@ -617,7 +617,7 @@ pub(super) fn window_name(minutes: Option<u64>) -> String {
 }
 
 /// "Fri 14:00" within a week, "Nov 21 14:00" beyond.
-fn reset_label<Tz: TimeZone>(at_s: i64, now_ms: i64, tz: &Tz) -> String
+pub(super) fn reset_label<Tz: TimeZone>(at_s: i64, now_ms: i64, tz: &Tz) -> String
 where
     Tz::Offset: std::fmt::Display,
 {
@@ -632,10 +632,9 @@ where
     at.with_timezone(tz).format(fmt).to_string()
 }
 
-fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme) -> Div {
-    let stale = w.resets_at_s.is_some_and(|r| r * 1000 < now);
-    let pct = w.used_percent.clamp(0., 100.);
-    let color = if stale {
+/// A limit bar's fill: warning colours as the window fills, muted once out of date.
+pub(super) fn limit_color(pct: f64, stale: bool, t: Theme) -> u32 {
+    if stale {
         t.muted
     } else if pct >= 90. {
         t.failed
@@ -643,7 +642,13 @@ fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme)
         t.waiting
     } else {
         t.series_codex
-    };
+    }
+}
+
+fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme) -> Div {
+    let stale = crate::menubar::out_of_date(w, now);
+    let pct = w.used_percent.clamp(0., 100.);
+    let color = limit_color(pct, stale, t);
     let mut detail = vec![];
     if let Some(r) = w.resets_at_s {
         detail.push(format!("resets {}", reset_label(r, now, &Local)));

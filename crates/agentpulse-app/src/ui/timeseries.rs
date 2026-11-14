@@ -28,7 +28,7 @@ fn col_of(at: i64, start: i64, end: i64, cols: usize) -> usize {
 /// column: the column's min and max, whichever came first leading, so peaks survive
 /// whatever the sample count. `breaks` is set when more than `max_gap_ms` passed since
 /// the previous sample, so nothing is drawn across time that was not measured.
-fn columns(
+pub(crate) fn columns(
     samples: &[(i64, f32)],
     start: i64,
     end: i64,

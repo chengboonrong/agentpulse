@@ -3,7 +3,7 @@
 //! it does not quit; the menu bar item and the Dock icon reopen it.
 
 mod charts;
-mod timeseries;
+pub(crate) mod timeseries;
 
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
@@ -31,6 +31,9 @@ use crate::settings::Settings;
 
 mod cats;
 mod settings;
+mod text_field;
+
+use text_field::{Submitted, TextField};
 
 actions!(agentpulse, [Quit, CloseWindow, FocusNext, FocusPrev]);
 
@@ -119,6 +122,7 @@ pub fn run(
             KeyBinding::new("tab", FocusNext, None),
             KeyBinding::new("shift-tab", FocusPrev, None),
         ]);
+        cx.bind_keys(text_field::bindings());
         cx.set_menus([Menu::new("AgentPulse").items([
             MenuItem::action("Close Window", CloseWindow),
             MenuItem::action("Quit AgentPulse", Quit),
@@ -156,12 +160,15 @@ pub fn run(
             while let Ok(action) = actions.recv().await {
                 cx.update(|cx| match action {
                     MenuAction::OpenDashboard => show(cx),
+                    MenuAction::OpenSession(id) => open_session(&hub, &id, cx),
                     MenuAction::OpenUpdate => {
                         if let Some(r) = hub.read(cx).available() {
                             cx.open_url(&r.url);
                         }
                     }
                     MenuAction::Quit => cx.quit(),
+                    MenuAction::MenuOpened => hub.update(cx, |h, cx| h.menu_open(true, cx)),
+                    MenuAction::MenuClosed => hub.update(cx, |h, cx| h.menu_open(false, cx)),
                 });
             }
         })
@@ -196,6 +203,26 @@ fn show(cx: &mut App) {
             },
             cx,
         ),
+    }
+}
+
+/// Shows the window on a session's detail, from its menu row; on Sessions if it has gone.
+fn open_session(hub: &Entity<Hub>, id: &str, cx: &mut App) {
+    let key = hub.read(cx).snapshot.as_ref().and_then(|s| {
+        s.sessions
+            .iter()
+            .find(|x| crate::menubar::session_id(x) == id)
+            .map(|x| (x.provider, x.session_id.clone()))
+    });
+    show(cx);
+    let view = cx.windows().first().and_then(|w| w.downcast::<AppView>());
+    if let Some(view) = view {
+        view.update(cx, |v, _, cx| {
+            v.screen = Screen::Sessions;
+            v.show_detail(key, cx);
+            v.schedule_animation(cx);
+        })
+        .ok();
     }
 }
 
@@ -435,6 +462,12 @@ struct AppView {
     preview: [CatAnimator; 2],
     /// Holds keyboard focus when no control does, so Tab reaches the controls.
     focus: FocusHandle,
+    /// The Phones card's relay address and (secure) relay key.
+    relay_field: Entity<TextField>,
+    key_field: Entity<TextField>,
+    /// The Forget Key button, which takes focus once a typed key is saved.
+    forget_focus: FocusHandle,
+    focus_forget: bool,
     last_tick: Instant,
     active: bool,
     visible: bool,
@@ -474,6 +507,24 @@ impl AppView {
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let relay_field = cx.new(|cx| {
+            TextField::new(
+                "Relay address",
+                "https://relay.example.com",
+                false,
+                window,
+                cx,
+            )
+        });
+        let key_field = cx.new(|cx| TextField::new("Relay key", "Relay key", true, window, cx));
+        let mut subscriptions = subscriptions;
+        subscriptions.push(
+            cx.subscribe(&relay_field, |this, field, _: &Submitted, cx| {
+                settings::save_relay(&this.hub, &field, cx)
+            }),
+        );
+        subscriptions
+            .push(cx.subscribe(&key_field, |this, _, _: &Submitted, cx| this.save_key(cx)));
         let mut view = Self {
             hub,
             screen: Screen::Overview,
@@ -491,6 +542,10 @@ impl AppView {
             cats_agent: Provider::ClaudeCode,
             preview,
             focus,
+            relay_field,
+            key_field,
+            forget_focus: cx.focus_handle().tab_stop(true),
+            focus_forget: false,
             last_tick: Instant::now(),
             active: window.is_window_active(),
             visible: window.visibility().is_visible(),
@@ -507,6 +562,14 @@ impl AppView {
     /// Follows the hub's latest snapshot: one row cat per live session. Once
     /// collection stops, the rows are stale and their cats settle and sleep.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (phones, p) = self.hub.read(cx).phone_state();
+        self.relay_field
+            .update(cx, |f, cx| f.set_saved(&p.relay.unwrap_or_default(), cx));
+        // The key reaches the Keychain through the phone link, so Forget Key appears a moment later.
+        if self.focus_forget && phones.relay_key == Some(true) {
+            self.focus_forget = false;
+            window.focus(&self.forget_focus, cx);
+        }
         let hub = self.hub.read(cx);
         let stopped = hub.stopped;
         let Some(snap) = &hub.snapshot else {
@@ -622,6 +685,13 @@ impl AppView {
 
     fn theme(&self) -> Theme {
         if self.dark { DARK } else { LIGHT }
+    }
+
+    /// Saves the typed relay key; Forget Key takes focus once it shows.
+    fn save_key(&mut self, cx: &mut Context<Self>) {
+        if settings::save_key(&self.hub, &self.key_field, cx) {
+            self.focus_forget = true;
+        }
     }
 
     /// Opens a session's detail, or closes it with None.
@@ -1065,7 +1135,13 @@ impl Render for AppView {
             // Needs no agent data.
             (Screen::Cats, _) => self.cats_screen(t, view.clone()).into_any_element(),
             (Screen::Settings, _) => {
-                settings::screen(hub, &self.hub, t, &self.page_scroll).into_any_element()
+                let phone = settings::PhoneControls {
+                    relay: &self.relay_field,
+                    key: &self.key_field,
+                    forget: &self.forget_focus,
+                    view: view.clone(),
+                };
+                settings::screen(hub, &self.hub, phone, t, &self.page_scroll).into_any_element()
             }
             (_, None) => div()
                 .flex_1()
@@ -1693,20 +1769,57 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
         Some(c) => (c, "today · estimate"),
         None => (DASH.into(), "today · no price for today's models"),
     };
-    let limit = s
-        .codex_limits
-        .as_ref()
-        .and_then(|l| l.primary.as_ref().or(l.secondary.as_ref()));
+    let limit = s.codex_limits.as_ref().and_then(|l| {
+        let w = l.primary.as_ref().or(l.secondary.as_ref())?;
+        Some((
+            w,
+            crate::menubar::as_of(l.ts_ms, s.taken_at_ms).unwrap_or_default(),
+        ))
+    });
     let limit = match limit {
-        None => format!("Codex limit {DASH}"),
-        Some(w) if w.resets_at_s.is_some_and(|r| r * 1000 < s.taken_at_ms) => {
-            "Codex limit out of date".into()
+        None => secondary(&format!("Codex limit {DASH}"), t),
+        Some((w, as_of)) if crate::menubar::out_of_date(w, s.taken_at_ms) => {
+            secondary(&format!("Codex limit out of date{as_of}"), t)
         }
-        Some(w) => format!(
-            "Codex {} limit {:.0}%",
-            charts::window_name(w.window_minutes),
-            w.used_percent
-        ),
+        Some((w, as_of)) => {
+            let pct = w.used_percent.clamp(0., 100.);
+            let resets = w.resets_at_s.map(|r| {
+                format!(
+                    " · resets {}",
+                    charts::reset_label(r, s.taken_at_ms, &chrono::Local)
+                )
+            });
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(secondary(
+                    &format!("Codex {}", charts::window_name(w.window_minutes)),
+                    t,
+                ))
+                .child(
+                    div()
+                        .w(px(56.))
+                        .h(px(4.))
+                        .rounded_full()
+                        .bg(rgb(t.border))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(pct as f32 / 100.))
+                                .rounded_full()
+                                .bg(rgb(charts::limit_color(pct, false, t))),
+                        ),
+                )
+                .child(secondary(
+                    &format!(
+                        "{:.0}%{}{as_of}",
+                        w.used_percent,
+                        resets.unwrap_or_default()
+                    ),
+                    t,
+                ))
+        }
     };
     div()
         .flex()
@@ -1718,7 +1831,8 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .child(cost),
         )
-        .child(secondary(&format!("{what} · {limit}"), t))
+        .child(secondary(what, t))
+        .child(limit)
 }
 
 /// What each ribbon colour means.
@@ -1859,9 +1973,9 @@ impl Render for Tooltip {
 }
 
 /// Time span of the output rate chart.
-const RATE_SPAN_MS: i64 = 120_000;
+pub(crate) const RATE_SPAN_MS: i64 = 120_000;
 /// Samples further apart than three idle ticks (5 s) are not joined by a line.
-const RATE_GAP_MS: i64 = 15_000;
+pub(crate) const RATE_GAP_MS: i64 = 15_000;
 
 /// The output rate: current value and a chart of the last two minutes.
 fn rate(

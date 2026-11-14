@@ -59,6 +59,22 @@ pub struct Payload {
     pub output_rate: String,
     pub cat: Cat,
     pub sessions: Vec<WidgetSession>,
+    /// Codex's plan limit, the medium widget's bar. Left out when there is no
+    /// reading; older widgets ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_limit: Option<WidgetLimit>,
+}
+
+/// One Codex limit window, as the Overview header shows it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct WidgetLimit {
+    /// "Codex 5h", "Codex weekly".
+    pub label: String,
+    pub used_percent: f64,
+    /// Past it the reading is out of date; the widget checks at display time.
+    pub resets_at_ms: Option<i64>,
+    /// When Codex reported it; the widget says so once it is over an hour old.
+    pub as_of_ms: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -250,6 +266,15 @@ pub fn payload(snap: &Snapshot, stopped: bool, looks: &Looks) -> Payload {
                 cost: format::approx_cost(s.cost_usd).unwrap_or_else(|| DASH.into()),
             })
             .collect(),
+        codex_limit: snap.codex_limits.as_ref().and_then(|l| {
+            let w = l.primary.as_ref().or(l.secondary.as_ref())?;
+            Some(WidgetLimit {
+                label: format!("Codex {}", crate::menubar::short_window(w.window_minutes)),
+                used_percent: w.used_percent,
+                resets_at_ms: w.resets_at_s.map(|r| r * 1000),
+                as_of_ms: l.ts_ms,
+            })
+        }),
     }
 }
 
@@ -625,6 +650,42 @@ mod tests {
         assert_eq!(v["cat"]["width"], 32);
         assert_eq!(v["cat"]["rows"].as_array().unwrap().len(), 16);
         assert!(v["cat"]["palette"].get(".").is_none());
+    }
+
+    #[test]
+    fn codex_limit_is_optional() {
+        use agentpulse_core::{RateLimits, RateWindow};
+        let mut s = snap(&[Active], 0.0);
+        let v = serde_json::to_value(payload(&s, false, &Looks::default())).unwrap();
+        assert!(v.get("codex_limit").is_none(), "no reading: no key");
+        let window = |minutes| RateWindow {
+            used_percent: 62.5,
+            window_minutes: Some(minutes),
+            resets_at_s: Some(1_800_000_000),
+        };
+        s.codex_limits = Some(RateLimits {
+            ts_ms: 1,
+            plan_type: None,
+            primary: None,
+            secondary: Some(window(10_080)),
+        });
+        let v = serde_json::to_value(payload(&s, false, &Looks::default())).unwrap();
+        assert_eq!(
+            v["codex_limit"],
+            serde_json::json!({
+                "label": "Codex weekly",
+                "used_percent": 62.5,
+                "resets_at_ms": 1_800_000_000_000i64,
+                "as_of_ms": 1,
+            })
+        );
+        s.codex_limits.as_mut().unwrap().primary = Some(window(300));
+        let p = payload(&s, false, &Looks::default());
+        assert_eq!(
+            p.codex_limit.unwrap().label,
+            "Codex 5h",
+            "the primary window leads"
+        );
     }
 
     #[test]

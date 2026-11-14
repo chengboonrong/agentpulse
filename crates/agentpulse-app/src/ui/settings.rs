@@ -34,6 +34,7 @@ fn on_hub(
 pub(super) fn screen(
     hub: &Hub,
     entity: &Entity<Hub>,
+    phone: PhoneControls,
     t: Theme,
     scroll: &gpui::ScrollHandle,
 ) -> impl IntoElement {
@@ -52,7 +53,7 @@ pub(super) fn screen(
         .child(heading("Settings"))
         .child(animation_card(hub, entity, t).mt(px(sp::XL)))
         .child(updates_card(hub, entity, t).mt(px(sp::L)))
-        .child(phones_card(hub, entity, t).mt(px(sp::L)))
+        .child(phones_card(hub, entity, phone, t).mt(px(sp::L)))
 }
 
 fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
@@ -186,7 +187,42 @@ fn updates_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
         .children(hub.available().map(|r| release(r, t)))
 }
 
-fn phones_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
+/// Saves the relay field's address, shown as the field normalised it; an error otherwise.
+pub(super) fn save_relay(hub: &Entity<Hub>, field: &Entity<TextField>, cx: &mut App) {
+    let text = field.read(cx).text().to_string();
+    if hub.update(cx, |h, cx| h.save_relay(&text, cx)) {
+        let saved = hub.read(cx).settings.phones().relay.unwrap_or_default();
+        field.update(cx, |f, cx| f.reset(&saved, cx));
+    }
+}
+
+/// Saves the key field's key to the Keychain and empties the field; true when
+/// saved, else the card shows an error.
+pub(super) fn save_key(hub: &Entity<Hub>, field: &Entity<TextField>, cx: &mut App) -> bool {
+    let text = field.read(cx).text().to_string();
+    let saved = hub.update(cx, |h, cx| h.save_relay_key(&text, cx));
+    if saved {
+        field.update(cx, |f, cx| f.reset("", cx));
+    }
+    saved
+}
+
+/// The Phones card's controls that live in the window's view.
+pub(super) struct PhoneControls<'a> {
+    pub relay: &'a Entity<TextField>,
+    pub key: &'a Entity<TextField>,
+    /// Forget Key's focus, which a saved key moves to.
+    pub forget: &'a FocusHandle,
+    pub view: WeakEntity<AppView>,
+}
+
+fn phones_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: Theme) -> Div {
+    let PhoneControls {
+        relay: relay_field,
+        key: key_field,
+        forget,
+        view,
+    } = phone;
     let (v, p) = hub.phone_state();
     let card = card(t)
         .max_w(px(CARD_MAX_W))
@@ -200,40 +236,44 @@ fn phones_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     let now = now_ms();
     let errors = hub.phone_error.iter().chain(&v.error);
     let relay_set = p.relay.is_some();
+    let (save, clear) = ((entity.clone(), relay_field.clone()), relay_field.clone());
+
     card.child(
-        field("Relay", p.relay.as_deref().unwrap_or("Not set"), t)
+        row("Relay")
+            .child(relay_field.clone())
             .child(
-                button("paste-relay", "Paste Address", t)
-                    .on_click(on_hub(entity, |h, cx| h.paste_relay(cx))),
+                button("save-relay", "Save", t)
+                    .aria_label("Save relay address")
+                    .on_click(move |_, _, cx| save_relay(&save.0, &save.1, cx)),
             )
             .when(relay_set, |d| {
                 d.child(
                     button("clear-relay", "Clear", t)
                         .aria_label("Clear relay address")
-                        .on_click(on_hub(entity, |h, cx| h.clear_relay(cx))),
+                        .on_click(on_hub(entity, move |h, cx| {
+                            h.clear_relay(cx);
+                            clear.update(cx, |f, cx| f.reset("", cx));
+                        })),
                 )
             }),
     )
     // Known only once a relay is set: with none, nothing touches the Keychain.
     .when(relay_set, |d| {
-        let state = match v.relay_key {
-            Some(true) => "Key saved",
-            Some(false) => "No key",
-            None => DASH,
-        };
-        d.child(
-            field("Relay key", state, t)
-                .child(
-                    button("paste-key", "Paste Key", t)
-                        .on_click(on_hub(entity, |h, cx| h.paste_relay_key(cx))),
-                )
-                .when(v.relay_key == Some(true), |d| {
-                    d.child(
-                        button("forget-key", "Forget Key", t)
-                            .on_click(on_hub(entity, |h, _| h.phones.set_relay_key(None))),
-                    )
-                }),
-        )
+        d.child(if v.relay_key == Some(true) {
+            field("Relay key", "Key saved", t).child(
+                button("forget-key", "Forget Key", t)
+                    .track_focus(forget)
+                    .on_click(on_hub(entity, |h, _| h.phones.set_relay_key(None))),
+            )
+        } else {
+            row("Relay key").child(key_field.clone()).child(
+                button("save-key", "Save", t)
+                    .aria_label("Save relay key")
+                    .on_click(move |_, _, cx| {
+                        view.update(cx, |v, cx| v.save_key(cx)).ok();
+                    }),
+            )
+        })
     })
     .children(errors.map(|e| secondary(e, t).px(px(sp::S)).text_color(rgb(t.failed))))
     .child(match &v.pending {
@@ -290,8 +330,8 @@ fn phones_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     .child(secondary(PHONES_PRIVACY, t).px(px(sp::S)))
 }
 
-/// A label, its value, then whatever buttons the caller adds.
-fn field(label: &'static str, value: &str, t: Theme) -> Div {
+/// A label, then whatever the caller adds.
+fn row(label: &'static str) -> Div {
     div()
         .flex()
         .items_center()
@@ -304,14 +344,18 @@ fn field(label: &'static str, value: &str, t: Theme) -> Div {
                 .font_weight(FontWeight::MEDIUM)
                 .child(label),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(rgb(t.muted))
-                .child(value.to_string()),
-        )
+}
+
+/// A label, its value, then whatever buttons the caller adds.
+fn field(label: &'static str, value: &str, t: Theme) -> Div {
+    row(label).child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(rgb(t.muted))
+            .child(value.to_string()),
+    )
 }
 
 /// The QR code, its countdown and Cancel, while the code is out.

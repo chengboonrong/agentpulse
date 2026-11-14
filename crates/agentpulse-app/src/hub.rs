@@ -38,7 +38,7 @@ pub struct Hub {
     update_timer: Option<Task<()>>,
     check_task: Option<Task<()>>,
     pub phones: PhoneLink,
-    /// The Phones card's own error: a bad paste or a pairing that did not start.
+    /// The Phones card's own error: a bad address or key, or a pairing that did not start.
     pub phone_error: Option<String>,
     /// "Pair a Phone" was clicked and the worker has not answered yet.
     pub pairing_starting: bool,
@@ -52,8 +52,15 @@ pub struct Hub {
     last_tick: Instant,
     item: StatusItem,
     title: String,
+    /// What VoiceOver says for the item.
+    label: String,
     lines: Vec<MenuLine>,
     timer: Option<Task<()>>,
+    /// Fades the icon once the latest snapshot gets too old, if no newer one
+    /// comes: at most one wakeup a minute.
+    stale_timer: Option<Task<()>>,
+    /// Keeps the rows' "Updated …" current while the menu is open.
+    menu_timer: Option<Task<()>>,
     _snapshots: Task<()>,
     _phone_changes: Task<()>,
 }
@@ -118,8 +125,11 @@ impl Hub {
             last_tick: Instant::now(),
             item,
             title: String::new(),
+            label: String::new(),
             lines: Vec::new(),
             timer: None,
+            stale_timer: None,
+            menu_timer: None,
             _snapshots: snapshots,
             _phone_changes: phone_changes,
         };
@@ -133,6 +143,9 @@ impl Hub {
         self.refresh_motion();
         self.snapshot = Some(snap);
         self.follow(cx);
+        if self.stale_timer.is_none() {
+            self.arm_stale(cx);
+        }
         // Timers stop while the Mac sleeps, so an overdue check starts here.
         if self.check_due() {
             self.check_now(cx);
@@ -301,20 +314,17 @@ impl Hub {
         cx.notify();
     }
 
-    /// Takes the relay address from the clipboard.
-    pub fn paste_relay(&mut self, cx: &mut Context<Self>) {
-        let text = cx.read_from_clipboard().and_then(|c| c.text());
-        match text.as_deref().and_then(settings::relay_address) {
-            Some(relay) => {
-                self.phone_error = None;
-                self.change_phones(|p| p.relay = Some(relay), cx);
-            }
-            None => {
-                self.phone_error =
-                    Some("Copy the relay's address first: it starts with https://.".into());
-                cx.notify();
-            }
+    /// Saves a typed relay address; false, with the card's error set, when it is not one.
+    pub fn save_relay(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        let relay = settings::relay_address(text);
+        self.phone_error = relay
+            .is_none()
+            .then(|| "That isn't a relay address: it starts with https://.".to_string());
+        match relay {
+            Some(relay) => self.change_phones(|p| p.relay = Some(relay), cx),
+            None => cx.notify(),
         }
+        self.phone_error.is_none()
     }
 
     pub fn clear_relay(&mut self, cx: &mut Context<Self>) {
@@ -326,19 +336,19 @@ impl Hub {
         self.change_phones(|p| p.direct = !p.direct, cx);
     }
 
-    /// Takes the relay key from the clipboard, straight to the Keychain. Never shown or logged.
-    pub fn paste_relay_key(&mut self, cx: &mut Context<Self>) {
-        let key = cx.read_from_clipboard().and_then(|c| c.text());
-        let key = key
-            .map(|k| k.trim().to_string())
+    /// Saves a typed relay key straight to the Keychain; false, with the card's
+    /// error set, when it is not one. Never shown or logged.
+    pub fn save_relay_key(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        let key = Some(text.trim())
             .filter(|k| !k.is_empty() && k.len() <= 256 && !k.contains(char::is_whitespace));
         self.phone_error = key
             .is_none()
-            .then(|| "Copy the relay key first: one word, at most 256 characters.".to_string());
-        if key.is_some() {
-            self.phones.set_relay_key(key);
+            .then(|| "That isn't a relay key: one word, at most 256 characters.".to_string());
+        if let Some(key) = key {
+            self.phones.set_relay_key(Some(key.to_string()));
         }
         cx.notify();
+        self.phone_error.is_none()
     }
 
     pub fn pair_phone(&mut self, cx: &mut Context<Self>) {
@@ -391,7 +401,12 @@ impl Hub {
             tracing::debug!(?pose, "menu bar icon");
             self.pose = pose;
         }
-        let icon = menubar::icon(pose.sprite(&self.cat));
+        let s = self.snapshot.as_ref();
+        let icon = menubar::icon(
+            pose.sprite(&self.cat),
+            menubar::stale(s, self.stopped, now_ms()),
+            menubar::waiting(s, self.stopped),
+        );
         self.item
             .set_icon(&icon.rgba, icon.width, icon.height, POINTS_HIGH);
     }
@@ -404,13 +419,59 @@ impl Hub {
             self.item.set_title(&title);
             self.title = title;
         }
-        let lines = menubar::lines(self.snapshot.as_ref(), self.stopped);
+        let now = now_ms();
+        let label = menubar::accessibility_label(self.snapshot.as_ref(), self.stopped, now);
+        if label != self.label {
+            self.item.set_accessibility_label(&label);
+            self.label = label;
+        }
+        let lines = menubar::lines(self.snapshot.as_ref(), self.stopped, now);
         if lines != self.lines {
             let rows: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
             tracing::debug!(?rows, "menu bar rows");
             self.item.set_lines(&lines);
             self.lines = lines;
         }
+    }
+
+    /// Wakes when the latest snapshot would turn stale. If a newer one came
+    /// meanwhile it waits again for that one; otherwise the icon fades and the
+    /// rows' freshness catches up.
+    fn arm_stale(&mut self, cx: &mut Context<Self>) {
+        let Some(taken) = self.snapshot.as_ref().map(|s| s.taken_at_ms) else {
+            return;
+        };
+        let wait = (taken + menubar::STALE_AFTER_MS + 1 - now_ms()).max(0) as u64;
+        self.stale_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(wait))
+                .await;
+            this.update(cx, |hub, cx| {
+                hub.stale_timer = None;
+                hub.refresh_icon();
+                hub.refresh_text();
+                if !menubar::stale(hub.snapshot.as_ref(), hub.stopped, now_ms()) {
+                    hub.arm_stale(cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// While the menu is open its rows are recomputed each second, so the
+    /// freshness row keeps counting even when no snapshot arrives.
+    pub fn menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.menu_timer = open.then(|| {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    let tick = this.update(cx, |hub, _| hub.refresh_text());
+                    if tick.is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                }
+            })
+        });
     }
 
     /// The menu bar is always visible, so this timer does not pause with the
