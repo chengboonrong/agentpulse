@@ -14,8 +14,11 @@ objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
+    "NSArray",
+    "NSAttributedString",
     "NSData",
     "NSDate",
+    "NSDictionary",
     "NSError",
     "NSGeometry",
     "NSObject",
@@ -30,6 +33,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "NSAccessibility",
+    "NSAccessibilityProtocols",
+    "NSAttributedString",
     "NSBitmapImageRep",
     "NSButton",
     "NSCell",
@@ -42,10 +47,16 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSImageView",
     "NSMenu",
     "NSMenuItem",
+    "NSParagraphStyle",
     "NSResponder",
     "NSStatusBar",
     "NSStatusBarButton",
     "NSStatusItem",
+    "NSText",
     "NSView",
     "NSWorkspace",
 ] }
+
+[dev-dependencies]
+# Measures a menu row's text in the rows test.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSStringDrawing"] }

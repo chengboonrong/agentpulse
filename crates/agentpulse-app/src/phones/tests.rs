@@ -534,6 +534,23 @@ fn declining_deletes_the_pairing() {
 }
 
 #[test]
+fn phones_never_get_the_codex_limit() {
+    let mut r = rig("no-limit");
+    let id = r.pair();
+    let mut p = payload(1, 1);
+    p.codex_limit = Some(crate::widget_export::WidgetLimit {
+        label: "Codex 5h".into(),
+        used_percent: 62.0,
+        resets_at_ms: None,
+        as_of_ms: 1,
+    });
+    r.publish(p, T0 + 60_000);
+    let sent = r.relay.down(&id).unwrap().1;
+    assert_eq!(sent["payload"]["agents"]["active"], 1);
+    assert!(sent["payload"].get("codex_limit").is_none());
+}
+
+#[test]
 fn publishing_follows_changes_with_a_floor_and_a_resend() {
     let mut r = rig("publish");
     let id = r.pair();

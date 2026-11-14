@@ -22,14 +22,14 @@ struct AgentPulseWidgetView: View {
             case let .stale(since):
                 sleeping(Text("No update since \(Text(since, style: .time))"),
                          "Open AgentPulse to refresh", silhouette)
-            case let .live(p, asOf) where family == .systemMedium:
+            case let .live(p, asOf, now) where family == .systemMedium:
                 HStack(alignment: .top, spacing: 14) {
                     summary(p, asOf: asOf, silhouette: silhouette)
                         .frame(width: 132)
-                    detail(p, silhouette: silhouette)
+                    detail(p, now: now, silhouette: silhouette)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-            case let .live(p, asOf):
+            case let .live(p, asOf, _):
                 summary(p, asOf: asOf, silhouette: silhouette)
             }
         }
@@ -99,7 +99,10 @@ struct AgentPulseWidgetView: View {
                 .minimumScaleFactor(0.75)
                 .accessibilityLabel(p.today.cost == "—" ? "Cost today unavailable" : "Cost today \(p.today.cost), estimate")
             if let asOf {
-                Text("as of \(Text(asOf, style: .time))")
+                // Advances on its own between reloads.
+                Text("Updated \(Text(asOf, style: .relative)) ago")
+                    // The widget's words are English; the system locale would mix languages.
+                    .environment(\.locale, Locale(identifier: "en_US"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -109,7 +112,7 @@ struct AgentPulseWidgetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
-    private func detail(_ p: WidgetPayload, silhouette: Bool) -> some View {
+    private func detail(_ p: WidgetPayload, now: Date, silhouette: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             if p.sessions.isEmpty {
                 Text("No live sessions")
@@ -121,6 +124,9 @@ struct AgentPulseWidgetView: View {
                 }
             }
             Spacer(minLength: 0)
+            if let limit = p.codexLimit {
+                LimitBar(limit: limit, outOfDate: limit.outOfDate(at: now), old: limit.old(at: now))
+            }
             Text("Today \(p.today.tokens) tokens")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -148,7 +154,7 @@ struct AgentPulseWidgetView: View {
 
 /// The app's colours: cream ground, lilac stage, one ribbon colour per state.
 struct Palette {
-    let ground, stage, need, work, idle: Color
+    let ground, stage, need, work, idle, codex, warn, full: Color
 
     init(_ scheme: ColorScheme) {
         let dark = scheme == .dark
@@ -157,6 +163,15 @@ struct Palette {
         need = Color(hex: 0xD92D6A)
         work = Color(hex: 0x2F6FE0)
         idle = Color(hex: 0x6E737B)
+        // The app's Codex series, waiting and failed colours.
+        codex = Color(hex: dark ? 0xA3AEF0 : 0x5F6FCB)
+        warn = Color(hex: dark ? 0xE59A55 : 0xB9520A)
+        full = Color(hex: dark ? 0xF0857C : 0xB4423E)
+    }
+
+    /// A limit bar's fill, warning as the window fills, as in the app.
+    func limit(_ percent: Double) -> Color {
+        percent >= 90 ? full : percent >= 75 ? warn : codex
     }
 
     func ribbon(_ status: String) -> (Color, String) {
@@ -227,6 +242,50 @@ private struct Ribbon: View {
                     Capsule().fill(fill)
                 }
             }
+    }
+}
+
+/// Codex's plan limit: its name, a thin bar and the share used; text alone once out of date.
+private struct LimitBar: View {
+    let limit: WidgetPayload.Limit
+    let outOfDate: Bool
+    /// The reading is over an hour old.
+    let old: Bool
+    @Environment(\.widgetPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                Text(outOfDate ? "\(limit.label) limit out of date" : limit.label)
+                    .font(.caption2.weight(.bold))
+                    .lineLimit(1)
+                if !outOfDate {
+                    let used = Double(limit.percent) / 100
+                    Capsule()
+                        .fill(.secondary.opacity(0.35))
+                        .overlay(alignment: .leading) {
+                            GeometryReader { g in
+                                Capsule().fill(palette.limit(limit.usedPercent))
+                                    .frame(width: g.size.width * used)
+                            }
+                        }
+                        .frame(height: 4)
+                    Text("\(limit.percent)%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if old {
+                Text("as of \(Text(limit.asOf, style: .time))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .environment(\.locale, Locale(identifier: "en_US"))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(outOfDate ? "\(limit.label) limit out of date"
+            : "\(limit.label) limit \(limit.percent) percent used")
     }
 }
 

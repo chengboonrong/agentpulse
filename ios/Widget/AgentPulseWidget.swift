@@ -34,7 +34,7 @@ struct Provider: TimelineProvider {
             var pairing = (try? Self.client?.store.pairings())?.first
             if let p = pairing, let client = Self.client { pairing = (try? await client.fetchDown(p)) ?? p }
             var entries = [Self.entry(pairing, now)]
-            if let pairing, case .live(_, let asOf?) = entries[0].state {
+            if let pairing, case .live(_, let asOf?, _) = entries[0].state {
                 let staleAt = asOf.addingTimeInterval(WidgetState.ageLimit + 1)
                 entries.append(Self.entry(pairing, staleAt))
             }
