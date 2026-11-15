@@ -597,6 +597,9 @@ mod tests {
                 .spawn()
                 .unwrap(),
         );
+        // Let exec and dyld finish first: their few milliseconds of CPU would otherwise land
+        // in the first window and read about 1% on a busy CI runner.
+        std::thread::sleep(std::time::Duration::from_millis(300));
         let mut s = Sampler::new();
         s.sample();
         for _ in 0..3 {
