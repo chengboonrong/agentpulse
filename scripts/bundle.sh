@@ -18,7 +18,7 @@
 #   - an App Store Connect API key: AGENTPULSE_NOTARY_KEY_ID and AGENTPULSE_NOTARY_ISSUER
 #     (env or signing.local), with the key at AGENTPULSE_NOTARY_KEY (env), default
 #     ~/.appstoreconnect/private_keys/AuthKey_<key id>.p8. No keychain item needed.
-#   - a keychain profile named by AGENTPULSE_NOTARY_PROFILE (env or signing.local),
+#   - otherwise, a keychain profile named by AGENTPULSE_NOTARY_PROFILE (env or signing.local),
 #     default "agentpulse-notary":
 #       xcrun notarytool store-credentials agentpulse-notary --apple-id <id> --team-id <team>
 #
@@ -86,6 +86,9 @@ if [[ $RELEASE == 1 ]]; then
     if [[ -n "$NOTARY_KEY_ID" ]]; then
         [[ -n "$NOTARY_ISSUER" ]] || die "AGENTPULSE_NOTARY_KEY_ID is set but AGENTPULSE_NOTARY_ISSUER is not"
         [[ -f "$NOTARY_KEY" ]] || die "no API key file at $NOTARY_KEY (set AGENTPULSE_NOTARY_KEY)"
+        step "Notarizing with API key $NOTARY_KEY_ID (it takes precedence over a keychain profile)"
+    else
+        step "Notarizing with keychain profile '$NOTARY_PROFILE'"
     fi
     # Fail before the long build, not after it.
     xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1 ||

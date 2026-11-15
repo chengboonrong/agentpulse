@@ -44,7 +44,8 @@ AGENTPULSE_NOTARY_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
 with the key file at `~/.appstoreconnect/private_keys/AuthKey_<key id>.p8` (or
-`AGENTPULSE_NOTARY_KEY` in the environment), or a notarytool keychain profile:
+`AGENTPULSE_NOTARY_KEY` in the environment). Without those two settings it uses a notarytool
+keychain profile instead:
 
 ```sh
 xcrun notarytool store-credentials agentpulse-notary --apple-id <your Apple ID> --team-id XXXXXXXXXX
