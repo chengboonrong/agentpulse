@@ -369,7 +369,8 @@ fn new_live_session_forces_rescan() {
 #[test]
 fn cold_file_append_is_found_by_next_full_scan() {
     let (_d, a, proj) = setup();
-    let mut a = a.with_rescan_interval(Duration::from_millis(30));
+    // Long enough that the second poll below lands inside it even on a slow CI runner.
+    let mut a = a.with_rescan_interval(Duration::from_millis(500));
     let path = proj.join("s1.jsonl");
     write(&path, &[asst(T1, "msg_1", "m-a", 1)]);
     let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
@@ -387,7 +388,7 @@ fn cold_file_append_is_found_by_next_full_scan() {
         a.poll(&off, 0).unwrap().is_empty(),
         "cold files wait for the rescan"
     );
-    std::thread::sleep(Duration::from_millis(80));
+    std::thread::sleep(Duration::from_millis(600));
     let b = a.poll(&off, 0).unwrap();
     assert_eq!(b.events.len(), 1);
     assert_eq!(b.events[0].event_id, "msg_2");
