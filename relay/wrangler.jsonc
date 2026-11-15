@@ -13,5 +13,18 @@
   // "ratelimits": [
   //   { "name": "CREATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
   // ],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Pairing"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Pairing"] }],
+  "env": {
+    // The public AgentPulse relay (relay/README.md, "Public relay"): npx wrangler deploy --env public
+    // Its own Worker (agentpulse-relay-public), so a plain `wrangler deploy` never replaces
+    // it, and no workers.dev address: only relay.snitco.com.
+    "public": {
+      "workers_dev": false,
+      "routes": [{ "pattern": "relay.snitco.com", "custom_domain": true }],
+      "durable_objects": { "bindings": [{ "name": "PAIRINGS", "class_name": "Pairing" }] },
+      "ratelimits": [
+        { "name": "CREATE_LIMITER", "namespace_id": "2001", "simple": { "limit": 10, "period": 60 } }
+      ]
+    }
+  }
 }

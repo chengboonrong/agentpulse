@@ -216,7 +216,8 @@ pushes only go through the relay. Widgets use the relay only.
 
 ## Mac client
 
-- Settings, a "Phones" card: relay address (empty until set), "Pair a Phone" (QR sheet
+- Settings, a "Phones" card: relay address (empty uses the AgentPulse relay,
+  `https://relay.snitco.com`, see `relay/README.md`, "Public relay"), "Pair a Phone" (QR sheet
   with a countdown), "Direct connection" (on by default), the paired phones with last
   seen time and whether they are connected directly, and Remove per phone.
 - The direct listener (see above), sending the same state messages to connected phones.
@@ -227,8 +228,8 @@ pushes only go through the relay. Widgets use the relay only.
   and every 30 s, and every 2 s while a pairing's QR code is shown.
 - The direct listener starts once there is a state to send, so a phone's first frame is
   always a state.
-- A relay that sets `RELAY_KEY`: Settings takes the key, kept in the Keychain and sent
-  only when creating a pairing.
+- An own relay that sets `RELAY_KEY`: Settings takes the key, kept in the Keychain and sent
+  only when creating a pairing on that relay, never to the AgentPulse relay.
 - Live Activity pushes, when the phone has sent tokens:
   - `start` when the first agent becomes active (iOS 17.2 push-to-start);
   - `update` when the glance changes, at most once a minute unless urgent;
@@ -261,8 +262,3 @@ pushes only go through the relay. Widgets use the relay only.
    `scripts/e2e-ios.sh` pairs the app with the Mac through it and connects directly.
 4. Live Activity and push. Needs the paid program and a deployed relay to test for
    real; until then only the request the relay would send is checked.
-
-## Not decided
-
-- Who hosts the default relay. Until the owner deploys one, the address is empty and
-  pairing asks for it.

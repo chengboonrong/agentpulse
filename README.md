@@ -118,11 +118,12 @@ notice with a link to its GitHub page. Values AgentPulse cannot measure are show
 unavailable, not as zero.
 
 Phones (Settings, Phones; opt-in, see [docs/mobile.md](docs/mobile.md)) make no request until
-a relay address is set and a phone is being paired or is paired. A paired phone gets the
+a phone is being paired or is paired. Pairing goes through the AgentPulse relay at
+`relay.snitco.com` unless you set your own relay address. A paired phone gets the
 widget's metadata (live sessions with their project's folder name, today's tokens and cost,
 the output rate, the cat), never paths, prompts or code, sealed end to end for that phone.
-The relay, at the address you set and only there, stores that ciphertext and passes on the
-phone's sealed replies; it can't read either. "Direct connection" (on by default) also sends
+The relay stores that ciphertext and passes on the phone's sealed replies; it can't read
+either. "Direct connection" (on by default) also sends
 it straight to the phone on the same network: the Mac advertises Bonjour `_agentpulse._tcp`
 while a phone is paired, and the connection is encrypted with the pairing's keys.
 
