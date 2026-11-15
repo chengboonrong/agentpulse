@@ -149,12 +149,17 @@ not been measured.
   tested on macOS 27 sees no other processes (`proc_listallpids` returns 0,
   `proc_pid_rusage` fails) and cannot open `~/.claude` without a user grant, so per-agent
   CPU and memory, and the CPU sprint, would be lost.
-- App icon. Build-time shaders need Xcode's Metal Toolchain.
+- Build-time shaders need Xcode's Metal Toolchain.
 
 ## Phase 6 — Beyond the window: updates notice done (owner request, 2026-11-13)
-- App logo. Design an original mark (no RunCat likeness) and ship it as the app icon, the
-  DMG icon and the README header. It needs light, dark and tinted variants for macOS 26+
-  icons, and a template version that reads at menu-bar size.
+- Done: app logo ("Peek", picked by the owner on 2026-11-15 from four directions): a
+  front-facing pixel cat face peeking up from the bottom edge, drawn on the same 16-pixel grid
+  and ginger palette as the window's cats, plus a pink nose. The source is the Icon Composer document
+  `macos/AppIcon.icon`; `scripts/bundle.sh` compiles it with `actool` into `Assets.car`
+  (macOS 26 light, dark and tinted) and `AppIcon.icns` (macOS 14 and 15), and gives the DMG
+  volume the same icon. The iPhone app uses the same document. README header images and a
+  16 x 14 menu-bar template (`assets/logo/`) are rendered from it; the template is not used
+  by the app yet, since the menu bar keeps its live cat.
 - Dynamic Island on the Mac. macOS has no public Dynamic Island or notch API. Options to
   research before building:
   - a borderless window drawn around the notch, as open-source notch apps do. Read their

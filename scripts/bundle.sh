@@ -46,7 +46,7 @@ step() { echo "==> $*"; }
 # macOS has no timeout(1); perl's alarm is enough to stop a codesign stuck on a keychain dialog.
 with_timeout() { perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!"' "$@"; }
 
-for tool in cargo xcodebuild xcodegen codesign security openssl plutil ditto hdiutil shasum; do
+for tool in cargo xcodebuild xcodegen xcrun codesign security openssl plutil ditto hdiutil shasum; do
     command -v "$tool" >/dev/null || die "$tool not found (Rust: rustup.rs; xcodegen: brew install xcodegen; the rest ship with Xcode)"
 done
 
@@ -132,6 +132,14 @@ cp "$PRODUCTS/libAgentPulseLinkBridge.dylib" "$APP/Contents/Frameworks/"
 cp -R "$PRODUCTS/AgentPulseWidgets.appex" "$APP/Contents/PlugIns/"
 mkdir -p "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources"
 cp "$PRODUCTS/placeholder.json" "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources/"
+# App icon from the Icon Composer document: Assets.car carries the macOS 26 light, dark
+# and tinted renditions, AppIcon.icns the icon for macOS 14 and 15.
+mkdir -p "$APP/Contents/Resources"
+xcrun actool macos/AppIcon.icon --compile "$APP/Contents/Resources" --app-icon AppIcon \
+    --platform macosx --minimum-deployment-target 14.0 \
+    --output-partial-info-plist "$OUT/icon-info.plist" >/dev/null
+[[ -f "$APP/Contents/Resources/AppIcon.icns" && -f "$APP/Contents/Resources/Assets.car" ]] ||
+    die "actool did not produce AppIcon.icns and Assets.car (needs Xcode 26 or later)"
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -146,6 +154,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>$VERSION</string>
 	<key>CFBundleVersion</key><string>$VERSION</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>CFBundleIconName</key><string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSLocalNetworkUsageDescription</key><string>AgentPulse connects directly to your paired iPhone on this network.</string>
@@ -207,8 +217,21 @@ if [[ $DMG == 1 ]]; then
     mkdir -p "$STAGE"
     ditto "$APP" "$STAGE/AgentPulse.app"
     ln -s /Applications "$STAGE/Applications"
-    hdiutil create -quiet -volname "AgentPulse $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO "$IMAGE"
-    rm -rf "$STAGE"
+    # The mounted volume shows the app icon. The custom-icon flag must be set on the volume
+    # root itself (hdiutil drops it from the source folder), so go through a writable image.
+    cp "$APP/Contents/Resources/AppIcon.icns" "$STAGE/.VolumeIcon.icns"
+    RW="$OUT/dmg-rw.dmg"
+    rm -f "$RW"
+    hdiutil create -quiet -volname "AgentPulse $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDRW "$RW"
+    MNT="$OUT/dmg-mnt"
+    mkdir -p "$MNT"
+    trap 'hdiutil detach -quiet -force "$MNT" 2>/dev/null || true' EXIT
+    hdiutil attach -quiet -nobrowse -mountpoint "$MNT" "$RW"
+    xcrun SetFile -a C "$MNT"
+    hdiutil detach -quiet "$MNT" || hdiutil detach -quiet -force "$MNT"
+    trap - EXIT
+    hdiutil convert -quiet "$RW" -format UDZO -o "$IMAGE"
+    rm -rf "$STAGE" "$RW" "$MNT"
     sign "$IMAGE"
     if [[ $RELEASE == 1 ]]; then
         step "Notarizing (uploads the signed image to Apple; usually a few minutes)"

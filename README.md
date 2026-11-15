@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/icon-dark.png">
+    <img src="assets/logo/icon-light.png" width="128" height="128" alt="AgentPulse icon: a pixel cat's face peeking up from the bottom edge">
+  </picture>
+</p>
+
 # AgentPulse
 
 Watch your agents work. A native macOS app that shows what the AI coding agents on this
@@ -122,7 +129,8 @@ while a phone is paired, and the connection is encrypted with the pairing's keys
 ## Requirements
 
 - macOS 14 or later on Apple Silicon (developed on macOS 27).
-- Rust (stable) and Xcode command line tools.
+- Rust (stable) and Xcode command line tools; Xcode 26 or later to bundle the app
+  (`scripts/bundle.sh`) or build the iPhone app.
 
 ## Build and run
 

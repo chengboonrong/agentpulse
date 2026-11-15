@@ -10,6 +10,7 @@ macOS 14+), and the pieces that put them in a signed `AgentPulse.app`.
 | `Widgets/` | The extension: timeline provider, widget, `Info.plist`. |
 | `Bridge/` | `libAgentPulseWidgetBridge.dylib`: one C function, `agentpulse_reload_widgets`, that calls `WidgetCenter.shared.reloadAllTimelines()`. The Rust app `dlopen`s it. |
 | `LinkBridge/` | `libAgentPulseLinkBridge.dylib`: the phone link's Mac side (Keychain, sealing through `link/`, the QR image, the direct listener) behind `aplink_call`, `aplink_free` and `aplink_set_event_handler`. The Rust app `dlopen`s it (`crates/agentpulse-app/src/phones/`). |
+| `AppIcon.icon` | Icon Composer document for the Mac and iPhone app icon; `scripts/bundle.sh` compiles it with `actool`. |
 | `Preview/` | `widget-preview <widget.json> <out-dir>`: renders the same views to PNG (data, no update since, not running, gallery placeholder; small and medium; light, dark, and a flattened "accented" approximation) for review without a desktop. |
 
 The gallery placeholder and the cat in "isn't running" come from `placeholder.json`,
