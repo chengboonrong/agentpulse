@@ -14,9 +14,13 @@
 # Team id: AGENTPULSE_TEAM_ID, else AGENTPULSE_TEAM_ID=... in macos/signing.local
 # (untracked). The signing identity is the valid code-signing certificate of the
 # right kind whose OU is that team; it is selected by hash, never by name.
-# --release also needs a notarytool keychain profile, named by
-# AGENTPULSE_NOTARY_PROFILE (env or signing.local), default "agentpulse-notary":
-#   xcrun notarytool store-credentials agentpulse-notary --apple-id <id> --team-id <team>
+# --release also needs notarytool credentials, either of:
+#   - an App Store Connect API key: AGENTPULSE_NOTARY_KEY_ID and AGENTPULSE_NOTARY_ISSUER
+#     (env or signing.local), with the key at AGENTPULSE_NOTARY_KEY (env), default
+#     ~/.appstoreconnect/private_keys/AuthKey_<key id>.p8. No keychain item needed.
+#   - otherwise, a keychain profile named by AGENTPULSE_NOTARY_PROFILE (env or signing.local),
+#     default "agentpulse-notary":
+#       xcrun notarytool store-credentials agentpulse-notary --apple-id <id> --team-id <team>
 #
 # Data path: the app writes ~/Library/Application Support/AgentPulse/Widget/
 # widget.json and the sandboxed extension reads it through a read-only
@@ -69,13 +73,29 @@ fi
 if [[ $RELEASE == 1 ]]; then KIND="Developer ID Application"; else KIND="Apple Development"; fi
 NOTARY_PROFILE="${AGENTPULSE_NOTARY_PROFILE:-$(local_setting AGENTPULSE_NOTARY_PROFILE)}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-agentpulse-notary}"
+NOTARY_KEY_ID="${AGENTPULSE_NOTARY_KEY_ID:-$(local_setting AGENTPULSE_NOTARY_KEY_ID)}"
+NOTARY_ISSUER="${AGENTPULSE_NOTARY_ISSUER:-$(local_setting AGENTPULSE_NOTARY_ISSUER)}"
+if [[ -n "$NOTARY_KEY_ID" ]]; then
+    NOTARY_KEY="${AGENTPULSE_NOTARY_KEY:-$HOME/.appstoreconnect/private_keys/AuthKey_$NOTARY_KEY_ID.p8}"
+    NOTARY_AUTH=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+else
+    NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+fi
 if [[ $RELEASE == 1 ]]; then
     for tool in xcrun spctl; do command -v "$tool" >/dev/null || die "$tool not found"; done
+    if [[ -n "$NOTARY_KEY_ID" ]]; then
+        [[ -n "$NOTARY_ISSUER" ]] || die "AGENTPULSE_NOTARY_KEY_ID is set but AGENTPULSE_NOTARY_ISSUER is not"
+        [[ -f "$NOTARY_KEY" ]] || die "no API key file at $NOTARY_KEY (set AGENTPULSE_NOTARY_KEY)"
+        step "Notarizing with API key $NOTARY_KEY_ID (it takes precedence over a keychain profile)"
+    else
+        step "Notarizing with keychain profile '$NOTARY_PROFILE'"
+    fi
     # Fail before the long build, not after it.
-    xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 ||
-        die "no usable notarytool keychain profile '$NOTARY_PROFILE'. Create it once with:
-    xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <your Apple ID> --team-id $TEAM_ID
-  (it asks for an app-specific password from account.apple.com)"
+    xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1 ||
+        die "notarytool cannot sign in with ${NOTARY_AUTH[*]:0:2}. Either set
+  AGENTPULSE_NOTARY_KEY_ID and AGENTPULSE_NOTARY_ISSUER for an App Store Connect API key,
+  or create a keychain profile once with:
+    xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <your Apple ID> --team-id $TEAM_ID"
 fi
 
 step "Finding a '$KIND' identity for team $TEAM_ID"
@@ -235,7 +255,7 @@ if [[ $DMG == 1 ]]; then
     sign "$IMAGE"
     if [[ $RELEASE == 1 ]]; then
         step "Notarizing (uploads the signed image to Apple; usually a few minutes)"
-        xcrun notarytool submit "$IMAGE" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun notarytool submit "$IMAGE" "${NOTARY_AUTH[@]}" --wait
         xcrun stapler staple "$IMAGE"
         xcrun stapler validate "$IMAGE"
         step "Gatekeeper assessment"
