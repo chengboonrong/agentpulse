@@ -34,7 +34,17 @@ scripts/bundle.sh
 development certificate and not notarized. `scripts/bundle.sh --release` signs with the
 team's Developer ID Application certificate and a secure timestamp, then notarizes and
 staples the DMG so it opens on any Mac. It needs that certificate (Xcode > Settings >
-Accounts > Manage Certificates; a paid membership) and a notarytool keychain profile:
+Accounts > Manage Certificates; a paid membership) and notarytool credentials. Either
+use an App Store Connect API key (Developer role or higher), set in the environment or
+`macos/signing.local`:
+
+```sh
+AGENTPULSE_NOTARY_KEY_ID=XXXXXXXXXX
+AGENTPULSE_NOTARY_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+with the key file at `~/.appstoreconnect/private_keys/AuthKey_<key id>.p8` (or
+`AGENTPULSE_NOTARY_KEY` in the environment), or a notarytool keychain profile:
 
 ```sh
 xcrun notarytool store-credentials agentpulse-notary --apple-id <your Apple ID> --team-id XXXXXXXXXX
