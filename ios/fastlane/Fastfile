@@ -1,0 +1,54 @@
+# `fastlane beta` (run from ios/): archive the iPhone app and upload it to TestFlight.
+#
+# Needs an App Store Connect API key (App Manager or Admin role), read by
+# app_store_connect_api_key from APP_STORE_CONNECT_API_KEY_KEY_ID,
+# APP_STORE_CONNECT_API_KEY_ISSUER_ID and APP_STORE_CONNECT_API_KEY_KEY_FILEPATH, and the
+# team id from AGENTPULSE_TEAM_ID or macos/signing.local, as scripts/bundle.sh does.
+# Signing is automatic: with the API key, xcodebuild registers the App IDs and creates the
+# distribution certificate and profiles itself. The App Group and the App Store Connect
+# app record are one-time manual steps (ios/README.md).
+
+opt_out_usage
+skip_docs
+
+ROOT = File.expand_path("../..", __dir__)
+APP_ID = "io.github.chengboonrong.AgentPulse.phone"
+
+lane :beta do
+  # Xcode packages the .ipa with rsync and Apple-only flags; a Homebrew rsync earlier on
+  # PATH fails that step with "exportArchive Copy failed".
+  ENV["PATH"] = "/usr/bin:#{ENV['PATH']}"
+  local = "#{ROOT}/macos/signing.local"
+  team = ENV["AGENTPULSE_TEAM_ID"] ||
+         (File.file?(local) && File.read(local)[/^\s*AGENTPULSE_TEAM_ID\s*=\s*(\S+)/, 1])
+  unless team.to_s.match?(/\A[A-Z0-9]{10}\z/)
+    UI.user_error!("No 10-character team id: set AGENTPULSE_TEAM_ID or macos/signing.local")
+  end
+  api_key = app_store_connect_api_key
+  # One version for the Mac and iPhone apps: the workspace version in Cargo.toml.
+  version = File.read("#{ROOT}/Cargo.toml")[/^version = "([^"]+)"/, 1]
+  build = latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID,
+                                         version: version, initial_build_number: 0) + 1
+  auth = "-allowProvisioningUpdates" \
+         " -authenticationKeyPath #{File.expand_path(ENV.fetch('APP_STORE_CONNECT_API_KEY_KEY_FILEPATH')).shellescape}" \
+         " -authenticationKeyID #{ENV.fetch('APP_STORE_CONNECT_API_KEY_KEY_ID')}" \
+         " -authenticationKeyIssuerID #{ENV.fetch('APP_STORE_CONNECT_API_KEY_ISSUER_ID')}"
+
+  sh("xcodegen", "generate", "--quiet", "--spec", "#{ROOT}/ios/project.yml", "--project", "#{ROOT}/ios")
+  build_app(
+    project: "#{ROOT}/ios/AgentPulsePhone.xcodeproj",
+    scheme: "AgentPulse",
+    configuration: "Release",
+    output_directory: "#{ROOT}/target/ios",
+    # project.yml signs ad hoc for simulator builds; switch to automatic signing here.
+    # gym passes xcargs to the export step too, so the API key flags reach both.
+    xcargs: "#{auth} CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=#{team} " \
+            "CODE_SIGN_IDENTITY='Apple Development' " \
+            "MARKETING_VERSION=#{version} CURRENT_PROJECT_VERSION=#{build}",
+    export_method: "app-store",
+    export_options: { signingStyle: "automatic" },
+    export_team_id: team,
+    skip_profile_detection: true
+  )
+  upload_to_testflight(skip_waiting_for_build_processing: true)
+end

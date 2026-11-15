@@ -5,3 +5,6 @@
 macos/signing.local
 macos/*.xcodeproj
 ios/*.xcodeproj
+
+# fastlane run output
+ios/fastlane/report.xml
