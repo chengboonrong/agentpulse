@@ -1,8 +1,8 @@
 # iPhone app
 
 The AgentPulse iPhone app and its home-screen widgets (SwiftUI, iOS 17+), the phone side of
-[docs/mobile.md](../docs/mobile.md). Simulator only for now: builds are signed to run
-locally, with no team.
+[docs/mobile.md](../docs/mobile.md). Local builds are for the simulator, with no team;
+TestFlight builds come from `fastlane beta` (below).
 
 | Path | What |
 |---|---|
@@ -51,3 +51,21 @@ the relay. The simulator is deleted at the end. The link goes in as the DEBUG-on
 launch argument `-AgentPulseE2ELink`, because `simctl openurl` makes the simulator ask
 "Open in AgentPulse?", and `-AgentPulseE2EAutoConfirm YES` skips the app's own question;
 all three are compiled out of Release builds.
+
+## TestFlight
+
+```sh
+export APP_STORE_CONNECT_API_KEY_KEY_ID=<key id>
+export APP_STORE_CONNECT_API_KEY_ISSUER_ID=<issuer id>
+export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH=~/.appstoreconnect/private_keys/AuthKey_<key id>.p8
+cd ios && fastlane beta
+```
+
+`fastlane/Fastfile` archives the Release app with automatic signing for the team in
+`macos/signing.local` (or `AGENTPULSE_TEAM_ID`), using the workspace version from
+`Cargo.toml` and the latest TestFlight build number for that version + 1, writes the `.ipa` to `target/ios/`
+and uploads it. The API key needs the App Manager or Admin role. One-time setup in the
+developer portal and App Store Connect: the App Group above registered on the team and
+ticked on both App IDs (`io.github.chengboonrong.AgentPulse.phone` and `.phone.Widgets`),
+and an App Store Connect app record for the first bundle id. The app declares
+`ITSAppUsesNonExemptEncryption = NO`: it only uses the system's CryptoKit.
