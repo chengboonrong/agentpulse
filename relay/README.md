@@ -74,7 +74,8 @@ push only to a build of the app signed by that same team.
 `relay.snitco.com` is the relay AgentPulse uses when no relay address is set. It is
 deployed with `npx wrangler deploy --env public` (the `public` environment in
 `wrangler.jsonc`, Worker `agentpulse-relay-public`), runs without `RELAY_KEY`, and binds `CREATE_LIMITER`: 10 pairings and
-hellos per IP per minute.
+hellos per IP per minute. Its secrets (the `APNS_*` ones, once pushes are used) are set
+with `--env public`, for example `npx wrangler secret put APNS_KEY_ID --env public`.
 
 ## Self-hosting
 

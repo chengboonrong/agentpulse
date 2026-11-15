@@ -316,6 +316,8 @@ struct Core {
     connections: HashMap<i64, String>,
     /// Whether the relay key is in the Keychain; None until read, once a relay is set.
     relay_key: Option<bool>,
+    /// The own relay last seen in settings; None before the first look.
+    own_relay: Option<Option<String>>,
     shared: Shared,
 }
 
@@ -345,6 +347,7 @@ impl Core {
             listener_retry_ms: 0,
             connections: HashMap::new(),
             relay_key: None,
+            own_relay: None,
             shared,
         };
         // A code no longer shown (the app restarted) can't be shown again.
@@ -393,6 +396,7 @@ impl Core {
 
     fn start_pairing(&mut self, now: i64) -> Result<Started, String> {
         self.error = None;
+        self.follow_own_relay();
         if self.bridge.is_none() {
             return Err("Phones need the app bundle.".into());
         }
@@ -524,12 +528,31 @@ impl Core {
         self.pending = None;
     }
 
+    /// A relay key belongs to the own relay it was saved for: when that address changes
+    /// or is cleared, the key is forgotten, so it never reaches another relay.
+    fn follow_own_relay(&mut self) {
+        let own = self.settings.phones().relay;
+        let changed = self.own_relay.as_ref().is_some_and(|seen| *seen != own);
+        if changed {
+            match self.bridge(&json!({"op": "relaykey.set", "key": null})) {
+                Ok(_) => self.relay_key = Some(false),
+                Err(e) => {
+                    // Kept unseen, so the next look tries again before any key is sent.
+                    self.error = Some(format!("Cannot forget the relay key: {e}"));
+                    return;
+                }
+            }
+        }
+        self.own_relay = Some(own);
+    }
+
     // --- the clock ---
 
     fn tick(&mut self, now: i64) {
         if self.bridge.is_none() {
             return;
         }
+        self.follow_own_relay();
         if self.relay_key.is_none() && self.settings.phones().relay.is_some() {
             // A failure leaves it unknown, so a later tick tries again.
             match self.bridge(&json!({"op": "relaykey.get"})) {

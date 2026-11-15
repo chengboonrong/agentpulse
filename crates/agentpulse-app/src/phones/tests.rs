@@ -410,7 +410,7 @@ fn pairing_needs_the_bridge() {
 fn with_no_own_relay_pairing_uses_the_public_one_without_the_key() {
     let mut r = rig("public-relay");
     r.settings.set_phones(Phones::default());
-    // A key kept from a cleared own relay.
+    // A key in the Keychain, as an older version left behind when an own relay was cleared.
     r.bridge.0.lock().unwrap().relay_key = Some("own-key".into());
     let id = r.core.start_pairing(T0).expect("pairing starts").id;
     assert!(!r.bridge.ops().contains(&"relaykey.get".to_owned()));
@@ -424,6 +424,34 @@ fn with_no_own_relay_pairing_uses_the_public_one_without_the_key() {
     assert_eq!(
         (saved[0].id.as_str(), saved[0].relay.as_str()),
         (id.as_str(), PUBLIC_RELAY)
+    );
+}
+
+#[test]
+fn changing_or_clearing_the_own_relay_forgets_its_key() {
+    let mut r = rig("key-follows-relay");
+    r.bridge.0.lock().unwrap().relay_key = Some("key-a".into());
+    r.core.tick(T0);
+    assert_eq!(view(&r).relay_key, Some(true), "kept at startup");
+    // Another address: A's key must not go to it.
+    let mut p = r.settings.phones();
+    p.relay = Some("https://other.test".into());
+    r.settings.set_phones(p.clone());
+    r.core.tick(T0 + 1_000);
+    assert_eq!(r.bridge.0.lock().unwrap().relay_key, None);
+    assert_eq!(view(&r).relay_key, Some(false));
+    // A new key for this relay, then clearing it: forgotten again.
+    r.bridge.0.lock().unwrap().relay_key = Some("key-b".into());
+    p.relay = None;
+    r.settings.set_phones(p);
+    r.core.tick(T0 + 2_000);
+    assert_eq!(r.bridge.0.lock().unwrap().relay_key, None);
+    // Unchanged settings leave a key alone.
+    r.bridge.0.lock().unwrap().relay_key = Some("key-c".into());
+    r.core.tick(T0 + 3_000);
+    assert_eq!(
+        r.bridge.0.lock().unwrap().relay_key.as_deref(),
+        Some("key-c")
     );
 }
 
