@@ -8,14 +8,14 @@ use super::cats::toggled;
 use super::*;
 use crate::hub::{self, now_ms};
 use crate::phones::{Phone, Qr, Started, State};
-use crate::settings::SPEEDS;
+use crate::settings::{PUBLIC_RELAY, SPEEDS};
 use crate::updates::{CURRENT, Check, Release};
 
 const CARD_MAX_W: f32 = 640.;
 const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
 const DIRECT_DETAIL: &str = "Phones on the same Wi-Fi get updates straight from this Mac.";
 const PHONES_PRIVACY: &str =
-    "Updates go through your relay sealed for your phone: the relay can't read them.";
+    "Updates go through the relay sealed for your phone: the relay can't read them.";
 /// The QR code's side, about; modules are whole points so none blur.
 const QR_SIDE: f32 = 220.;
 /// Light modules added around the code: with the generator's own 1-module margin, the
@@ -257,6 +257,18 @@ fn phones_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: Theme) 
                 )
             }),
     )
+    .when(!relay_set, |d| {
+        let host = PUBLIC_RELAY.trim_start_matches("https://");
+        d.child(
+            secondary(
+                &format!(
+                    "Using the AgentPulse relay ({host}). To use your own, enter its address."
+                ),
+                t,
+            )
+            .px(px(sp::S)),
+        )
+    })
     // Known only once a relay is set: with none, nothing touches the Keychain.
     .when(relay_set, |d| {
         d.child(if v.relay_key == Some(true) {
@@ -284,7 +296,7 @@ fn phones_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: Theme) 
             } else {
                 "Pair a Phone"
             };
-            let pair = if relay_set && !hub.pairing_starting {
+            let pair = if !hub.pairing_starting {
                 button("pair", label, t)
                     .on_click(on_hub(entity, |h, cx| h.pair_phone(cx)))
                     .into_any_element()
@@ -302,15 +314,7 @@ fn phones_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: Theme) 
                     .child(label)
                     .into_any_element()
             };
-            div()
-                .px(px(sp::S))
-                .flex()
-                .child(pair)
-                .when(!relay_set, |d| {
-                    d.items_center()
-                        .gap(px(sp::M))
-                        .child(secondary("Set the relay address first.", t))
-                })
+            div().px(px(sp::S)).flex().child(pair)
         }
     })
     .children(

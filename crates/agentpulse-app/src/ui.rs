@@ -510,7 +510,7 @@ impl AppView {
         let relay_field = cx.new(|cx| {
             TextField::new(
                 "Relay address",
-                "https://relay.example.com",
+                "Your own relay (optional)",
                 false,
                 window,
                 cx,

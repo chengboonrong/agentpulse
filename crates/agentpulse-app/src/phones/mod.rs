@@ -4,7 +4,8 @@
 //!
 //! One worker thread makes every bridge and network call. It is driven by commands, by
 //! [`PhoneLink::publish`] and by the bridge's listener events. Off by default: with no
-//! relay address and no pairing it makes no call at all and only waits on its channel.
+//! pairing it makes no network call (and with no own relay set, no bridge call either)
+//! and only waits on its channel.
 //! Secrets stay in the Keychain behind the bridge; `phones.json` holds no secret and
 //! nothing here logs one. The Mac's relay tokens are cached in memory only.
 
@@ -31,7 +32,7 @@ use relay::{Relay, Reply};
 use store::Pairing;
 pub use store::State;
 
-use crate::settings::{Looks, Settings};
+use crate::settings::{Looks, PUBLIC_RELAY, Settings};
 use crate::widget_export::Payload;
 
 const POLL_WAITING_MS: i64 = 2_000;
@@ -395,16 +396,19 @@ impl Core {
         if self.bridge.is_none() {
             return Err("Phones need the app bundle.".into());
         }
-        let relay = self.settings.phones().relay;
-        let relay = relay.as_deref().map(|r| r.trim_end_matches('/'));
-        let Some(relay) = relay.filter(|r| !r.is_empty()).map(str::to_owned) else {
-            return Err("Set the relay address first.".into());
-        };
+        let own = self.settings.phones().relay;
+        let own = own.as_deref().map(|r| r.trim_end_matches('/'));
+        let own = own.filter(|r| !r.is_empty()).map(str::to_owned);
         self.cancel_pairing(now);
-        // The relay's `RELAY_KEY`, sent on this one request only.
-        let relay_key = self.bridge(&json!({"op": "relaykey.get"}))?["key"]
-            .as_str()
-            .map(str::to_owned);
+        // The own relay's `RELAY_KEY`, sent on this one request only. The key belongs
+        // to that relay, so the public one never gets it.
+        let relay_key = match &own {
+            Some(_) => self.bridge(&json!({"op": "relaykey.get"}))?["key"]
+                .as_str()
+                .map(str::to_owned),
+            None => None,
+        };
+        let relay = own.unwrap_or_else(|| PUBLIC_RELAY.to_owned());
         let made = self.bridge(&json!({"op": "pair.new", "relay": relay}))?;
         let field = |k: &str| made[k].as_str().unwrap_or_default().to_owned();
         let id = field("id");

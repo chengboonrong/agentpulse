@@ -114,10 +114,13 @@ impl Default for Updates {
     }
 }
 
+/// The relay a phone pairs through when the user hasn't set their own.
+pub const PUBLIC_RELAY: &str = "https://relay.snitco.com";
+
 /// The phone link (docs/mobile.md, "Mac client").
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Phones {
-    /// The relay's base URL; none until the user sets one.
+    /// The user's own relay; None uses [`PUBLIC_RELAY`].
     pub relay: Option<String>,
     /// The direct connection on the same network.
     pub direct: bool,

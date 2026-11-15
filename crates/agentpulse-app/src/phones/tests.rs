@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use super::*;
-use crate::settings::Phones;
+use crate::settings::{PUBLIC_RELAY, Phones};
 use crate::widget_export::placeholder;
 
 const RELAY: &str = "https://relay.test";
@@ -123,6 +123,8 @@ struct FakeRelay(Arc<Mutex<RelayState>>);
 #[derive(Default)]
 struct RelayState {
     requests: Vec<(String, String)>,
+    /// Each request's relay, beside `requests`.
+    relays: Vec<String>,
     /// Each request's bearer token, beside `requests`.
     tokens: Vec<Option<String>>,
     /// The deployer's `RELAY_KEY`, required on create when set.
@@ -203,11 +205,12 @@ impl Relay for FakeRelay {
         body: Option<&Value>,
     ) -> Result<Reply, String> {
         let mut s = self.0.lock().unwrap();
-        let path = url
-            .strip_prefix(RELAY)
-            .expect("the configured relay")
-            .to_owned();
+        let (relay, path) = [RELAY, PUBLIC_RELAY]
+            .into_iter()
+            .find_map(|r| Some((r, url.strip_prefix(r)?.to_owned())))
+            .expect("the configured relay or the public one");
         s.requests.push((method.into(), path.clone()));
+        s.relays.push(relay.into());
         s.tokens.push(token.map(str::to_owned));
         if !s.online {
             return Err("offline".into());
@@ -396,13 +399,46 @@ fn a_relay_address_alone_only_reads_the_relay_key() {
 }
 
 #[test]
-fn pairing_needs_a_relay_and_the_bridge() {
-    let mut r = rig("no-relay");
-    r.settings.set_phones(Phones::default());
-    assert!(r.core.start_pairing(T0).unwrap_err().contains("relay"));
+fn pairing_needs_the_bridge() {
+    let mut r = rig("no-bridge");
     r.core.bridge = None;
     assert!(r.core.start_pairing(T0).unwrap_err().contains("app bundle"));
     assert!(r.bridge.ops().is_empty() && r.relay.requests().is_empty());
+}
+
+#[test]
+fn with_no_own_relay_pairing_uses_the_public_one_without_the_key() {
+    let mut r = rig("public-relay");
+    r.settings.set_phones(Phones::default());
+    // A key kept from a cleared own relay.
+    r.bridge.0.lock().unwrap().relay_key = Some("own-key".into());
+    let id = r.core.start_pairing(T0).expect("pairing starts").id;
+    assert!(!r.bridge.ops().contains(&"relaykey.get".to_owned()));
+    let s = r.relay.0.lock().unwrap();
+    assert_eq!(s.requests, [("POST".to_owned(), "/v1/pairings".to_owned())]);
+    assert_eq!(s.relays, [PUBLIC_RELAY]);
+    assert_eq!(s.tokens, [None]);
+    drop(s);
+    assert_eq!(r.bridge.calls("pair.new")[0]["relay"], PUBLIC_RELAY);
+    let saved = store::load(&r.dir);
+    assert_eq!(
+        (saved[0].id.as_str(), saved[0].relay.as_str()),
+        (id.as_str(), PUBLIC_RELAY)
+    );
+}
+
+#[test]
+fn an_own_relay_gets_its_key_on_create() {
+    let mut r = rig("own-relay");
+    r.relay.0.lock().unwrap().relay_key = Some("own-key".into());
+    r.bridge.0.lock().unwrap().relay_key = Some("own-key".into());
+    r.core.start_pairing(T0).expect("pairing starts");
+    let s = r.relay.0.lock().unwrap();
+    assert_eq!(s.requests, [("POST".to_owned(), "/v1/pairings".to_owned())]);
+    assert_eq!(s.relays, [RELAY]);
+    assert_eq!(s.tokens, [Some("own-key".to_owned())]);
+    drop(s);
+    assert_eq!(store::load(&r.dir)[0].relay, RELAY);
 }
 
 #[test]

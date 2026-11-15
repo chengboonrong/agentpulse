@@ -279,11 +279,13 @@ Mac slept, and whenever "Check Now" is clicked, on or off. A failed check keeps 
 already found. Nothing is downloaded or installed: a newer release shows a notice and a link
 to its page.
 
-The phone link (docs/mobile.md) is opt-in and makes no request until a relay address is set
-in Settings, Phones, and a phone is being paired or is paired. It talks only to that relay,
-over HTTPS (plain HTTP only for `localhost`), through NSURLSession with `User-Agent:
-AgentPulse/<version>`, `Accept: application/json` and `Accept-Language: en`. Requests:
-`POST /v1/pairings` to create a pairing (the relay key, if one is saved, only here); `GET
+The phone link (docs/mobile.md) is opt-in and makes no request until a phone is being paired
+or is paired. It talks only to the relay: the AgentPulse relay at `https://relay.snitco.com`
+unless a relay address is set in Settings, Phones, and then only that one; a pairing keeps
+the relay it was made on. Over HTTPS (plain HTTP only for `localhost`), through NSURLSession
+with `User-Agent: AgentPulse/<version>`, `Accept: application/json` and `Accept-Language:
+en`. Requests: `POST /v1/pairings` to create a pairing (the relay key, if one is saved, only
+here and only to the own relay); `GET
 /v1/pairings/<id>/up` every 2 s while a QR code is shown, then after each publish and every
 30 s; `PUT /v1/pairings/<id>/down` with the state when the widget payload changes (at most
 every 10 s, else every 5 minutes); `DELETE /v1/pairings/<id>` when a pairing is removed,
