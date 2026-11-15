@@ -1,0 +1,35 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "srgb:1.00000,0.96471,0.90980,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.14118,0.10588,0.16078,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "cat.svg",
+          "name": "cat"
+        }
+      ],
+      "name": "cat",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "specular": false
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

@@ -30,6 +30,7 @@ targets:
       - path: App
         excludes: [Info.plist, AgentPulse.entitlements]
       - ../macos/Shared
+      - ../macos/AppIcon.icon
     settings:
       base:
         PRODUCT_NAME: AgentPulse
