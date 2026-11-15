@@ -107,8 +107,8 @@ pub struct View {
     pub phones: Vec<Phone>,
     pub pending: Option<Started>,
     pub error: Option<String>,
-    /// The relay's `RELAY_KEY` is in the Keychain; None until known (read once a relay
-    /// address is set).
+    /// A `RELAY_KEY` saved for the current own relay is in the Keychain; None until known
+    /// (read once an own relay is set).
     pub relay_key: Option<bool>,
 }
 
@@ -323,7 +323,7 @@ struct Core {
     listener_retry_ms: i64,
     /// Live direct connections: connection number to pairing id.
     connections: HashMap<i64, String>,
-    /// Whether the relay key is in the Keychain; None until read, once a relay is set.
+    /// Whether a key saved for the current own relay is in the Keychain; None until read.
     relay_key: Option<bool>,
     /// The own relay `relay_key` was read for.
     key_checked: Option<String>,
@@ -565,7 +565,11 @@ impl Core {
                     self.relay_key = Some(key.is_some());
                     self.key_checked = own;
                 }
-                Err(e) => tracing::warn!(error = %e, "cannot read the relay key"),
+                Err(e) => {
+                    // Unknown, not the previous relay's answer.
+                    self.relay_key = None;
+                    tracing::warn!(error = %e, "cannot read the relay key");
+                }
             }
         }
         let ids: Vec<(String, State)> = self
