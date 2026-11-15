@@ -61,8 +61,9 @@ pub enum Command {
     Decline(String),
     Remove(String),
     CancelPairing,
-    /// The relay's `RELAY_KEY`, or None to forget it (Keychain only).
-    SetRelayKey(Option<String>),
+    /// An own relay's `RELAY_KEY` with that relay's address, or None to forget it
+    /// (Keychain only).
+    SetRelayKey(Option<(String, String)>),
 }
 
 /// A pairing whose QR code is out: `link` holds the one-time secret, so it lives in
@@ -189,9 +190,10 @@ impl PhoneLink {
         self.send(Msg::Command(Command::CancelPairing));
     }
 
-    /// Keeps the relay's `RELAY_KEY` in the Keychain; None or empty forgets it.
-    pub fn set_relay_key(&self, key: Option<String>) {
-        let key = key.filter(|k| !k.is_empty());
+    /// Keeps an own relay's `RELAY_KEY` in the Keychain, bound to that relay's address
+    /// (relay, key); None or an empty key forgets it.
+    pub fn set_relay_key(&self, key: Option<(String, String)>) {
+        let key = key.filter(|(_, k)| !k.is_empty());
         self.send(Msg::Command(Command::SetRelayKey(key)));
     }
 
@@ -243,6 +245,13 @@ fn bundle_bridge() -> Option<PathBuf> {
         return None;
     }
     Some(contents.join(bridge::PATH)).filter(|p| p.is_file())
+}
+
+/// The key in a stored "<relay> <key>" when it was saved for `relay`. A key from an
+/// older version, saved without its relay, is never sent.
+fn bound_key(stored: &str, relay: Option<&str>) -> Option<String> {
+    let (saved_for, key) = stored.split_once(' ')?;
+    (Some(saved_for) == relay).then(|| key.to_owned())
 }
 
 fn now_ms() -> i64 {
@@ -316,8 +325,8 @@ struct Core {
     connections: HashMap<i64, String>,
     /// Whether the relay key is in the Keychain; None until read, once a relay is set.
     relay_key: Option<bool>,
-    /// The own relay last seen in settings; None before the first look.
-    own_relay: Option<Option<String>>,
+    /// The own relay `relay_key` was read for.
+    key_checked: Option<String>,
     shared: Shared,
 }
 
@@ -347,7 +356,7 @@ impl Core {
             listener_retry_ms: 0,
             connections: HashMap::new(),
             relay_key: None,
-            own_relay: None,
+            key_checked: None,
             shared,
         };
         // A code no longer shown (the app restarted) can't be shown again.
@@ -383,8 +392,17 @@ impl Core {
             Msg::Command(Command::Remove(id)) => self.remove(&id, now),
             Msg::Command(Command::CancelPairing) => self.cancel_pairing(now),
             Msg::Command(Command::SetRelayKey(key)) => {
-                match self.bridge(&json!({"op": "relaykey.set", "key": key})) {
-                    Ok(_) => self.relay_key = Some(key.is_some()),
+                // Kept as "<relay> <key>": a key has no whitespace, an address none either.
+                let stored = key
+                    .as_ref()
+                    .map(|(relay, key)| format!("{} {key}", relay.trim_end_matches('/')));
+                match self.bridge(&json!({"op": "relaykey.set", "key": stored})) {
+                    Ok(_) => {
+                        let own = self.own_relay();
+                        self.relay_key =
+                            Some(stored.is_some_and(|s| bound_key(&s, own.as_deref()).is_some()));
+                        self.key_checked = own;
+                    }
                     Err(e) => self.error = Some(format!("Cannot keep the relay key: {e}")),
                 }
             }
@@ -396,20 +414,17 @@ impl Core {
 
     fn start_pairing(&mut self, now: i64) -> Result<Started, String> {
         self.error = None;
-        self.follow_own_relay();
         if self.bridge.is_none() {
             return Err("Phones need the app bundle.".into());
         }
-        let own = self.settings.phones().relay;
-        let own = own.as_deref().map(|r| r.trim_end_matches('/'));
-        let own = own.filter(|r| !r.is_empty()).map(str::to_owned);
+        let own = self.own_relay();
         self.cancel_pairing(now);
-        // The own relay's `RELAY_KEY`, sent on this one request only. The key belongs
-        // to that relay, so the public one never gets it.
+        // The own relay's `RELAY_KEY`, sent on this one request only, and only to the
+        // relay it was saved for: never to the public relay or another address.
         let relay_key = match &own {
             Some(_) => self.bridge(&json!({"op": "relaykey.get"}))?["key"]
                 .as_str()
-                .map(str::to_owned),
+                .and_then(|s| bound_key(s, own.as_deref())),
             None => None,
         };
         let relay = own.unwrap_or_else(|| PUBLIC_RELAY.to_owned());
@@ -528,22 +543,11 @@ impl Core {
         self.pending = None;
     }
 
-    /// A relay key belongs to the own relay it was saved for: when that address changes
-    /// or is cleared, the key is forgotten, so it never reaches another relay.
-    fn follow_own_relay(&mut self) {
+    /// The own relay's address without a trailing slash; None when unset.
+    fn own_relay(&self) -> Option<String> {
         let own = self.settings.phones().relay;
-        let changed = self.own_relay.as_ref().is_some_and(|seen| *seen != own);
-        if changed {
-            match self.bridge(&json!({"op": "relaykey.set", "key": null})) {
-                Ok(_) => self.relay_key = Some(false),
-                Err(e) => {
-                    // Kept unseen, so the next look tries again before any key is sent.
-                    self.error = Some(format!("Cannot forget the relay key: {e}"));
-                    return;
-                }
-            }
-        }
-        self.own_relay = Some(own);
+        let own = own.as_deref().map(|r| r.trim_end_matches('/'));
+        own.filter(|r| !r.is_empty()).map(str::to_owned)
     }
 
     // --- the clock ---
@@ -552,11 +556,15 @@ impl Core {
         if self.bridge.is_none() {
             return;
         }
-        self.follow_own_relay();
-        if self.relay_key.is_none() && self.settings.phones().relay.is_some() {
+        let own = self.own_relay();
+        if own.is_some() && (self.relay_key.is_none() || self.key_checked != own) {
             // A failure leaves it unknown, so a later tick tries again.
             match self.bridge(&json!({"op": "relaykey.get"})) {
-                Ok(v) => self.relay_key = Some(v["key"].is_string()),
+                Ok(v) => {
+                    let key = v["key"].as_str().and_then(|s| bound_key(s, own.as_deref()));
+                    self.relay_key = Some(key.is_some());
+                    self.key_checked = own;
+                }
                 Err(e) => tracing::warn!(error = %e, "cannot read the relay key"),
             }
         }

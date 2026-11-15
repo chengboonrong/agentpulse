@@ -344,8 +344,11 @@ impl Hub {
         self.phone_error = key
             .is_none()
             .then(|| "That isn't a relay key: one word, at most 256 characters.".to_string());
-        if let Some(key) = key {
-            self.phones.set_relay_key(Some(key.to_string()));
+        // Bound to the address it is saved for, so it never goes to another relay.
+        match (key, self.settings.phones().relay) {
+            (Some(key), Some(relay)) => self.phones.set_relay_key(Some((relay, key.to_string()))),
+            (Some(_), None) => self.phone_error = Some("Set your relay's address first.".into()),
+            (None, _) => {}
         }
         cx.notify();
         self.phone_error.is_none()

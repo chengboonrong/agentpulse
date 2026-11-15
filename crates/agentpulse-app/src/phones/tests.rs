@@ -410,8 +410,8 @@ fn pairing_needs_the_bridge() {
 fn with_no_own_relay_pairing_uses_the_public_one_without_the_key() {
     let mut r = rig("public-relay");
     r.settings.set_phones(Phones::default());
-    // A key in the Keychain, as an older version left behind when an own relay was cleared.
-    r.bridge.0.lock().unwrap().relay_key = Some("own-key".into());
+    // A key saved for a relay that is no longer set.
+    r.bridge.0.lock().unwrap().relay_key = Some(format!("{RELAY} own-key"));
     let id = r.core.start_pairing(T0).expect("pairing starts").id;
     assert!(!r.bridge.ops().contains(&"relaykey.get".to_owned()));
     let s = r.relay.0.lock().unwrap();
@@ -428,38 +428,34 @@ fn with_no_own_relay_pairing_uses_the_public_one_without_the_key() {
 }
 
 #[test]
-fn changing_or_clearing_the_own_relay_forgets_its_key() {
-    let mut r = rig("key-follows-relay");
-    r.bridge.0.lock().unwrap().relay_key = Some("key-a".into());
+fn a_key_goes_only_to_the_relay_it_was_saved_for() {
+    let mut r = rig("key-bound");
+    r.bridge.0.lock().unwrap().relay_key = Some(format!("{RELAY} key-a"));
     r.core.tick(T0);
-    assert_eq!(view(&r).relay_key, Some(true), "kept at startup");
-    // Another address: A's key must not go to it.
+    assert_eq!(view(&r).relay_key, Some(true));
+    // Another own address, with no tick in between (a restart, or a queued message).
     let mut p = r.settings.phones();
-    p.relay = Some("https://other.test".into());
+    p.relay = Some(PUBLIC_RELAY.into());
     r.settings.set_phones(p.clone());
+    r.core.start_pairing(T0).expect("pairing starts");
+    assert_eq!(r.relay.0.lock().unwrap().tokens, [None]);
     r.core.tick(T0 + 1_000);
-    assert_eq!(r.bridge.0.lock().unwrap().relay_key, None);
     assert_eq!(view(&r).relay_key, Some(false));
-    // A new key for this relay, then clearing it: forgotten again.
-    r.bridge.0.lock().unwrap().relay_key = Some("key-b".into());
-    p.relay = None;
+    // A key saved by an older version, without its relay, is never sent.
+    r.bridge.0.lock().unwrap().relay_key = Some("legacy-key".into());
+    p.relay = Some(RELAY.into());
     r.settings.set_phones(p);
-    r.core.tick(T0 + 2_000);
-    assert_eq!(r.bridge.0.lock().unwrap().relay_key, None);
-    // Unchanged settings leave a key alone.
-    r.bridge.0.lock().unwrap().relay_key = Some("key-c".into());
+    r.core.start_pairing(T0 + 2_000).expect("pairing starts");
+    assert_eq!(r.relay.0.lock().unwrap().tokens.last(), Some(&None));
     r.core.tick(T0 + 3_000);
-    assert_eq!(
-        r.bridge.0.lock().unwrap().relay_key.as_deref(),
-        Some("key-c")
-    );
+    assert_eq!(view(&r).relay_key, Some(false));
 }
 
 #[test]
 fn an_own_relay_gets_its_key_on_create() {
     let mut r = rig("own-relay");
     r.relay.0.lock().unwrap().relay_key = Some("own-key".into());
-    r.bridge.0.lock().unwrap().relay_key = Some("own-key".into());
+    r.bridge.0.lock().unwrap().relay_key = Some(format!("{RELAY} own-key"));
     r.core.start_pairing(T0).expect("pairing starts");
     let s = r.relay.0.lock().unwrap();
     assert_eq!(s.requests, [("POST".to_owned(), "/v1/pairings".to_owned())]);
@@ -966,7 +962,10 @@ fn the_relay_key_goes_only_on_create() {
     assert_eq!(view(&r).relay_key, Some(false));
     assert!(r.core.start_pairing(T0).unwrap_err().contains("401"));
     r.core.handle(
-        Msg::Command(Command::SetRelayKey(Some("deployer-key".into()))),
+        Msg::Command(Command::SetRelayKey(Some((
+            format!("{RELAY}/"),
+            "deployer-key".into(),
+        )))),
         T0,
     );
     assert_eq!(view(&r).relay_key, Some(true));

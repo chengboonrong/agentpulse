@@ -57,7 +57,7 @@ fn drive(dir: &Path, relay: &str) -> Result<(), String> {
         .ok()
         .filter(|k| !k.is_empty())
     {
-        link.set_relay_key(Some(key));
+        link.set_relay_key(Some((relay.into(), key)));
         wait(&link, deadline, "the relay key", |v| {
             (v.relay_key == Some(true)).then_some(())
         })?;
