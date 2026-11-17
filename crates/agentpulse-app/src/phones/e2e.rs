@@ -3,6 +3,8 @@
 //! Prints `LINK <link>` and `CODE <code>` for the script, then `OK`, or `FAIL <why>`
 //! and exits 1. `SEEN` in between, once the phone has sent `seen` and is connected directly
 //! (scripts/e2e-ios.sh screenshots the app then, before it removes the Mac).
+//! `AGENTPULSE_E2E_DIRECT=0` turns the direct connection off and waits for `seen` alone
+//! (scripts/e2e-android.sh, whose phone has no direct connection yet).
 
 use std::io::Write;
 use std::path::Path;
@@ -47,10 +49,11 @@ fn say(line: &str) {
 
 fn drive(dir: &Path, relay: &str) -> Result<(), String> {
     let deadline = Instant::now() + TIMEOUT;
+    let direct = std::env::var("AGENTPULSE_E2E_DIRECT").as_deref() != Ok("0");
     let settings = Settings::load(dir);
     settings.set_phones(Phones {
         relay: Some(relay.into()),
-        direct: true,
+        direct,
     });
     let link = PhoneLink::spawn(dir, settings).map_err(|e| e.to_string())?;
     if let Some(key) = std::env::var("AGENTPULSE_E2E_RELAY_KEY")
@@ -97,7 +100,7 @@ fn drive(dir: &Path, relay: &str) -> Result<(), String> {
     wait(&link, deadline, "a seen phone connected directly", |v| {
         v.phones
             .iter()
-            .any(|p| p.id == id && p.last_seen_ms.is_some() && p.direct)
+            .any(|p| p.id == id && p.last_seen_ms.is_some() && (p.direct || !direct))
             .then_some(())
     })?;
     say("SEEN");
