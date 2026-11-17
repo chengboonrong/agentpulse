@@ -8,6 +8,7 @@ TestFlight builds come from `fastlane beta` (below).
 |---|---|
 | `project.yml` | XcodeGen spec. The generated `AgentPulsePhone.xcodeproj` is not committed. |
 | `App/` | The app: Macs list, a Mac's view, a session's view (iPad), Pair (VisionKit scanner, or a paste field where there is no camera), the `agentpulse://pair` link, DEBUG fixtures. |
+| `e2e/` | UI tests of the iPad and iPhone layouts on the fixtures ([below](#ui-tests-ipad-and-iphone-layouts)). |
 | `Widget/` | Small and medium widgets for the first paired Mac: `GET down` every 15 minutes through the relay, else the last stored state, always "as of". |
 
 Both use `macos/Shared/` (the widget payload and views) and `link/`'s `AgentPulsePhone`
@@ -52,6 +53,24 @@ views on both.
 shows a screen from fixture data without network: `macs`, `mac`, `session` (a selected
 session, shown in its column on iPad), `pair-confirm`, `pair-code`, `empty`. `xcrun simctl ui $UDID appearance dark` for dark mode,
 `xcrun simctl io $UDID screenshot <png>` to capture.
+
+## UI tests (iPad and iPhone layouts)
+
+`e2e/` is an [e2e](https://github.com/e2e-inc/e2e) project that checks the layouts on
+the fixtures, with locators only (no model, no network). It needs Node 22.22.3+ or 24.8+,
+and the Debug build above in `target/ios`, which each test installs. The targets name the
+`iPad Pro 11-inch (M5)` and `iPhone 18 Pro` simulators; change `device` in
+`e2e/e2e.config.ts` to one from `xcrun simctl list devices`.
+
+```sh
+cd ios/e2e && npm ci
+npx e2e doctor
+npm run test:ipad      # portrait: Mac + session column; landscape: all three columns
+npm run test:iphone    # compact: the Macs list pushes a Mac
+npm run test:ipad -- --video   # MP4 per test in .e2e/results/<test>/attempt-1/video/
+```
+
+The CLI sends anonymous usage data; `E2E_TELEMETRY_DISABLED=1` turns it off.
 
 ## End to end
 
