@@ -5,11 +5,12 @@ macOS 14+), and the pieces that put them in a signed `AgentPulse.app`.
 
 | Path | What |
 |---|---|
-| `project.yml` | XcodeGen spec: the widget extension, the two bridge dylibs, the preview tool. The generated `AgentPulseWidgets.xcodeproj` is not committed. |
+| `project.yml` | XcodeGen spec: the widget extension, the three bridge dylibs, the preview tool. The generated `AgentPulseWidgets.xcodeproj` is not committed. |
 | `Shared/` | The `widget.json` model (`Payload.swift`) and the SwiftUI views (`WidgetViews.swift`). Used by both the extension and the preview tool. |
 | `Widgets/` | The extension: timeline provider, widget, `Info.plist`. |
 | `Bridge/` | `libAgentPulseWidgetBridge.dylib`: one C function, `agentpulse_reload_widgets`, that calls `WidgetCenter.shared.reloadAllTimelines()`. The Rust app `dlopen`s it. |
 | `LinkBridge/` | `libAgentPulseLinkBridge.dylib`: the phone link's Mac side (Keychain, sealing through `link/`, the QR image, the direct listener) behind `aplink_call`, `aplink_free` and `aplink_set_event_handler`. The Rust app `dlopen`s it (`crates/agentpulse-app/src/phones/`). |
+| `UpdateBridge/` | `libAgentPulseUpdateBridge.dylib`: one C function, `agentpulse_install_update`, that hands the update to Sparkle 2.10.1 (Swift package, MIT). The Rust app `dlopen`s it when the user clicks Install Update (`crates/agentpulse-app/src/updates.rs`). |
 | `AppIcon.icon` | Icon Composer document for the Mac and iPhone app icon; `scripts/bundle.sh` compiles it with `actool`. |
 | `Preview/` | `widget-preview <widget.json> <out-dir>`: renders the same views to PNG (data, no update since, not running, gallery placeholder; small and medium; light, dark, and a flattened "accented" approximation) for review without a desktop. |
 
@@ -72,6 +73,49 @@ the relay's `RELAY_KEY`) are generic passwords in the login keychain, service
 that created an item may read it. A rebuilt development-signed app can count as another
 app, so macOS may ask to allow access to them; "Always Allow" keeps working until the
 next rebuild.
+
+## Updates
+
+AgentPulse finds a new release with its own GitHub check (see the README). Install Update
+in the window, or the menu's Update Available item, starts Sparkle, embedded as `Contents/Frameworks/Sparkle.framework`
+without its XPC services (the app is not sandboxed). Sparkle fetches
+`https://github.com/chengboonrong/agentpulse/releases/latest/download/appcast.xml`, shows
+its own alert, and on the user's click downloads the zip, checks the feed's and the zip's
+EdDSA signatures against the installed copy's `SUPublicEDKey` and the new app's code
+signature, replaces the app and relaunches it. `Info.plist` turns off Sparkle's scheduled
+checks, automatic installs and system profiling. `releases/latest` skips pre-releases, so a
+release must be published as a full release to reach Sparkle; for a pre-release AgentPulse
+opens its GitHub page instead.
+
+The update signing key is an EdDSA pair. The private half lives only in the login keychain
+of the Mac that cuts releases; the public half is `UPDATE_PUBLIC_KEY` in
+`scripts/bundle.sh`. Make it once, with the tools the build downloads (under
+`$CARGO_TARGET_DIR` instead of `target/` when that is set):
+
+```sh
+target/xcode/packages/artifacts/sparkle/Sparkle/bin/generate_keys      # prints the public key
+target/xcode/packages/artifacts/sparkle/Sparkle/bin/generate_keys -x /Volumes/<offline drive>/agentpulse-update.key
+```
+
+Paste the printed public key into `UPDATE_PUBLIC_KEY` and keep the exported private key on
+offline media only (`generate_keys -f <file>` puts it back into a keychain). Never lose or
+change the key: installed copies check every feed and zip against the public key they
+shipped with, so a release signed with another key is refused and its users must update
+by hand.
+
+Release checklist:
+
+1. Bump `version` in `[workspace.package]` in `Cargo.toml`.
+2. `scripts/bundle.sh --release`. It stops before notarizing unless the login keychain
+   holds the key matching `UPDATE_PUBLIC_KEY`, then notarizes and staples the DMG, staples the app,
+   zips it to `AgentPulse-<version>.zip`, signs the zip with `sign_update`, writes a
+   one-item `appcast.xml` pointing at the zip on the `v<version>` release, and signs
+   the feed.
+3. Publish `v<version>` as a full release (not a pre-release) with the DMG, the zip and
+   `appcast.xml` from `target/bundle/`; its notes are what the notice shows:
+   `gh release create v<version> --title "AgentPulse v<version>" --notes-file <notes.md> target/bundle/AgentPulse-<version>.{dmg,zip} target/bundle/appcast.xml`.
+4. Smoke-test from the previous version: open it, Check Now, Install Update, and confirm it
+   relaunches as the new version with the menu-bar cat running.
 
 ## How data reaches the widget
 

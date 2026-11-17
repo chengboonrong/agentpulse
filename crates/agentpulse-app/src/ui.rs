@@ -28,6 +28,7 @@ use crate::format::{self, DASH};
 use crate::hub::Hub;
 use crate::phones::PhoneLink;
 use crate::settings::Settings;
+use crate::updates;
 
 mod cats;
 mod settings;
@@ -144,7 +145,7 @@ pub fn run(
             // Read from disk, never fetched: screenshot mode makes no network request.
             let result = std::fs::read(path)
                 .map_err(|e| e.to_string())
-                .and_then(|body| crate::updates::parse(&body, crate::updates::CURRENT));
+                .and_then(|body| updates::parse(&body, updates::CURRENT));
             hub.update(cx, |hub, cx| hub.show_check(result, cx));
         }
         if !screenshot {
@@ -162,8 +163,8 @@ pub fn run(
                     MenuAction::OpenDashboard => show(cx),
                     MenuAction::OpenSession(id) => open_session(&hub, &id, cx),
                     MenuAction::OpenUpdate => {
-                        if let Some(r) = hub.read(cx).available() {
-                            cx.open_url(&r.url);
+                        if let Some(r) = hub.read(cx).available().cloned() {
+                            updates::install(&r, cx);
                         }
                     }
                     MenuAction::Quit => cx.quit(),

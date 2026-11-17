@@ -9,6 +9,9 @@ options:
 packages:
   AgentPulseLink:
     path: ../link
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -64,6 +67,20 @@ targets:
       - sdk: CoreImage.framework
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
+  AgentPulseUpdateBridge:
+    type: library.dynamic
+    platform: macOS
+    sources: [UpdateBridge]
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseUpdateBridge
+        EXECUTABLE_PREFIX: lib
+        LD_DYLIB_INSTALL_NAME: "@rpath/libAgentPulseUpdateBridge.dylib"
+        LD_RUNPATH_SEARCH_PATHS: "@loader_path"
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
   widget-preview:
     type: tool
     platform: macOS

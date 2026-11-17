@@ -264,7 +264,8 @@ triggers it. The menu-bar cat uses the CPU summed over the Active agents that ha
 
 ## Network
 
-Without a paired phone, the update check is AgentPulse's only network request: an HTTPS GET of
+Without a paired phone, the update check is AgentPulse's only network request made on its
+own: an HTTPS GET of
 `https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10` through an
 ephemeral NSURLSession (no cookies or cache kept). Its headers are `User-Agent:
 AgentPulse/<version>`, `Accept: application/vnd.github+json` and `Accept-Language: en` (so
@@ -276,8 +277,26 @@ ignores drafts and releases whose page is not under
 compares the newest version with its own. It runs every 2 hours while "Check for updates
 automatically" is on (the default), at the next data refresh if a check became due while the
 Mac slept, and whenever "Check Now" is clicked, on or off. A failed check keeps any update
-already found. Nothing is downloaded or installed: a newer release shows a notice and a link
-to its page.
+already found. Nothing is downloaded or installed by itself: a newer release shows a notice.
+
+Clicking "Install Update" (the notice or Settings) or the menu's "Update Available" item loads
+Sparkle 2, which is not started before that click; for a release GitHub marks as a
+pre-release, which Sparkle's feed never has, it opens the release's page instead. Sparkle then makes its own HTTPS requests through an NSURLSession with
+cookies refused (`HTTPCookieStorage` accept policy "never"): a GET of
+`https://github.com/chengboonrong/agentpulse/releases/latest/download/appcast.xml`, and, only
+after the user confirms in Sparkle's window, a GET of the zip the appcast names
+(`https://github.com/chengboonrong/agentpulse/releases/download/v<version>/AgentPulse-<version>.zip`).
+GitHub redirects both to `release-assets.githubusercontent.com`. Headers: `User-Agent:
+AgentPulse/<version>`, `Accept-Language: en`, the standard `Accept-Encoding`, and `Accept:
+application/rss+xml,*/*;q=0.1` for the appcast or `Accept: */*` for the zip; no body. The
+app's `Info.plist` turns off Sparkle's scheduled checks (`SUEnableAutomaticChecks`),
+automatic installs (`SUAllowsAutomaticUpdates`) and system profiling (`SUSendProfileInfo`,
+and `SUEnableSystemProfiling` so it is never offered), so it never checks by itself and
+sends no profile; the appcast carries no release notes, so no notes page is fetched. Sparkle
+refuses an appcast whose EdDSA signature does not match the app's `SUPublicEDKey`
+(`SURequireSignedFeed`), checks the zip's EdDSA signature against that key before
+extracting it (`SUVerifyUpdateBeforeExtraction`), then checks that the new app's code
+signature is valid. A refused update shows Sparkle's error and the running version stays.
 
 The phone link (docs/mobile.md) is opt-in and makes no request until a phone is being paired
 or is paired. It talks only to the relay: the AgentPulse relay at `https://relay.snitco.com`

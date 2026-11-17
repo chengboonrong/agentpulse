@@ -11,7 +11,7 @@
 //! paths, session ids, prompts or anything else not listed in [`Payload`].
 
 use std::collections::{BTreeMap, HashMap};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -46,7 +46,7 @@ pub const WIDGET_DIR: &str = "Library/Application Support/AgentPulse/Widget";
 const APPEX: &str = "PlugIns/AgentPulseWidgets.appex";
 /// Relative to `Contents`.
 const BRIDGE: &str = "Frameworks/libAgentPulseWidgetBridge.dylib";
-const BRIDGE_SYMBOL: &str = "agentpulse_reload_widgets";
+const BRIDGE_SYMBOL: &CStr = c"agentpulse_reload_widgets";
 
 /// Version 1 of the contract the Swift widget decodes (`macos/Shared/Payload.swift`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -407,7 +407,7 @@ impl WidgetExporter {
             tracing::warn!(error = %e, dir = %dir.display(), "widgets disabled");
             return None;
         }
-        let reload = load_bridge(&contents.join(BRIDGE));
+        let reload = load_bridge(&contents.join(BRIDGE), BRIDGE_SYMBOL);
         if reload.is_none() {
             tracing::warn!(
                 "widget bridge not loaded; widget.json is written but reloads are not requested"
@@ -470,9 +470,9 @@ impl WidgetExporter {
     }
 }
 
-fn load_bridge(path: &Path) -> Option<extern "C" fn()> {
+/// A bridge dylib's `@_cdecl` function with no arguments and no return value.
+pub(crate) fn load_bridge(path: &Path, symbol: &CStr) -> Option<extern "C" fn()> {
     let path = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
-    let symbol = CString::new(BRIDGE_SYMBOL).ok()?;
     // SAFETY: both strings are NUL-terminated. The library is never closed,
     // so the symbol stays valid for the life of the process, and the bridge
     // defines it as `@_cdecl` with no arguments and no return value.
@@ -481,8 +481,8 @@ fn load_bridge(path: &Path) -> Option<extern "C" fn()> {
         if handle.is_null() {
             let err = libc::dlerror();
             if !err.is_null() {
-                let err = std::ffi::CStr::from_ptr(err).to_string_lossy();
-                tracing::warn!(error = %err, "cannot load widget bridge");
+                let err = CStr::from_ptr(err).to_string_lossy();
+                tracing::warn!(error = %err, ?symbol, "cannot load a bridge");
             }
             return None;
         }

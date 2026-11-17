@@ -9,7 +9,7 @@ use super::*;
 use crate::hub::{self, now_ms};
 use crate::phones::{Phone, Qr, Started, State};
 use crate::settings::{PUBLIC_RELAY, SPEEDS};
-use crate::updates::{CURRENT, Check, Release};
+use crate::updates::{self, CURRENT, Check, Release};
 
 const CARD_MAX_W: f32 = 640.;
 const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
@@ -525,7 +525,7 @@ fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> O
 
 /// The newer release: its version, date and notes, and where to get it.
 fn release(r: &Release, t: Theme) -> Div {
-    let url = r.url.clone();
+    let release = r.clone();
     div()
         .px(px(sp::S))
         .flex()
@@ -558,8 +558,8 @@ fn release(r: &Release, t: Theme) -> Div {
         )
         .child(
             div().flex().child(
-                button("download", "Download from GitHub", t)
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                button("install", "Install Update", t)
+                    .on_click(move |_, _, cx| updates::install(&release, cx)),
             ),
         )
 }
@@ -575,7 +575,7 @@ pub(super) fn banner(
     if hub.settings.updates().dismissed.as_deref() == Some(r.version.as_str()) {
         return None;
     }
-    let (version, url, entity) = (r.version.clone(), r.url.clone(), entity.clone());
+    let (version, release, entity) = (r.version.clone(), r.clone(), entity.clone());
     Some(
         div()
             .mx(px(CONTENT_PAD))
@@ -608,8 +608,8 @@ pub(super) fn banner(
                 }),
             )
             .child(
-                button("banner-download", "Download", t)
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                button("banner-install", "Install Update", t)
+                    .on_click(move |_, _, cx| updates::install(&release, cx)),
             )
             .child(
                 button("dismiss", "Dismiss", t)
