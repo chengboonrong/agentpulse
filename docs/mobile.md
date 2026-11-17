@@ -269,10 +269,13 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   back to pure-Java X25519 and ChaCha20-Poly1305 where Android 8 has none. Each side
   writes test vectors (`link/Tests/vectors/swift.json`, `kotlin.json`: `down`, `up`, the
   hello, the six-digit code) and both test suites open both.
-- Keys: each pairing's private key encrypted under an Android Keystore key, shared by
-  the app and its widgets (one process, so no App Group).
-- Relay client and the `seq` records as in "Relay API" and "Messages"; checked with
-  `scripts/e2e-phones.sh`'s Mac side against a local relay, as `scripts/e2e-ios.sh` does.
+- Relay client, done: `android/link`'s `PhoneClient` (the pairing link, the hello,
+  `GET down`, `POST up`, removing) and `PhoneStore` (`pairings.json` with the `seq`
+  records, shared by the app and its widgets in one process, so no App Group).
+  `scripts/e2e-android.sh` runs it as the phone (`./gradlew :link:phoneSim`) against the
+  Mac side of `scripts/e2e-phones.sh` and a local relay, with the direct connection off.
+- Keys: each pairing's private key and relay token behind `PhoneStore`'s `SecretStore`,
+  in the app encrypted under an Android Keystore key.
 - Pairing: scan with CameraX and ZXing (no Play services needed), or paste the link.
 - Screens as on iPhone. Compact width: Macs, then a Mac. Expanded width (tablets,
   unfolded foldables, landscape): Macs, the selected Mac and the selected session side by

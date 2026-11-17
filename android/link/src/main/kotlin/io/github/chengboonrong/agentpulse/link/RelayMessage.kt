@@ -95,11 +95,10 @@ class Hello private constructor(
     val sentAtMs: Long,
 ) {
     companion object {
-        // ponytail: the Mac sanitises the name (link/'s sanitizedName); port it with the pairing link.
         fun of(secret: ByteArray, phoneKey: ByteArray, phoneName: String, sentAtMs: Long): Hello {
             if (secret.size != 32 || phoneKey.size != 32) throw LinkException("invalid message")
-            if (phoneName.isBlank()) throw LinkException("invalid name")
-            return Hello(0, Base64Url.encode(secret), Base64Url.encode(phoneKey), phoneName.trim(), sentAtMs)
+            val name = sanitizedName(phoneName) ?: throw LinkException("invalid name")
+            return Hello(0, Base64Url.encode(secret), Base64Url.encode(phoneKey), name, sentAtMs)
         }
     }
 }
