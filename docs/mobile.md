@@ -253,12 +253,12 @@ pushes only go through the relay. Widgets use the relay only.
 - iPad (issue #35): the same app and widgets. At regular width, three columns (Macs, the
   selected Mac, the selected session); at compact width, the iPhone flow. All four
   orientations on iPad; portrait and landscape on iPhone.
-- Android: no app yet; see "Android app (planned)".
+- Android: see "Android app".
 
-## Android app (planned)
+## Android app
 
-Not started; tracked in issue #40, which takes over #35's Android half (a tablet
-layout needs an app first). The Mac and the relay stay as they are: an Android phone
+In progress; tracked in issue #40, which takes over #35's Android half (a tablet
+layout needs an app first). Building, fixtures and tests: [android/README.md](../android/README.md). The Mac and the relay stay as they are: an Android phone
 speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
 
 - `android/`: Kotlin, Jetpack Compose, Gradle. Minimum SDK 26 (Android 8), shipped on
@@ -274,13 +274,18 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   records, shared by the app and its widgets in one process, so no App Group).
   `scripts/e2e-android.sh` runs it as the phone (`./gradlew :link:phoneSim`) against the
   Mac side of `scripts/e2e-phones.sh` and a local relay, with the direct connection off.
-- Keys: each pairing's private key and relay token behind `PhoneStore`'s `SecretStore`,
-  in the app encrypted under an Android Keystore key.
-- Pairing: scan with CameraX and ZXing (no Play services needed), or paste the link.
-- Screens as on iPhone. Compact width: Macs, then a Mac. Expanded width (tablets,
-  unfolded foldables, landscape): Macs, the selected Mac and the selected session side by
-  side, with Material 3 adaptive panes; the same fixtures, checked by `e2e` on an
-  emulator as `ios/e2e` checks iPad and iPhone.
+- Keys, done: each pairing's private key and relay token behind `PhoneStore`'s
+  `SecretStore`; in the app AES-GCM under one Android Keystore key, the pairing id as
+  associated data. No backup (`allowBackup="false"`): the key can't be restored.
+- Pairing: paste the link, done; scanning with CameraX and ZXing (no Play services
+  needed) to come. The app opens `agentpulse://pair` links too.
+- Screens, done (`android/app`), as on iPhone, with Material 3's adaptive list-detail
+  panes: below 600 dp the Macs, then a Mac, then a session, one at a time; from 600 dp
+  (tablets in portrait, unfolded foldables, phones in landscape) two panes, the Macs and
+  the selected Mac (the first until one is chosen), or the Mac and its selected session;
+  from 1200 dp (tablets in landscape) all three. The same fixtures as iPhone, checked by
+  `android/e2e` on a phone and a tablet emulator. `scripts/e2e-android-app.sh` pairs the
+  real app on an emulator with the Mac through a local relay, and removes it.
 - Direct connection: NSD (DNS-SD) for `_agentpulse._tcp`, then the handshake in "Direct
   connection".
 - Widgets: Glance, refreshed by WorkManager every 15 minutes through the relay.

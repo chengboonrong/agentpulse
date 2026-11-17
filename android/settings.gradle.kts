@@ -1,5 +1,6 @@
 pluginManagement {
     repositories {
+        google()
         gradlePluginPortal()
         mavenCentral()
     }
@@ -13,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "agentpulse-android"
-include(":link")
+include(":link", ":app")
