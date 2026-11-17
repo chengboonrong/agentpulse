@@ -25,6 +25,7 @@ pub enum Provider {
     ClaudeCode,
     Codex,
     OpenCode,
+    Grok,
 }
 
 impl Provider {
@@ -34,6 +35,7 @@ impl Provider {
             Provider::ClaudeCode => "claude-code",
             Provider::Codex => "codex",
             Provider::OpenCode => "opencode",
+            Provider::Grok => "grok",
         }
     }
 
@@ -42,6 +44,7 @@ impl Provider {
             Provider::ClaudeCode => "Claude Code",
             Provider::Codex => "Codex",
             Provider::OpenCode => "OpenCode",
+            Provider::Grok => "Grok",
         }
     }
 }
@@ -212,6 +215,10 @@ pub struct UsageEvent {
     pub us_inference: bool,
     /// Billed at a service tier the price table does not cover; left unpriced.
     pub unknown_tier: bool,
+    /// The agent's own charge for this response; when set it is used instead
+    /// of the price table.
+    #[serde(default)]
+    pub recorded_usd: Option<f64>,
 }
 
 /// What one poll learned about a session, besides token usage.

@@ -42,7 +42,7 @@ not been measured.
   Space to open it).
 - Not started: Agents and Insights screens.
 
-## Phase 2 — Agent monitoring: Claude Code and Codex done
+## Phase 2 — Agent monitoring: Claude Code, Codex, Grok and OpenCode done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
 - Done: Claude Code's own recorded session cost (`cost-state`) beside the estimate, in the
   Sessions table and under the estimate in Overview rows; "—" until Claude Code writes one,
@@ -56,7 +56,16 @@ not been measured.
 - Built, not exercised: the Active state of a Codex session (no Codex task ran while it was
   checked), reading uncompressed rollouts from `archived_sessions` (the local archives are
   all `.jsonl.zst`, which are not read), and cache writes (every local record had 0).
-- Next: OpenCode. Rules are in `telemetry-spec.md`.
+- Done: Grok CLI adapter. Sessions under `$GROK_HOME` (or `~/.grok`): tokens and Grok's own
+  per-turn charge from `usage.json`, activity and Active/Waiting/Idle from `events.jsonl`,
+  live sessions from the `events.jsonl` that `grok` processes hold open, the folder from the
+  session folder's name. No other session file is opened. Usage events can now carry the
+  agent's own charge, which replaces the price table (no Grok prices in `pricing.toml`).
+- Done: OpenCode adapter. Reads `opencode.db` read-only: tokens, OpenCode's own per-message
+  cost and activity from message metadata pulled with `json_extract` inside SQLite (no
+  content column is ever selected), subagent sessions toward their root, live sessions from
+  the working folder of each `opencode` process, Active/Idle from unfinished responses with
+  recent writes. Never Waiting (OpenCode does not store permission prompts).
 
 ## Phase 3 — Resources: live process metrics done
 - Done: PID + start-time correlation, process-tree CPU and resident memory per live session.

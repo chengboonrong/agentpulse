@@ -149,6 +149,16 @@ pub fn palette(provider: Provider) -> Palette {
             accent: PINK,
             dust: DUST,
         },
+        // Silver tabby: light silver body, near-black outline and stripes.
+        Provider::Grok => Palette {
+            outline: [62, 66, 72, 255],
+            body: [196, 200, 204, 255],
+            shade: [74, 78, 86, 255],
+            belly: [236, 238, 240, 255],
+            eye: [90, 176, 74, 255],
+            accent: PINK,
+            dust: DUST,
+        },
     }
 }
 

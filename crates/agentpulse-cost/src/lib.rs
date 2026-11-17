@@ -113,8 +113,11 @@ impl PriceBook {
     }
 
     /// Estimated USD for one response, or None when the model or its service
-    /// tier has no price.
+    /// tier has no price. The agent's own charge, when it recorded one, wins.
     pub fn cost(&self, event: &UsageEvent) -> Option<f64> {
+        if let Some(usd) = event.recorded_usd {
+            return Some(usd);
+        }
         if event.unknown_tier {
             return None;
         }
@@ -155,6 +158,7 @@ mod tests {
             fast: false,
             us_inference: false,
             unknown_tier: false,
+            recorded_usd: None,
         }
     }
 
@@ -230,6 +234,18 @@ mod tests {
         close(book.cost(&e), base * 1.1);
         e.fast = true;
         close(book.cost(&e), base * 2.0 * 1.1);
+    }
+
+    #[test]
+    fn recorded_charge_replaces_the_price_table() {
+        let book = PriceBook::builtin();
+        let mut e = ev("model-not-in-the-table", input(1_000_000));
+        assert_eq!(book.cost(&e), None);
+        e.recorded_usd = Some(1.5509);
+        close(book.cost(&e), 1.5509);
+        // Even for a priced model.
+        e.model = "gpt-6.1-sol".into();
+        close(book.cost(&e), 1.5509);
     }
 
     /// A Codex response as the adapter maps it: `input` excludes cached

@@ -966,6 +966,7 @@ mod tests {
             fast: false,
             us_inference: false,
             unknown_tier: false,
+            recorded_usd: None,
         }
     }
 

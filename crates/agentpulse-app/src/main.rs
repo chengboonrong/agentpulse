@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use agentpulse_core::AgentAdapter;
 use agentpulse_cost::PriceBook;
 use agentpulse_storage::Store;
-use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter};
+use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
 use anyhow::{Context, bail};
 use collector::Collector;
 use tracing_subscriber::filter::LevelFilter;
@@ -73,6 +73,13 @@ fn open_collector() -> anyhow::Result<Collector> {
     adapters.extend(
         CodexAdapter::default_root()
             .map(|r| Box::new(CodexAdapter::new(r)) as Box<dyn AgentAdapter>),
+    );
+    adapters.extend(
+        GrokAdapter::default_root().map(|r| Box::new(GrokAdapter::new(r)) as Box<dyn AgentAdapter>),
+    );
+    adapters.extend(
+        OpenCodeAdapter::default_root()
+            .map(|r| Box::new(OpenCodeAdapter::new(r)) as Box<dyn AgentAdapter>),
     );
     Collector::new(adapters, store, prices, errors)
 }

@@ -735,6 +735,7 @@ impl Look {
             Provider::ClaudeCode => "ginger-tabby",
             Provider::Codex => "codex-night",
             Provider::OpenCode => "cloud",
+            Provider::Grok => "silver-tabby",
         };
         Look {
             coat: find_coat(id).expect("default coat exists"),
@@ -1072,7 +1073,12 @@ mod tests {
 
     #[test]
     fn default_looks_paint_exactly_like_the_old_palettes() {
-        for p in [Provider::ClaudeCode, Provider::Codex, Provider::OpenCode] {
+        for p in [
+            Provider::ClaudeCode,
+            Provider::Codex,
+            Provider::OpenCode,
+            Provider::Grok,
+        ] {
             let (look, old) = (Look::default_for(p), palette(p));
             assert_eq!(look.palette(), old, "{p:?}");
             for s in all_frames() {

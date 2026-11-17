@@ -7,7 +7,12 @@ use gpui::{ClickEvent, Stateful, Toggled, WeakEntity};
 use super::*;
 
 /// Agents AgentPulse reads today, in the order of the switch.
-const AGENTS: [Provider; 2] = [Provider::ClaudeCode, Provider::Codex];
+const AGENTS: [Provider; 4] = [
+    Provider::ClaudeCode,
+    Provider::Codex,
+    Provider::Grok,
+    Provider::OpenCode,
+];
 const PREVIEW_SCALE: f32 = 4.;
 const SWATCH_SCALE: f32 = 2.;
 /// The 64-point cat plus padding, and room for a two-line name.

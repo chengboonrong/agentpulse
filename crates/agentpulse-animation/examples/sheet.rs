@@ -39,7 +39,12 @@ fn main() {
         ("windup", windup_frames()),
         ("skid", skid_frames()),
     ];
-    let providers = [Provider::ClaudeCode, Provider::Codex, Provider::OpenCode];
+    let providers = [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::OpenCode,
+        Provider::Grok,
+    ];
     let first = &frames(CatState::Sitting)[0];
     let (cw, ch) = (first.width() * SCALE, first.height() * SCALE);
     let cols = rows_of.iter().map(|(_, f)| f.len()).max().unwrap();

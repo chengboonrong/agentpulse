@@ -18,9 +18,13 @@ use chrono::NaiveDateTime;
 use serde::Deserialize;
 
 mod codex;
+mod grok;
+mod opencode;
 mod tail;
 
 pub use codex::CodexAdapter;
+pub use grok::GrokAdapter;
+pub use opencode::OpenCodeAdapter;
 use tail::{Groups, Tailer, TranscriptFile, read_lines, ts_ms};
 
 pub struct ClaudeCodeAdapter {
@@ -177,6 +181,7 @@ fn to_event(r: &Record, session_id: &str, ts: i64) -> Option<UsageEvent> {
         fast: u.speed.as_deref() == Some("fast"),
         us_inference: u.inference_geo.as_deref() == Some("us"),
         unknown_tier: false,
+        recorded_usd: None,
     })
 }
 
