@@ -33,6 +33,21 @@ jobs:
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)" && swift --version
       - run: swift test --package-path link
 
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v5
+      # Includes opening link/'s Swift-made vectors; the link job opens the Kotlin ones.
+      - run: ./gradlew --console=plain :link:test
+
   relay:
     runs-on: ubuntu-latest
     defaults:
