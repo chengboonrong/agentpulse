@@ -24,6 +24,8 @@ final class AppModel {
     let offline: Bool
     var pairings: [Pairing]
     var path: [String] = []
+    /// The session shown beside the Mac at regular width: `WidgetPayload.Session.key`.
+    var session: String?
     var pairRequest: PairRequest?
     /// Pairing ids connected directly.
     var direct: Set<String> = []
@@ -116,6 +118,7 @@ final class AppModel {
     /// the `unpair`; deleted here even when the relay can't be reached.
     func remove(_ p: Pairing) async {
         path.removeAll()
+        session = nil
         pairings.removeAll { $0.id == p.id }
         connections.removeValue(forKey: p.id)?.close()
         direct.remove(p.id)
