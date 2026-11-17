@@ -253,8 +253,38 @@ pushes only go through the relay. Widgets use the relay only.
 - iPad (issue #35): the same app and widgets. At regular width, three columns (Macs, the
   selected Mac, the selected session); at compact width, the iPhone flow. All four
   orientations on iPad; portrait and landscape on iPhone.
-- Android: there is no Android app in this repository. A tablet layout for Android is
-  tracked separately once an Android app exists.
+- Android: no app yet; see "Android app (planned)".
+
+## Android app (planned)
+
+Not started; tracked in issue #40, which takes over #35's Android half (a tablet
+layout needs an app first). The Mac and the relay stay as they are: an Android phone
+speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
+
+- `android/`: Kotlin, Jetpack Compose, Gradle; minimum SDK and distribution (Play,
+  sideload) still to decide.
+- Crypto: Tink's HPKE (`HpkeContext` base and auth contexts, X25519, HKDF-SHA256,
+  ChaCha20-Poly1305). They are in Tink's `internal` package, so pin the version. Before
+  any app code, test vectors made by `link/`'s Swift tests (hello, `down` and `up`
+  seals, the six-digit code) must open and match in Kotlin, and the other way round.
+- Keys: each pairing's private key encrypted under an Android Keystore key, shared by
+  the app and its widgets (one process, so no App Group).
+- Relay client and the `seq` records as in "Relay API" and "Messages"; checked with
+  `scripts/e2e-phones.sh`'s Mac side against a local relay, as `scripts/e2e-ios.sh` does.
+- Pairing: scan with CameraX and a barcode reader (ZXing, or ML Kit, which needs Play
+  services), or paste the link.
+- Screens as on iPhone. Compact width: Macs, then a Mac. Expanded width (tablets,
+  unfolded foldables, landscape): Macs, the selected Mac and the selected session side by
+  side, with Material 3 adaptive panes; the same fixtures, checked by `e2e` on an
+  emulator as `ios/e2e` checks iPad and iPhone.
+- Direct connection: NSD (DNS-SD) for `_agentpulse._tcp`, then the handshake in "Direct
+  connection".
+- Widgets: Glance, refreshed by WorkManager every 15 minutes through the relay.
+- Push and a Live Activity counterpart (an ongoing notification) need FCM in the push
+  gateway, a relay change; not in the first version.
+
+Order: test vectors and the crypto port; relay client and pairing against the local
+relay; phone and tablet screens with `e2e`; direct connection; widgets.
 
 ## Build order
 
