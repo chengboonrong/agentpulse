@@ -1,0 +1,13 @@
+{
+    "pairingId": "eBPzF1MNEnJcFjlKltHYVg",
+    "macPrivateKey": "H7fMdUy93BgfjhTKNke9muXpsIicJTCnTRAhs5BNG4A",
+    "phonePrivateKey": "52aS35lI4PEvZcDCrVpX2r1-tQpkS9eEOXjfufjz4b0",
+    "secret": "KDxoVQDi9QdQXFsUZs6Omg6OY8mnd9iMQuVcBZZHTCg",
+    "phoneName": "Pixel Tablet",
+    "sentAtMs": 1763000000000,
+    "plaintext": "{\"seq\":1,\"type\":\"seen\",\"sentAtMs\":1763000000000}",
+    "down": "1jSrGU-BySptqGQyM0UHahTa4ZIW_N0jx2aNzPmGWGCzOCPkSDRa0hK3MEvXO1VM98pxUAcbw21P89uuCCD68gjyW6drIaaAUFxRl-FrMSBfThEeUhkkvYFHmQRbypdX",
+    "up": "94Ewtt_AxvRGvlPiwyhm2mGcBr2fHlrSEkKyKAuMf25wuGzctNxnO9Mkxpdq_VpQoL-VtYUFyTWvGPUQjBaICOE8yP5Lb09sAvDCu35xUpGLhl17hVvdSt7RhA62VtH0",
+    "hello": "ZLBzD9OBzNOP7_1EiwhWSEx5cIseonj6uyZewfFMWCJnle3P6gpjzRMbsCSxRvKfbCi0fgt9qVYTfiO3ucCHsUFyJcVO2PKMjDM-peHP4g2h81GzXam0tRzryQug20h99w0ydMp9eqV8yGguD5MX8hmigTwK51Ul3_iRWTCFwxchQYXQKX-X_GlIfaA2lbS7OVz2Qyv1MYXfsovi2uwva-RyJ2oZ9jrtPgZn167C8ABgFL3_gzRZmD6Py_OrZfoXLWcU1RXi__RnHWOsUIB3LQ6fjtx5A8V_hyKN-48",
+    "code": "625656"
+}

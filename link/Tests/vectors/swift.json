@@ -1,0 +1,13 @@
+{
+  "code" : "963001",
+  "down" : "Ov79UOMsrNhVP1RF6ucwIo0tOa6Bfm-EfxJqLIRgRhtSMDIpRFZ4dTG1p8VhBBruZI4c9oBrnpT4omgQevo5TluL9xaTx9q44j_k4AubLe33x5B6SDPwaxP0iB0Pfsuu",
+  "hello" : "oWsMntFxMx0-SdCqnPT2Vi3Xuy9KyfwG4ZF5azO0owq5focZeU82L87NsgMyw17lr4yCyTwYKyMpevql2E509ymfYEhMhYCP_I4MYdWIF2QTEumFZ8mRfQ_oobweVhDESx1OmnuAwBzQTQh6guh_kclHPwQEfGQWEIhIKaN5BbRxxjqoGqXBwRw2dWcl5alkX04jturriOX9IS0XmwE-TYHy_NeNwToDUijfQh5ldJnWtjUSuSWFE8_QxCvawhS7LEZbT6yWLME8SVbREaWa2uptEj2VNkUrOq0ZVZ-gPw",
+  "macPrivateKey" : "sIMyXDGIcAScahU4cRP07XVFqaZHFM3ju28DRby17G4",
+  "pairingId" : "r9oWpTC-uKwtH9k4o-W8jg",
+  "phoneName" : "Chris's iPhone",
+  "phonePrivateKey" : "GNNmSGR2MPON8Wn7VPGLwXSGGZcOebplI0SR9hu39G4",
+  "plaintext" : "{\"seq\":1,\"type\":\"state\",\"payload\":{\"version\":1}}",
+  "secret" : "sCcIADjoCW74pG1TbN5ZwNcq53G3KghJyV60XGG2P30",
+  "sentAtMs" : 1763000000000,
+  "up" : "cRl-kSM9FBN32d9kjayQqD9HvQUw_J5YENI5zEVXJH0a6NcGnXFvqKBjiWAmRy63LW4zwJJZ_13p4lMsquzfsPHGSfxLMY90SuITJOyZrTzkdyJVcCSNboUkBtEN25yl"
+}

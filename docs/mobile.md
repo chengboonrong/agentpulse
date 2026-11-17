@@ -261,18 +261,19 @@ Not started; tracked in issue #40, which takes over #35's Android half (a tablet
 layout needs an app first). The Mac and the relay stay as they are: an Android phone
 speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
 
-- `android/`: Kotlin, Jetpack Compose, Gradle; minimum SDK and distribution (Play,
-  sideload) still to decide.
-- Crypto: Tink's HPKE (`HpkeContext` base and auth contexts, X25519, HKDF-SHA256,
-  ChaCha20-Poly1305). They are in Tink's `internal` package, so pin the version. Before
-  any app code, test vectors made by `link/`'s Swift tests (hello, `down` and `up`
-  seals, the six-digit code) must open and match in Kotlin, and the other way round.
+- `android/`: Kotlin, Jetpack Compose, Gradle. Minimum SDK 26 (Android 8), shipped on
+  the Play Store (owner, 2026-11-18).
+- Crypto, done: `android/link` (Kotlin/JVM) seals and opens with `tink-android`'s HPKE:
+  auth mode through `HpkeContext`, which is in Tink's `internal` package, so the
+  version is pinned; the hello through the public base-mode `HpkeEncrypt`. Tink falls
+  back to pure-Java X25519 and ChaCha20-Poly1305 where Android 8 has none. Each side
+  writes test vectors (`link/Tests/vectors/swift.json`, `kotlin.json`: `down`, `up`, the
+  hello, the six-digit code) and both test suites open both.
 - Keys: each pairing's private key encrypted under an Android Keystore key, shared by
   the app and its widgets (one process, so no App Group).
 - Relay client and the `seq` records as in "Relay API" and "Messages"; checked with
   `scripts/e2e-phones.sh`'s Mac side against a local relay, as `scripts/e2e-ios.sh` does.
-- Pairing: scan with CameraX and a barcode reader (ZXing, or ML Kit, which needs Play
-  services), or paste the link.
+- Pairing: scan with CameraX and ZXing (no Play services needed), or paste the link.
 - Screens as on iPhone. Compact width: Macs, then a Mac. Expanded width (tablets,
   unfolded foldables, landscape): Macs, the selected Mac and the selected session side by
   side, with Material 3 adaptive panes; the same fixtures, checked by `e2e` on an
