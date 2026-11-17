@@ -4,6 +4,8 @@ import SwiftUI
 /// One Mac: the cat and counts, live sessions, today; "as of"; Remove.
 struct MacView: View {
     let id: String
+    /// Regular width: the sessions are selectable and open in the next column.
+    var session: Binding<String?>? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
     @State private var confirmingRemove = false
@@ -19,7 +21,7 @@ struct MacView: View {
     private func content(_ pairing: Pairing) -> some View {
         let payload = pairing.lastState.flatMap(WidgetPayload.decode)
         let palette = Palette(scheme)
-        return List {
+        return List(selection: session) {
             if let problem = model.problems[id] {
                 Section {
                     Label(problem, systemImage: "exclamationmark.triangle")
@@ -49,6 +51,7 @@ struct MacView: View {
                     }
                     ForEach(Array(p.sessions.enumerated()), id: \.offset) { _, s in
                         SessionRow(session: s, palette: palette)
+                            .tag(s.key)
                     }
                 }
                 Section {
@@ -77,7 +80,7 @@ struct MacView: View {
                 Task { await model.remove(pairing) }
             }
         } message: {
-            Text("This iPhone stops showing this Mac, and the Mac stops sending to it.")
+            Text("This \(UIDevice.current.model) stops showing this Mac, and the Mac stops sending to it.")
         }
     }
 }
@@ -114,5 +117,54 @@ private struct SessionRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension WidgetPayload.Session {
+    /// Payloads carry no session id; a session keeps its project and start between updates.
+    var key: String { "\(project) \(startedAtMs ?? 0)" }
+}
+
+/// One session of a Mac, beside the Mac's view at regular width (iPad).
+struct SessionView: View {
+    let id: String
+    let key: String
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let payload = model.pairing(id)?.lastState.flatMap(WidgetPayload.decode)
+        if let s = payload?.sessions.first(where: { $0.key == key }) {
+            let (color, status) = Palette(scheme).ribbon(s.status)
+            List {
+                Section {
+                    LabeledContent("Status") {
+                        Text(status)
+                            .font(.callout.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(color, in: .capsule)
+                    }
+                    LabeledContent("Model", value: s.model)
+                    if let ms = s.startedAtMs {
+                        LabeledContent("Running for") {
+                            Text(Date(timeIntervalSince1970: Double(ms) / 1000), style: .timer)
+                                .monospacedDigit()
+                        }
+                    }
+                    LabeledContent("Tokens", value: s.tokens)
+                    LabeledContent("Cost", value: s.cost)
+                        .accessibilityLabel(s.cost == "—" ? "Cost unavailable" : "Cost \(s.cost), estimate")
+                } footer: {
+                    if let p = payload {
+                        Text("As of \(p.generatedAt, format: .dateTime.hour().minute())")
+                    }
+                }
+            }
+            .navigationTitle(s.project)
+        } else {
+            ContentUnavailableView("Session Ended", systemImage: "terminal")
+        }
     }
 }

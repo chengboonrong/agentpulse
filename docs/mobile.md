@@ -250,6 +250,11 @@ pushes only go through the relay. Widgets use the relay only.
 - The Live Activity: started from the app, or by push when an agent starts; ended by
   push or after 8 hours (the system's limit).
 - Reuses `macos/Shared/Payload.swift` and the cat drawing from `WidgetViews.swift`.
+- iPad (issue #35): the same app and widgets. At regular width, three columns (Macs, the
+  selected Mac, the selected session); at compact width, the iPhone flow. All four
+  orientations on iPad; portrait and landscape on iPhone.
+- Android: there is no Android app in this repository. A tablet layout for Android is
+  tracked separately once an Android app exists.
 
 ## Build order
 

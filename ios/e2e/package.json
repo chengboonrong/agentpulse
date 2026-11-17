@@ -1,0 +1,13 @@
+{
+  "name": "agentpulse-ios-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ipad": "e2e run --target ipad tests/ipad.e2e.ts",
+    "test:iphone": "e2e run --target iphone tests/iphone.e2e.ts"
+  },
+  "devDependencies": {
+    "@e2e-dev/mobile": "0.12.7",
+    "e2e": "0.23.1"
+  }
+}

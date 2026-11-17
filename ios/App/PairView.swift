@@ -117,7 +117,7 @@ struct PairView: View {
                 LabeledContent("Relay", value: link.relay.host() ?? link.relay.absoluteString)
                     .padding()
                     .background(.fill.tertiary, in: .rect(cornerRadius: 12))
-                Text("Pair only with a Mac you own. It will send its agents' status to this iPhone, end-to-end encrypted.")
+                Text("Pair only with a Mac you own. It will send its agents' status to this \(UIDevice.current.model), end-to-end encrypted.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

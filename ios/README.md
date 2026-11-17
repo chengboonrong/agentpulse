@@ -1,13 +1,14 @@
-# iPhone app
+# iPhone and iPad app
 
-The AgentPulse iPhone app and its home-screen widgets (SwiftUI, iOS 17+), the phone side of
+The AgentPulse iPhone and iPad app and its home-screen widgets (SwiftUI, iOS 17+), the phone side of
 [docs/mobile.md](../docs/mobile.md). Local builds are for the simulator, with no team;
 TestFlight builds come from `fastlane beta` (below).
 
 | Path | What |
 |---|---|
 | `project.yml` | XcodeGen spec. The generated `AgentPulsePhone.xcodeproj` is not committed. |
-| `App/` | The app: Macs list, a Mac's view, Pair (VisionKit scanner, or a paste field where there is no camera), the `agentpulse://pair` link, DEBUG fixtures. |
+| `App/` | The app: Macs list, a Mac's view, a session's view (iPad), Pair (VisionKit scanner, or a paste field where there is no camera), the `agentpulse://pair` link, DEBUG fixtures. |
+| `e2e/` | UI tests of the iPad and iPhone layouts on the fixtures ([below](#ui-tests-ipad-and-iphone-layouts)). |
 | `Widget/` | Small and medium widgets for the first paired Mac: `GET down` every 15 minutes through the relay, else the last stored state, always "as of". |
 
 Both use `macos/Shared/` (the widget payload and views) and `link/`'s `AgentPulsePhone`
@@ -26,15 +27,50 @@ xcrun simctl install $UDID target/ios/Build/Products/Debug-iphonesimulator/Agent
 xcrun simctl launch $UDID io.github.chengboonrong.AgentPulse.phone
 ```
 
+For an iPad, create the simulator from an iPad device type instead (`xcrun simctl list
+devicetypes | grep iPad`), for example
+`com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-16GB`, or pick an existing one by
+name: `-destination "platform=iOS Simulator,name=iPad Pro 11-inch (M5)"`. One build runs on
+both.
+
 The simulator has no camera, so Pair shows a paste field. A relay at `http://localhost` is
 allowed for testing; anything else must be `https`.
+
+## iPad layout
+
+At compact width (iPhone, and an iPad app in Slide Over or a narrow Split View) the app is
+the iPhone flow: Macs, then a Mac pushed on top. At regular width (iPad full screen, wide
+Split View, Stage Manager) it is a three-column `NavigationSplitView`: the Macs, the
+selected Mac (the first one until you choose), and the session selected in that Mac's
+list. In portrait the Macs column opens from the sidebar button. The selected Mac stays
+selected across size changes. iPhone runs in portrait and landscape; iPad in all four
+orientations, which multitasking requires. The widgets are the same small and medium
+views on both.
 
 ## Fixtures (Debug builds only)
 
 `xcrun simctl launch $UDID io.github.chengboonrong.AgentPulse.phone -AgentPulseFixture <name>`
-shows a screen from fixture data without network: `macs`, `mac`, `pair-confirm`,
-`pair-code`, `empty`. `xcrun simctl ui $UDID appearance dark` for dark mode,
+shows a screen from fixture data without network: `macs`, `mac`, `session` (a selected
+session, shown in its column on iPad), `pair-confirm`, `pair-code`, `empty`. `xcrun simctl ui $UDID appearance dark` for dark mode,
 `xcrun simctl io $UDID screenshot <png>` to capture.
+
+## UI tests (iPad and iPhone layouts)
+
+`e2e/` is an [e2e](https://github.com/e2e-inc/e2e) project that checks the layouts on
+the fixtures, with locators only (no model, no network). It needs Node 22.22.3+ or 24.8+,
+and the Debug build above in `target/ios`, which each test installs. The targets name the
+`iPad Pro 11-inch (M5)` and `iPhone 18 Pro` simulators; change `device` in
+`e2e/e2e.config.ts` to one from `xcrun simctl list devices`.
+
+```sh
+cd ios/e2e && npm ci
+npx e2e doctor
+npm run test:ipad      # portrait: Mac + session column; landscape: all three columns
+npm run test:iphone    # compact: the Macs list pushes a Mac
+npm run test:ipad -- --video   # MP4 per test in .e2e/results/<test>/attempt-1/video/
+```
+
+The CLI sends anonymous usage data; `E2E_TELEMETRY_DISABLED=1` turns it off.
 
 ## End to end
 

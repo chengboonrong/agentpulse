@@ -1,4 +1,4 @@
-# XcodeGen spec for the iPhone app and its widgets. `xcodegen generate --spec ios/project.yml
+# XcodeGen spec for the iPhone and iPad app and its widgets. `xcodegen generate --spec ios/project.yml
 # --project ios` writes AgentPulsePhone.xcodeproj (untracked, like macos/). Local builds
 # are for the simulator, with no team; fastlane/Fastfile switches to automatic signing with
 # the team for TestFlight, so no team id appears here.
@@ -34,13 +34,15 @@ targets:
     settings:
       base:
         PRODUCT_NAME: AgentPulse
-        TARGETED_DEVICE_FAMILY: "1" # iPhone only; the iOS preset would add iPad
+        TARGETED_DEVICE_FAMILY: "1,2" # iPhone and iPad
         PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.phone
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/AgentPulse.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: AgentPulse
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        # All four, which iPad multitasking (Split View, Slide Over, Stage Manager) requires.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_NSCameraUsageDescription: AgentPulse uses the camera to scan the pairing code your Mac shows.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: AgentPulse connects directly to your paired Macs on the same network.
     dependencies:
@@ -60,7 +62,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: AgentPulseWidget
-        TARGETED_DEVICE_FAMILY: "1" # iPhone only; the iOS preset would add iPad
+        TARGETED_DEVICE_FAMILY: "1,2" # iPhone and iPad
         PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.phone.Widgets
         INFOPLIST_FILE: Widget/Info.plist
         CODE_SIGN_ENTITLEMENTS: Widget/AgentPulseWidget.entitlements

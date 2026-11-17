@@ -4,7 +4,7 @@ import AgentPulsePhone
 import CryptoKit
 import Foundation
 
-/// `-AgentPulseFixture <macs|mac|pair-confirm|pair-code|empty>`: each screen from fixture
+/// `-AgentPulseFixture <macs|mac|session|pair-confirm|pair-code|empty>`: each screen from fixture
 /// data, without network, for screenshots. Debug builds only.
 @MainActor
 enum Fixtures {
@@ -22,6 +22,12 @@ enum Fixtures {
             model.pairings = [studio]
             model.direct = [studio.id]
             model.path = [studio.id]
+        case "session":
+            // A session column needs regular width (iPad); an iPhone shows the Mac.
+            model.pairings = [studio]
+            model.direct = [studio.id]
+            model.path = [studio.id]
+            model.session = studio.lastState.flatMap(WidgetPayload.decode)?.sessions.first?.key
         case "pair-confirm":
             model.pairRequest = PairRequest(step: .confirm(link))
         case "pair-code":
