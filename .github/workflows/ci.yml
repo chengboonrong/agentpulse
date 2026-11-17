@@ -46,7 +46,8 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v5
       # Includes opening link/'s Swift-made vectors; the link job opens the Kotlin ones.
-      - run: ./gradlew --console=plain :link:test
+      # The runner's Android SDK gets the missing platform on the app's first build.
+      - run: ./gradlew --console=plain :link:test :app:assembleDebug :app:assembleRelease
 
   relay:
     runs-on: ubuntu-latest

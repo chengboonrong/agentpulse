@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A relay at http://localhost is allowed for testing (adb reverse); anything else must be
+     https, as the pairing link checks. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

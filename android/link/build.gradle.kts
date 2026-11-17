@@ -4,8 +4,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // Kotlin/JVM, so its tests run without an emulator. tink-android is a JAR and runs on
 // API 26 (pure-Java X25519 and ChaCha20-Poly1305 where the platform has none).
 plugins {
-    kotlin("jvm") version "2.4.21"
-    kotlin("plugin.serialization") version "2.4.21"
+    kotlin("jvm")
+    kotlin("plugin.serialization")
 }
 
 kotlin {

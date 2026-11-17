@@ -1,0 +1,13 @@
+{
+  "name": "agentpulse-android-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:tablet": "e2e run --target tablet tests/tablet.e2e.ts",
+    "test:phone": "e2e run --target phone tests/phone.e2e.ts"
+  },
+  "devDependencies": {
+    "@e2e-dev/mobile": "0.12.7",
+    "e2e": "0.23.1"
+  }
+}
