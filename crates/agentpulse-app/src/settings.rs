@@ -37,7 +37,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const FILE_NAME: &str = "settings.json";
-const PROVIDERS: [Provider; 3] = [Provider::ClaudeCode, Provider::Codex, Provider::OpenCode];
+const PROVIDERS: [Provider; 4] = [
+    Provider::ClaudeCode,
+    Provider::Codex,
+    Provider::OpenCode,
+    Provider::Grok,
+];
 
 /// Each agent's look.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,6 +50,7 @@ pub struct Looks {
     claude_code: Look,
     codex: Look,
     open_code: Look,
+    grok: Look,
 }
 
 impl Default for Looks {
@@ -53,6 +59,7 @@ impl Default for Looks {
             claude_code: Look::default_for(Provider::ClaudeCode),
             codex: Look::default_for(Provider::Codex),
             open_code: Look::default_for(Provider::OpenCode),
+            grok: Look::default_for(Provider::Grok),
         }
     }
 }
@@ -63,6 +70,7 @@ impl Looks {
             Provider::ClaudeCode => self.claude_code,
             Provider::Codex => self.codex,
             Provider::OpenCode => self.open_code,
+            Provider::Grok => self.grok,
         }
     }
 
@@ -71,6 +79,7 @@ impl Looks {
             Provider::ClaudeCode => self.claude_code = look,
             Provider::Codex => self.codex = look,
             Provider::OpenCode => self.open_code = look,
+            Provider::Grok => self.grok = look,
         }
     }
 }

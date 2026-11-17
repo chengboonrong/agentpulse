@@ -184,6 +184,152 @@ Rates are OpenAI API list prices (source and date in `pricing.toml`). A request 
 billed at 2×; `default` or no tier at standard rates; any other tier is left unpriced. Cache
 writes are priced as input (see Token accounting); the cache-write rate is unused.
 
+## Grok CLI
+
+Root: `$GROK_HOME`, else `~/.grok`. A missing root or `sessions/` folder is not an error;
+Grok simply shows no sessions. Verified against grok 1.0.88.
+
+### Source files and privacy
+- `sessions/<percent-encoded cwd>/<session id>/`: one folder per session. The folder name
+  is the session id; its parent's name decodes exactly to the working folder
+  (`%2FUsers%2Fx%2Fp` → `/Users/x/p`), so no file is read for it.
+- Only two files per session are ever opened: `usage.json` and `events.jsonl`. Discovery
+  yields no other name, and symlinks are not followed. The session folder also holds the
+  conversation (`chat_history.jsonl`, `updates.jsonl`), `system_prompt.txt`,
+  `prompt_context.json`, `tool_definitions.json` and `summary.json`; none is opened.
+- `events.jsonl` (append-only, one JSON object per line) is parsed into a struct naming
+  only `ts` and `type`; every other field (tool names, MCP targets, error messages) is
+  skipped unread.
+- Of `usage.json` only `updatedAt` and, per entry of `turns`, `turnNumber`, `endedAt`,
+  `primaryModelId` and `modelUsage.<model>` (`inputTokens`, `outputTokens`,
+  `cachedReadTokens`, `cacheCreationTokens`, `costUsdTicks`) are read. The `session`
+  totals are not read.
+
+| File | Read as | Use |
+|---|---|---|
+| `events.jsonl` `turn_started`, `turn_ended` | `ts`, `type`, `model_id` | Busy or not, model before the first turn ends |
+| `events.jsonl` `permission_requested`, `permission_resolved` | `ts`, `type` | Waiting or not |
+| `events.jsonl` any other line | `ts` | Activity, session start |
+| `usage.json` | fields above | Tokens, cost, model |
+
+### Token accounting
+- `usage.json` is rewritten whole at the end of each turn and only grows. It is read in
+  full whenever its size changes; one file caught mid-write does not parse, so its cursor
+  is not advanced and the next poll retries.
+- One event per turn and model in `modelUsage`. Event id is `<session id>:<turnNumber>:<model>`,
+  so re-reading earlier turns upserts the same rows; time is `endedAt` (else `updatedAt`).
+  Entries with no tokens are skipped.
+- `inputTokens` includes `cachedReadTokens`, and `outputTokens` includes `reasoningTokens`
+  (both checked: per-call prompt and completion tokens summed exactly to them). Buckets:
+  cache read = `cachedReadTokens`; input = `inputTokens` − cached, saturating at 0;
+  output = `outputTokens`; cache write (5 min) = `cacheCreationTokens` (0 in every local
+  file). `reasoningTokens` is not read.
+- The session's model is the newest turn's `primaryModelId`. Until the first turn ends there
+  is no `usage.json`, so meanwhile the model is `turn_started.model_id` (the model chosen,
+  e.g. `grok-4.7`, where `usage.json` later names the billed one, `grok-4.7-build`).
+- Each turn's end time also counts as activity, so a session whose `events.jsonl` is
+  missing still shows.
+- `turn_started.turn_number` (0-based) is not matched to `usage.json`'s 1-based
+  `turnNumber`; events are not used for tokens at all.
+
+### Live sessions and status
+- A session is live when a `grok` process holds its `events.jsonl` open (Grok keeps it
+  open for writing for the whole run). The installer's `grok` is a symlink to a versioned
+  binary, so the kernel may name the process `grok` or after the target, cut to 16 bytes
+  (`grok-1.0.88-maco`); both match. The loose match is safe because only processes
+  holding a log under the Grok home count. Same libproc scan as Codex, at most every 5 s,
+  limited to logs under the adapter's Grok home. `active_sessions.json` is not used: it
+  read `[]` while sessions were running.
+- Status of a live session: Waiting if its latest `permission_requested` has no later
+  `permission_resolved`, `turn_started` or `turn_ended` and was made at least 1 s ago; else
+  Active if its latest `turn_started` has no later `turn_ended`; else Idle. Grok logs a
+  permission request for every tool call, auto-approved ones included: all 4,091 on the
+  audit machine resolved within 6 ms, so the 1 s floor keeps them from showing as Waiting.
+- A `grok` process holding several sessions' logs is shared, with the same rules as Codex
+  (no resources, live only with activity within the last hour).
+- Tailing resumes mid-file, so each log's busy and waiting state is kept across polls and
+  re-learned from the earlier lines after a restart. Without an open log the generic
+  transcript-age rule applies; a Grok session ends as Completed, never Failed.
+
+### Cost
+Grok's own per-turn charge, not an estimate: `costUsdTicks` / 1e10 (xAI bills in ticks of
+US$1e-10, see docs.x.ai cost tracking). It replaces the price table for that event, so no
+Grok rows are in `pricing.toml`. A model entry without `costUsdTicks` falls back to the
+price table, where it is unpriced.
+
+### Known gaps
+- Sandbox `strict` and custom profiles run through Grok's daemon keep a separate store
+  (`~/.grok/daemon/run/<name>`); its layout is unverified and it is not read.
+- Plan limits are not read.
+- Tokens and cost arrive when a turn ends: a long turn shows its model and activity but no
+  new tokens until then.
+- One permission request is tracked at a time; if parallel tool calls ever overlap their
+  prompts, the first answer ends Waiting early.
+- Discovery skips symlinks and each read re-checks just before opening; a file swapped
+  for a symlink in between could still be followed.
+
+## OpenCode
+
+Store: `$XDG_DATA_HOME/opencode/opencode.db`, else `~/.local/share/opencode/opencode.db`
+(the XDG path on macOS too). A missing file is not an error; OpenCode simply shows no
+sessions. Verified against opencode 1.19.3.
+
+### Source and privacy
+- One SQLite database in WAL mode, opened read-only (250 ms busy timeout, reopened after an
+  error). OpenCode keeps it open while running.
+- It also holds every prompt, reply, tool call and diff: `message.data`, `part.data` and the
+  session's `title`, `summary_diffs`, `revert`, `permission` and `metadata`. None of these is
+  ever selected. Every value is pulled inside SQLite with `json_extract` / `json_type`
+  naming only `role`, `modelID`, `time.completed`, `tokens.*` and `cost`, so content never
+  leaves SQLite. Of `error` only whether it is set is read (`json_type IS NOT NULL`); of
+  `part` only `time_updated`. A unit test checks that no query names a `data` column outside
+  those functions.
+
+| Table | Read | Use |
+|---|---|---|
+| `session` | `id`, `parent_id`, `directory`, `time_created`, `time_updated` | Root session, folder, live match |
+| `message` | `id`, `session_id`, `time_created`, `time_updated`, the JSON fields above | Tokens, cost, model, activity, error |
+| `part` | `session_id`, `time_updated` | Busy recency |
+
+### Token accounting
+- One event per assistant message with `time.completed` set; event id is the message id,
+  time is `time.completed`. Messages with no tokens are skipped.
+- `tokens = {input, output, reasoning, cache: {read, write}}` are disjoint (where OpenCode
+  records `total`, it equals their sum). Buckets: input = `input`; output = `output` +
+  `reasoning` (reasoning is billed as output); cache read = `cache.read`; cache write
+  (5 min) = `cache.write`.
+- A subagent session (`parent_id` set) counts toward its root session, as in Codex. The
+  session's folder is the root's `directory`; its model is the root's newest response's
+  `modelID`; its error flag is whether that response has an `error`.
+- Activity: every message's `time_created`, plus each `time.completed`.
+- Incremental: the cursor is a `message.time_updated` watermark in ms (stored as the store
+  path's offset, so the dump's "bytes read" figure is meaningless for OpenCode). A message
+  updated later is read again under the same id and upserted. The first run reads messages
+  updated since the backfill start. At most 5,000 messages per poll; an unchanged store
+  (size and time of the database and its WAL) is not queried.
+
+### Cost
+OpenCode's own per-message `cost` replaces the price table when it is a number. Free and
+local models record 0. A message without `cost` falls back to the price table.
+
+### Live sessions and status
+- Every `opencode` process (TUI and `opencode acp`) holds the one database open, so open
+  files cannot tell sessions apart. The process's working folder does: at most every 5 s,
+  libproc gives each `opencode` process's cwd (`PROC_PIDVNODEPATHINFO`, start time
+  verified). Its session is the newest root session with `directory` equal to that folder
+  and written to (session or message `time_updated`) since the process started. Two
+  processes resolving to one session: the newer process keeps it.
+- Status: Active when the session's newest response has no `time.completed` and no error
+  and the session or one of its subagents wrote a message or part within the last 2 min;
+  else Idle. An interrupted response stays unfinished for good, hence the recency rule.
+  Never Waiting: permission prompts are not stored.
+
+### Known gaps
+- One session per process: `opencode serve` / `web` hosting several folders is not
+  attributed, and a process whose folder differs from the session's `directory` is not
+  matched.
+- Sessions older than the backfill start are not read until they change.
+
 ## Usage charts
 
 All from `usage_events`; costs are the per-response estimates stored at ingestion.
@@ -222,6 +368,9 @@ US-only inference. Haiku 5.5 switches to its long-context rates when a request's
 exceeds 100,000 tokens. Rates are first-party API list prices; subscription plans and cloud
 partners bill differently, which is why the figure is labelled an estimate. Responses from
 a model with no price are counted as unpriced and shown as such.
+
+An event that carries the agent's own charge (Grok's `costUsdTicks`, OpenCode's `cost`) uses that figure
+instead of the price table.
 
 The price table was checked against Claude Code's own `cost-state` records: recomputing a
 recorded Sonnet 5.5 figure gave the same value to seven decimal places.
@@ -316,9 +465,3 @@ sees the IP address, as with any connection. "Direct connection" (on by default)
 local-network listener while a phone is paired and has a state to receive: Bonjour
 `_agentpulse._tcp`, instance "AgentPulse", TXT `v=1`, and over each connection the same
 state messages and a heartbeat every 30 s, encrypted with keys from the pairing.
-
-## Planned adapters
-
-| Agent | Source | Notes from the audit |
-|---|---|---|
-| OpenCode | `$XDG_DATA_HOME/opencode/opencode.db` | SQLite `message.data.tokens.*`; count only messages with `time.completed` |

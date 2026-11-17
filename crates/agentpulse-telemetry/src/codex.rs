@@ -385,6 +385,7 @@ fn to_event(p: &Payload, st: &FileState, session_id: &str, ts: i64) -> Option<Us
         fast,
         us_inference: false,
         unknown_tier,
+        recorded_usd: None,
     })
 }
 

@@ -782,6 +782,8 @@ async fn screenshot(
     for (agent, file) in [
         (Provider::ClaudeCode, "cats.png"),
         (Provider::Codex, "cats-codex.png"),
+        (Provider::Grok, "cats-grok.png"),
+        (Provider::OpenCode, "cats-opencode.png"),
     ] {
         this.update(cx, |this, cx| {
             this.screen = Screen::Cats;

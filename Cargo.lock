@@ -165,6 +165,8 @@ dependencies = [
  "agentpulse-process",
  "anyhow",
  "chrono",
+ "percent-encoding",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

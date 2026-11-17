@@ -169,16 +169,23 @@ pub struct OpenFiles {
 /// `name`. Walks the whole process table, so callers should not do it every
 /// tick. Processes owned by other users are not visible and are left out.
 pub fn processes_named(name: &str) -> Vec<ProcessIdentity> {
+    processes_where(|comm| comm == name.as_bytes())
+}
+
+/// Every process whose executable name (`p_comm`, at most 16 bytes) `keep`
+/// accepts. Same cost and visibility as [`processes_named`].
+pub fn processes_where(keep: impl Fn(&[u8]) -> bool) -> Vec<ProcessIdentity> {
     list_pids()
         .into_iter()
         .filter_map(|pid| {
             let info = bsd(pid)?;
-            let comm = info
+            let comm: Vec<u8> = info
                 .pbi_comm
                 .iter()
                 .take_while(|&&c| c != 0)
-                .map(|&c| c as u8);
-            comm.eq(name.bytes()).then_some(ProcessIdentity {
+                .map(|&c| c as u8)
+                .collect();
+            keep(&comm).then_some(ProcessIdentity {
                 pid,
                 start_time_s: info.pbi_start_tvsec,
             })
@@ -260,17 +267,41 @@ fn open_paths(pid: u32) -> Vec<String> {
             if got != size {
                 return None;
             }
-            let raw: Vec<u8> = info
-                .pvip
-                .vip_path
-                .as_flattened()
-                .iter()
-                .take_while(|&&c| c != 0)
-                .map(|&c| c as u8)
-                .collect();
-            String::from_utf8(raw).ok()
+            path_of(&info.pvip)
         })
         .collect()
+}
+
+fn path_of(v: &libc::vnode_info_path) -> Option<String> {
+    let raw: Vec<u8> = v
+        .vip_path
+        .as_flattened()
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    String::from_utf8(raw).ok()
+}
+
+/// The working directory of `p`, or None when it has exited, its PID now
+/// belongs to another process, or it is not readable (another user's).
+pub fn cwd(p: ProcessIdentity) -> Option<String> {
+    if bsd(p.pid)?.pbi_start_tvsec != p.start_time_s {
+        return None;
+    }
+    // SAFETY: plain data; the kernel fills at most `size` bytes.
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            p.pid as libc::c_int,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+            size,
+        )
+    };
+    (got == size).then(|| path_of(&info.pvi_cdir)).flatten()
 }
 
 /// (user + system CPU time in mach ticks, resident bytes)
@@ -539,6 +570,22 @@ mod tests {
         assert_eq!(open_files(reused, |_| true), None);
         assert!(processes_named("no-such-process-name").is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cwd_of_this_process() {
+        let me = std::process::id();
+        let id = ProcessIdentity {
+            pid: me,
+            start_time_s: bsd(me).unwrap().pbi_start_tvsec,
+        };
+        let want = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(cwd(id).map(std::path::PathBuf::from), Some(want));
+        let reused = ProcessIdentity {
+            start_time_s: id.start_time_s - 1,
+            ..id
+        };
+        assert_eq!(cwd(reused), None);
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
