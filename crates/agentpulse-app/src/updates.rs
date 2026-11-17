@@ -1,15 +1,20 @@
 //! Asks GitHub whether a newer AgentPulse release exists. One GET of the public
 //! releases list with a User-Agent of `AgentPulse/<version>`; nothing else is sent.
+//! Installing is Sparkle's job, started only by the user.
+
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-/// Not `/releases/latest`: it skips pre-releases, and every release so far is one.
+/// Not `/releases/latest`: it skips pre-releases, and v0.0.3 to v0.0.7 are.
 pub const URL: &str = "https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10";
 /// A release's page must be under this, or the release is ignored.
 const RELEASES: &str = "https://github.com/chengboonrong/agentpulse/releases/";
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 const TIMEOUT_S: f64 = 20.;
 const NOTES_MAX: usize = 4_000;
+/// Relative to `Contents`.
+const SPARKLE_BRIDGE: &str = "Frameworks/libAgentPulseUpdateBridge.dylib";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Check {
@@ -25,6 +30,8 @@ pub struct Release {
     pub notes: String,
     /// `2026-11-13`, when GitHub gives a date.
     pub published: Option<String>,
+    /// Never in Sparkle's feed, which `releases/latest` serves.
+    pub prerelease: bool,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +43,8 @@ struct Raw {
     #[serde(default)]
     draft: bool,
     #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
     published_at: Option<String>,
 }
 
@@ -43,6 +52,25 @@ struct Raw {
 pub fn check() -> Result<Check, String> {
     let body = agentpulse_platform_macos::fetch(URL, &format!("AgentPulse/{CURRENT}"), TIMEOUT_S)?;
     parse(&body, CURRENT)
+}
+
+/// Hands the update to Sparkle (`macos/UpdateBridge/`), which fetches the appcast, asks,
+/// downloads, verifies and installs. For a pre-release, outside AgentPulse.app
+/// (`cargo run`), or if the bridge does not load, opens the release's page instead.
+/// Main thread only.
+pub fn install(release: &Release, cx: &mut gpui::App) {
+    static SPARKLE: OnceLock<Option<extern "C" fn()>> = OnceLock::new();
+    match SPARKLE.get_or_init(sparkle) {
+        Some(install) if !release.prerelease => install(),
+        _ => cx.open_url(&release.url),
+    }
+}
+
+fn sparkle() -> Option<extern "C" fn()> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.parent()?.parent()?.join(SPARKLE_BRIDGE);
+    path.is_file()
+        .then(|| crate::widget_export::load_bridge(&path, c"agentpulse_install_update"))?
 }
 
 /// Major, minor, patch, and whether it is a plain release, which ranks above
@@ -99,6 +127,7 @@ pub fn parse(body: &[u8], current: &str) -> Result<Check, String> {
             url: r.html_url,
             notes: notes(r.body.as_deref().unwrap_or("")),
             published: r.published_at.and_then(|d| d.get(..10).map(str::to_owned)),
+            prerelease: r.prerelease,
         }),
         _ => Check::UpToDate,
     })
@@ -175,6 +204,12 @@ mod tests {
         assert_eq!(r.url, page("v0.0.5"));
         assert_eq!(r.notes, "Notes for v0.0.5");
         assert_eq!(r.published.as_deref(), Some("2026-11-01"));
+        assert!(!r.prerelease);
+        let pre = br#"[{"tag_name": "v0.0.5", "html_url": "https://github.com/chengboonrong/agentpulse/releases/tag/v0.0.5", "prerelease": true}]"#;
+        let Ok(Check::Available(r)) = parse(pre, "0.0.4") else {
+            panic!("expected an update");
+        };
+        assert!(r.prerelease);
     }
 
     #[test]

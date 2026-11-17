@@ -151,7 +151,7 @@ not been measured.
   CPU and memory, and the CPU sprint, would be lost.
 - Build-time shaders need Xcode's Metal Toolchain.
 
-## Phase 6 — Beyond the window: updates notice done (owner request, 2026-11-13)
+## Phase 6 — Beyond the window: updates notice done (owner request, 2026-11-13), in-app install built
 - Done: app logo ("Peek", picked by the owner on 2026-11-15 from four directions): a
   front-facing pixel cat face peeking up from the bottom edge, drawn on the same 16-pixel grid
   and ginger palette as the window's cats, plus a pink nose. The source is the Icon Composer document
@@ -191,7 +191,8 @@ not been measured.
   - documented in the README and the telemetry spec as the app's only network request;
   - one request for the latest release on the project's GitHub page, sending nothing about
     the user or their agents;
-  - a notice only: it never downloads or installs anything by itself.
+  - a notice only: it never downloads or installs anything by itself (superseded on
+    2026-11-17 by in-app install, below: still nothing without the user's click).
   It reads `api.github.com/repos/chengboonrong/agentpulse/releases` (not `/latest`, which
   skips pre-releases) with an ephemeral session and the User-Agent `AgentPulse/<version>`.
   One real check against GitHub succeeded (up to date at 0.0.4); the "available" state was
@@ -199,6 +200,24 @@ not been measured.
   exercised by a person.
   A self-updating app (Sparkle, MIT licensed) needs a notarized, Developer ID signed build
   and a signed update feed, so it waits for the notarized DMG in Phase 5.
+- Built, not exercised end to end: in-app install (issue #34). "Install Update" in the
+  banner, Settings and the menu hands the release to Sparkle 2.10.1, embedded in
+  `Contents/Frameworks` and driven through `libAgentPulseUpdateBridge.dylib`. Owner
+  decisions (2026-11-17): the GitHub check keeps polling and Sparkle fetches its appcast
+  only on that click; the appcast is a release asset at `releases/latest/download/appcast.xml`,
+  so releases are published as full releases from now on; `CFBundleVersion` stays the
+  marketing version; notify and install on click, never silently. `scripts/bundle.sh
+  --release` also staples the app, zips it, signs the zip and a one-item appcast with the
+  EdDSA key from the login keychain; the checklist is in `macos/README.md`, "Updates".
+  Verified: a development bundle builds, embeds and signs Sparkle inside out, and passes
+  `codesign --verify --deep --strict`; the bridge loads and exports its symbol; the archive,
+  appcast and feed signing steps ran with a throwaway key, and a changed feed failed
+  `sign_update --verify`; a default NSURLSession test showed cookies sent back without the
+  "never" policy and none with it. The EdDSA key was made on 2026-11-17 and is in the
+  release Mac's login keychain. Waiting on: one real update from a Sparkle-enabled release
+  to the next. Copies at 0.0.7 or
+  earlier have no Sparkle; they reach the first Sparkle release through the notice's old
+  link.
 
 ## Known limits of this slice
 - Widgets are snapshots: WidgetKit budgets reloads, so a widget can lag the app and always

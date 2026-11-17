@@ -9,7 +9,9 @@
 #                                 allows it in System Settings > Privacy & Security.
 #   scripts/bundle.sh --release   Developer ID Application certificate, secure
 #                                 timestamp, and a notarized, stapled
-#                                 AgentPulse-<version>.dmg that opens on any Mac.
+#                                 AgentPulse-<version>.dmg that opens on any Mac,
+#                                 plus Sparkle's update archive AgentPulse-<version>.zip
+#                                 and appcast.xml, both EdDSA signed.
 #
 # Team id: AGENTPULSE_TEAM_ID, else AGENTPULSE_TEAM_ID=... in macos/signing.local
 # (untracked). The signing identity is the valid code-signing certificate of the
@@ -21,6 +23,8 @@
 #   - otherwise, a keychain profile named by AGENTPULSE_NOTARY_PROFILE (env or signing.local),
 #     default "agentpulse-notary":
 #       xcrun notarytool store-credentials agentpulse-notary --apple-id <id> --team-id <team>
+# --release also needs the EdDSA private key matching UPDATE_PUBLIC_KEY in the login keychain,
+# where Sparkle's generate_keys puts it (see macos/README.md, "Updates").
 #
 # Data path: the app writes ~/Library/Application Support/AgentPulse/Widget/
 # widget.json and the sandboxed extension reads it through a read-only
@@ -35,6 +39,10 @@ cd "$ROOT"
 APP_ID="io.github.chengboonrong.AgentPulse"
 WIDGET_ID="$APP_ID.Widgets"
 SIGN_TIMEOUT=120
+# Sparkle's feed and the public half of the update signing key. Installed copies keep both
+# and check every feed and zip against that key, so changing either strands them.
+FEED_URL="https://github.com/chengboonrong/agentpulse/releases/latest/download/appcast.xml"
+UPDATE_PUBLIC_KEY="eQ3c9BHCJ0A+qH85C3GzKOZLzJklfZ53BzO6PBSTspY="
 
 RELEASE=0
 DMG=0
@@ -83,6 +91,7 @@ else
 fi
 if [[ $RELEASE == 1 ]]; then
     for tool in xcrun spctl; do command -v "$tool" >/dev/null || die "$tool not found"; done
+    [[ -n "$UPDATE_PUBLIC_KEY" ]] || die "UPDATE_PUBLIC_KEY is empty in scripts/bundle.sh (see macos/README.md, \"Updates\")"
     if [[ -n "$NOTARY_KEY_ID" ]]; then
         [[ -n "$NOTARY_ISSUER" ]] || die "AGENTPULSE_NOTARY_KEY_ID is set but AGENTPULSE_NOTARY_ISSUER is not"
         [[ -f "$NOTARY_KEY" ]] || die "no API key file at $NOTARY_KEY (set AGENTPULSE_NOTARY_KEY)"
@@ -134,9 +143,16 @@ cargo build --release -p agentpulse-app
 step "Building the widget extension, bridges and preview tool"
 xcodegen generate --quiet --spec macos/project.yml --project macos
 xcodebuild -quiet -project macos/AgentPulseWidgets.xcodeproj -alltargets -configuration Release \
+    -clonedSourcePackagesDirPath "$XC/packages" \
     SYMROOT="$XC/build" OBJROOT="$XC/obj" ARCHS="$(uname -m)" \
     MARKETING_VERSION="$VERSION" build
 PRODUCTS="$XC/build/Release"
+SPARKLE_BIN="$XC/packages/artifacts/sparkle/Sparkle/bin"
+if [[ $RELEASE == 1 ]]; then
+    # Fail before the long notarization, not at sign_update after it.
+    [[ "$("$SPARKLE_BIN/generate_keys" -p 2>/dev/null)" == "$UPDATE_PUBLIC_KEY" ]] ||
+        die "the login keychain has no EdDSA key matching UPDATE_PUBLIC_KEY (see macos/README.md, \"Updates\")"
+fi
 
 # The gallery placeholder comes from the Rust exporter, so the widget's sleeping
 # cat is always the real sprite. Shipped in the extension and beside the preview tool.
@@ -149,6 +165,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/PlugIns
 cp "$BIN" "$APP/Contents/MacOS/agentpulse"
 cp "$PRODUCTS/libAgentPulseWidgetBridge.dylib" "$APP/Contents/Frameworks/"
 cp "$PRODUCTS/libAgentPulseLinkBridge.dylib" "$APP/Contents/Frameworks/"
+cp "$PRODUCTS/libAgentPulseUpdateBridge.dylib" "$APP/Contents/Frameworks/"
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+ditto "$PRODUCTS/Sparkle.framework" "$SPARKLE"
+# The XPC services are for sandboxed apps only; this one is not sandboxed.
+rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
 cp -R "$PRODUCTS/AgentPulseWidgets.appex" "$APP/Contents/PlugIns/"
 mkdir -p "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources"
 cp "$PRODUCTS/placeholder.json" "$APP/Contents/PlugIns/AgentPulseWidgets.appex/Contents/Resources/"
@@ -180,6 +201,14 @@ cat > "$APP/Contents/Info.plist" <<EOF
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSLocalNetworkUsageDescription</key><string>AgentPulse connects directly to your paired iPhone on this network.</string>
 	<key>NSBonjourServices</key><array><string>_agentpulse._tcp</string></array>
+	<key>SUFeedURL</key><string>$FEED_URL</string>
+	<key>SUPublicEDKey</key><string>$UPDATE_PUBLIC_KEY</string>
+	<key>SURequireSignedFeed</key><true/>
+	<key>SUVerifyUpdateBeforeExtraction</key><true/>
+	<key>SUEnableAutomaticChecks</key><false/>
+	<key>SUAllowsAutomaticUpdates</key><false/>
+	<key>SUEnableSystemProfiling</key><false/>
+	<key>SUSendProfileInfo</key><false/>
 	<key>CFBundleURLTypes</key>
 	<array><dict>
 		<key>CFBundleURLName</key><string>$APP_ID</string>
@@ -219,6 +248,10 @@ sign() {
 step "Signing (inner code first)"
 sign "$APP/Contents/Frameworks/libAgentPulseWidgetBridge.dylib"
 sign "$APP/Contents/Frameworks/libAgentPulseLinkBridge.dylib"
+sign "$SPARKLE/Versions/B/Autoupdate"
+sign "$SPARKLE/Versions/B/Updater.app"
+sign "$SPARKLE"
+sign "$APP/Contents/Frameworks/libAgentPulseUpdateBridge.dylib"
 sign --entitlements "$WIDGET_ENT" "$APP/Contents/PlugIns/AgentPulseWidgets.appex"
 sign "$APP"
 
@@ -262,6 +295,43 @@ if [[ $DMG == 1 ]]; then
         spctl --assess --type open --context context:primary-signature --verbose=2 "$IMAGE"
     fi
     shasum -a 256 "$IMAGE"
+fi
+
+if [[ $RELEASE == 1 ]]; then
+    # The DMG's notarization covers the app inside it. Stapled, the app in the zip also
+    # passes Gatekeeper offline when someone downloads the zip by hand.
+    step "Making the update archive and appcast"
+    xcrun stapler staple "$APP"
+    spctl --assess --type execute --verbose=2 "$APP"
+    ARCHIVE="$OUT/AgentPulse-$VERSION.zip"
+    rm -f "$ARCHIVE"
+    ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
+    SIGNATURE="$("$SPARKLE_BIN/sign_update" "$ARCHIVE")" || die "sign_update failed: $SIGNATURE"
+    [[ "$SIGNATURE" == sparkle:edSignature=* ]] || die "sign_update gave no signature: $SIGNATURE"
+    # One item: the feed lives at releases/latest, so it only needs the newest release.
+    # No release notes in it; AgentPulse shows them from GitHub before Sparkle is asked.
+    APPCAST="$OUT/appcast.xml"
+    cat > "$APPCAST" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<channel>
+	<title>AgentPulse</title>
+	<item>
+		<title>AgentPulse $VERSION</title>
+		<pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+		<sparkle:version>$VERSION</sparkle:version>
+		<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+		<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+		<enclosure url="https://github.com/chengboonrong/agentpulse/releases/download/v$VERSION/AgentPulse-$VERSION.zip" $SIGNATURE type="application/octet-stream"/>
+	</item>
+</channel>
+</rss>
+EOF
+    "$SPARKLE_BIN/sign_update" "$APPCAST"
+    "$SPARKLE_BIN/sign_update" --verify "$APPCAST"
+    shasum -a 256 "$ARCHIVE"
+    echo "Publish v$VERSION as a full release (not a pre-release) with AgentPulse-$VERSION.dmg,"
+    echo "AgentPulse-$VERSION.zip and appcast.xml from $OUT; see macos/README.md, \"Updates\"."
 fi
 
 echo

@@ -105,7 +105,7 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
 
 Everything stays on this machine unless you pair a phone (below). AgentPulse never reads or
 stores prompt, response or file content. Without a paired phone it makes one kind of network
-request: the update check, an HTTPS
+request on its own: the update check, an HTTPS
 `GET https://api.github.com/repos/chengboonrong/agentpulse/releases?per_page=10` with the
 headers `User-Agent: AgentPulse/<version>`, `Accept: application/vnd.github+json` and
 `Accept-Language: en`, plus the standard `Accept-Encoding` that macOS adds. It sends no
@@ -113,9 +113,18 @@ cookies, identifiers or anything about you or your agents; like any connection, 
 your IP address. GitHub replies with the public list of AgentPulse releases, from
 which AgentPulse reads each version, date, notes and page link. It checks every 2 hours by
 default; turn off "Check for updates automatically" in Settings to stop that. "Check Now"
-works either way. Nothing is downloaded or installed by itself: a new release only shows a
-notice with a link to its GitHub page. Values AgentPulse cannot measure are shown as
-unavailable, not as zero.
+works either way. Nothing is downloaded or installed by itself: a new release shows a
+notice. Only clicking "Install Update" (in the notice or Settings) or the menu's "Update
+Available" item starts the installer, [Sparkle](https://sparkle-project.org), which then
+asks GitHub for
+`https://github.com/chengboonrong/agentpulse/releases/latest/download/appcast.xml` and,
+once you confirm in its window, downloads that release's `AgentPulse-<version>.zip`
+(GitHub redirects both to `release-assets.githubusercontent.com`). These requests send
+`User-Agent: AgentPulse/<version>`, `Accept-Language: en`, an `Accept` header and the
+standard `Accept-Encoding`, no cookies and no system profile. A pre-release is not offered
+to Sparkle; its button opens the release's GitHub page. Sparkle installs the update only
+if its signature checks out, and keeps the running version otherwise. Values AgentPulse
+cannot measure are shown as unavailable, not as zero.
 
 Phones (Settings, Phones; opt-in, see [docs/mobile.md](docs/mobile.md)) make no request until
 a phone is being paired or is paired. Pairing goes through the AgentPulse relay at
