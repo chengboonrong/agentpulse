@@ -74,6 +74,32 @@ that created an item may read it. A rebuilt development-signed app can count as 
 app, so macOS may ask to allow access to them; "Always Allow" keeps working until the
 next rebuild.
 
+## DMG window
+
+The DMG opens on a 660×420 window: the app on a peach stage at (170, 190), Applications
+on a periwinkle stage at (490, 190), 128 px icons, a paw-print trail and "Drag AgentPulse
+to Applications". It is only the first-run installer; updates come from the zip through
+Sparkle, so nothing here can break them. All of it lives in `macos/dmg/`:
+
+| File | What | Made by |
+|---|---|---|
+| `background.png`, `background@2x.png` | The art, 1x and 2x. Text is drawn with the system rounded face, so no font ships; no version number, so it survives releases | `swift macos/dmg/render-background.swift` |
+| `DS_Store` | Window size, icon size and positions, and the background picture. Copied to the volume root as `.DS_Store` on every build | `macos/dmg/make-ds-store.sh` (drives Finder; macOS asks once for Automation permission) |
+| `render-background.swift`, `make-ds-store.sh` | The two generators | |
+
+`bundle.sh` joins the two PNGs into `.background/background.tiff` with `tiffutil
+-cathidpicheck`, so Finder picks the right scale per display, stages it with `DS_Store`, and
+checks both reached the image before it signs. The build itself never opens Finder.
+
+Regenerate after changing the art, the window size, the icon positions or an item name
+(`AgentPulse.app`, `Applications`): edit both generators so their numbers agree, run the
+Swift script if the art changed, then `make-ds-store.sh`, and commit the results. Finder
+rewrites `.DS_Store` whenever a window is opened, so never edit the staging folder or a
+mounted image by hand. Finder finds the background through an alias that records the volume's
+name, so the volume is always called `AgentPulse`, with no version; the file name
+`AgentPulse-<version>.dmg` carries the version. Never set a
+custom icon on the `Applications` symlink: it would land on `/Applications` itself.
+
 ## Updates
 
 AgentPulse finds a new release with its own GitHub check (see the README). Install Update

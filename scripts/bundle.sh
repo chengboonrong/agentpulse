@@ -270,17 +270,28 @@ if [[ $DMG == 1 ]]; then
     mkdir -p "$STAGE"
     ditto "$APP" "$STAGE/AgentPulse.app"
     ln -s /Applications "$STAGE/Applications"
+    # The designed window: Finder reads its size, icon positions and background picture from
+    # .DS_Store, made once by macos/dmg/make-ds-store.sh. The background is one TIFF holding
+    # both scales so Retina screens get the 2x art. The volume name stays "AgentPulse", with no
+    # version: the background is found through an alias that records the name it was made on.
+    # See macos/README.md, "DMG window".
+    mkdir "$STAGE/.background"
+    tiffutil -cathidpicheck macos/dmg/background.png macos/dmg/background@2x.png \
+        -out "$STAGE/.background/background.tiff" 2>/dev/null
+    cp macos/dmg/DS_Store "$STAGE/.DS_Store"
     # The mounted volume shows the app icon. The custom-icon flag must be set on the volume
     # root itself (hdiutil drops it from the source folder), so go through a writable image.
     cp "$APP/Contents/Resources/AppIcon.icns" "$STAGE/.VolumeIcon.icns"
     RW="$OUT/dmg-rw.dmg"
     rm -f "$RW"
-    hdiutil create -quiet -volname "AgentPulse $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDRW "$RW"
+    hdiutil create -quiet -volname "AgentPulse" -srcfolder "$STAGE" -fs HFS+ -format UDRW "$RW"
     MNT="$OUT/dmg-mnt"
     mkdir -p "$MNT"
     trap 'hdiutil detach -quiet -force "$MNT" 2>/dev/null || true' EXIT
     hdiutil attach -quiet -nobrowse -mountpoint "$MNT" "$RW"
     xcrun SetFile -a C "$MNT"
+    [[ -s "$MNT/.DS_Store" && -s "$MNT/.background/background.tiff" ]] \
+        || die "the DMG window layout did not reach the image"
     hdiutil detach -quiet "$MNT" || hdiutil detach -quiet -force "$MNT"
     trap - EXIT
     hdiutil convert -quiet "$RW" -format UDZO -o "$IMAGE"
