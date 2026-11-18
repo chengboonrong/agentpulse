@@ -277,8 +277,9 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
 - Keys, done: each pairing's private key and relay token behind `PhoneStore`'s
   `SecretStore`; in the app AES-GCM under one Android Keystore key, the pairing id as
   associated data. No backup (`allowBackup="false"`): the key can't be restored.
-- Pairing: paste the link, done; scanning with CameraX and ZXing (no Play services
-  needed) to come. The app opens `agentpulse://pair` links too.
+- Pairing, done: Pair opens on the camera, CameraX frames read by ZXing's decoder (no
+  Play services needed); the link can be pasted instead, and is when there's no camera
+  or it isn't allowed. The app opens `agentpulse://pair` links too.
 - Screens, done (`android/app`), as on iPhone, with Material 3's adaptive list-detail
   panes: below 600 dp the Macs, then a Mac, then a session, one at a time; from 600 dp
   (tablets in portrait, unfolded foldables, phones in landscape) two panes, the Macs and

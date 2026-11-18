@@ -6,7 +6,7 @@ The AgentPulse Android app (Kotlin, Jetpack Compose, minimum SDK 26), the phone 
 | Path | What |
 |---|---|
 | `link/` | Kotlin/JVM port of `link/`: the relay crypto, the pairing link, the relay client and the store. Plain JVM, so its tests need no emulator. |
-| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (paste a link), secrets under the Android Keystore. `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
+| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (scan the code or paste the link), secrets under the Android Keystore. `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
 | `e2e/` | UI tests of the phone and tablet layouts on the fixtures ([below](#ui-tests-phone-and-tablet-layouts)). |
 
 ## Build and run
@@ -53,8 +53,11 @@ emulator -avd AgentPulse_Tablet -no-window &
 cd android/e2e && npm ci
 npx e2e doctor
 npm run test:tablet    # portrait: two panes; landscape: three
-npm run test:phone     # one pane at a time
+npm run test:phone     # one pane at a time; Pair: the camera, pasting, a rotation
 ```
+
+Scanning itself is checked on the JVM, `./gradlew :app:testDebugUnitTest`: a pairing link
+drawn as a QR code into a camera-like frame, read back by the decoder the camera feeds.
 
 On the tablet, whose natural orientation is landscape, agent-device's `portrait` is
 landscape; `tests/tablet.e2e.ts` names them by what the screen shows. The CLI sends

@@ -36,4 +36,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
+    // Scanning the pairing code: CameraX frames, ZXing's decoder (no Play services).
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("com.google.zxing:core:3.5.4")
+    testImplementation(kotlin("test-junit"))
 }
