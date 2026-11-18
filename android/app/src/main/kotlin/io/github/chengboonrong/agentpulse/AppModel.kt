@@ -21,9 +21,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Where the Pair screen is: paste, confirm the Mac, or the code while waiting. */
+/** Where the Pair screen is: scan or paste, confirm the Mac, or the code while waiting. */
 sealed interface PairStep {
-    data object Paste : PairStep
+    data object Scan : PairStep
     /** [raw]: the link as scanned or pasted, which the hello is made from. */
     data class Confirm(val link: PairingLink, val raw: String) : PairStep
     data class Code(val code: String, val pairing: Pairing) : PairStep
