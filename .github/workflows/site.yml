@@ -1,0 +1,47 @@
+name: Site
+
+on:
+  pull_request:
+    paths: [site/**, .github/workflows/site.yml]
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/site.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Every link on the page, including the releases/latest download, must resolve. The
+      # site's own URL is skipped: it only exists once this workflow has deployed.
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --exclude 'agentpulse\.snitco\.com' 'site/**/*.html'
+          fail: true
+
+  deploy:
+    needs: links
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
