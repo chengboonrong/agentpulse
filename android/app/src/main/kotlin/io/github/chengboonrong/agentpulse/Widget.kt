@@ -90,7 +90,7 @@ sealed interface WidgetState {
 
 /**
  * The home-screen widget: the first paired Mac's stored state, small (the cat and the
- * headline) or medium (and its sessions). [RefreshWorker] fetches through the relay and
+ * headline) or, from 280 dp wide, medium (and its sessions). [RefreshWorker] fetches through the relay and
  * redraws it; never direct.
  */
 class AgentPulseWidget : GlanceAppWidget() {
@@ -111,7 +111,7 @@ class AgentPulseWidget : GlanceAppWidget() {
 
     companion object {
         private val SMALL = DpSize(110.dp, 110.dp)
-        private val MEDIUM = DpSize(250.dp, 110.dp)
+        val MEDIUM = DpSize(280.dp, 110.dp)
 
         /** Bumped after every refresh; the widget and the worker share the app's process. */
         val redraws = MutableStateFlow(0)
@@ -183,7 +183,7 @@ private object WidgetColors {
 
 @Composable
 private fun Content(state: WidgetState, cat: Bitmap?, context: Context) {
-    val medium = LocalSize.current.width >= 250.dp
+    val medium = LocalSize.current.width >= AgentPulseWidget.MEDIUM.width
     Box(
         GlanceModifier.fillMaxSize().background(WidgetColors.ground).padding(12.dp)
             .clickable(actionStartActivity<MainActivity>()),
@@ -196,7 +196,7 @@ private fun Content(state: WidgetState, cat: Bitmap?, context: Context) {
             is WidgetState.Stale -> Sleeping("No update since ${time(context, state.sinceMs)}", "Open AgentPulse to refresh", medium)
             is WidgetState.Live -> if (medium) {
                 Row(GlanceModifier.fillMaxSize()) {
-                    Summary(state.payload, cat, context, GlanceModifier.width(132.dp).fillMaxHeight())
+                    Summary(state.payload, cat, context, GlanceModifier.width(150.dp).fillMaxHeight())
                     Spacer(GlanceModifier.width(14.dp))
                     Detail(state.payload, GlanceModifier.defaultWeight().fillMaxHeight())
                 }
