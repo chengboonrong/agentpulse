@@ -628,3 +628,55 @@ fn cost_state_appended_later_is_read_from_the_offset() {
     assert_eq!(recorded(&b2, "s1").map(|c| c.usd), Some(3.0));
     assert!(b2.events.is_empty());
 }
+
+#[test]
+fn plan_limits_come_from_the_saved_status_line_payload() {
+    let (d, mut a, _) = setup();
+    let file = d.path().join(agentpulse_telemetry::RATE_LIMITS_FILE);
+    let mut poll = || a.poll(&HashMap::new(), 0).unwrap().rate_limits;
+    assert_eq!(poll(), None, "no hook installed: no limits, no error");
+
+    // Only `rate_limits` is read; the rest of the payload is skipped.
+    fs::write(
+        &file,
+        r#"{"session_id":"s","cwd":"/synthetic","model":{"id":"m"},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{"used_percentage":41.2,"resets_at":1738857600},"spend_limit":{"used_percentage":1}}}"#,
+    )
+    .unwrap();
+    let l = poll().unwrap();
+    let mtime = fs::metadata(&file).unwrap().modified().unwrap();
+    let mtime_ms = mtime
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert_eq!(l.ts_ms, mtime_ms, "as of the hook's last write");
+    assert_eq!(l.plan_type, None);
+    let p = l.primary.unwrap();
+    assert_eq!(
+        (p.used_percent, p.window_minutes, p.resets_at_s),
+        (23.5, Some(300), Some(1738425600))
+    );
+    let s = l.secondary.unwrap();
+    assert_eq!(
+        (s.used_percent, s.window_minutes, s.resets_at_s),
+        (41.2, Some(10_080), Some(1738857600))
+    );
+
+    // A window may be absent on its own; with none left there is no reading.
+    fs::write(
+        &file,
+        r#"{"rate_limits":{"seven_day":{"used_percentage":5}}}"#,
+    )
+    .unwrap();
+    let l = poll().unwrap();
+    assert!(l.primary.is_none());
+    assert_eq!(l.secondary.unwrap().resets_at_s, None);
+    for junk in [
+        r#"{"rate_limits":{}}"#,
+        "{}",
+        "not json",
+        r#"{"rate_limits":{"five_hour":{"used_percentage":"high"}}}"#,
+    ] {
+        fs::write(&file, junk).unwrap();
+        assert_eq!(poll(), None, "{junk}");
+    }
+}

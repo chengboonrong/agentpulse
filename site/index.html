@@ -72,7 +72,7 @@
       <tr><th scope="row">CPU and memory per session</th><td><span class="tag measured">measured</span></td><td>The macOS process table</td></tr>
       <tr><th scope="row">Cost, Claude Code and Codex CLI</th><td><span class="tag estimated">estimated</span></td><td>Tokens × API list prices, from a price table you can edit. A subscription plan is not reflected.</td></tr>
       <tr><th scope="row">Cost, OpenCode and Grok CLI</th><td><span class="tag measured">recorded</span></td><td>The agent's own charge for each response; list prices where it records none</td></tr>
-      <tr><th scope="row">Plan limit</th><td><span class="tag measured">Codex only</span></td><td>Codex's own records. Claude Code writes no plan-limit data, so none is shown for it.</td></tr>
+      <tr><th scope="row">Plan limit</th><td><span class="tag measured">Codex and Claude Code</span></td><td>Codex's own records. Claude Code shares its limits only with a status line command, which you add yourself (see the README).</td></tr>
       <tr><th scope="row">Active time</th><td><span class="tag estimated">estimated</span></td><td>Gaps of up to 60 seconds between records</td></tr>
       <tr><th scope="row">GPU per agent</th><td><span class="tag unavailable">unavailable</span></td><td>macOS has no documented way to measure it. Whole-Mac GPU use is shown instead.</td></tr>
       <tr><th scope="row">Prompts, code, responses</th><td><span class="tag unavailable">never read</span></td><td>Only the metadata fields listed above are kept; content is never stored or shown</td></tr>

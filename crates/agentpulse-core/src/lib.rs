@@ -252,7 +252,7 @@ pub struct PollBatch {
     pub sessions: Vec<SessionDelta>,
     /// The adapter stopped at its read budget; poll again for the rest.
     pub more: bool,
-    /// The newest plan-limit reading the adapter knows of (Codex only).
+    /// The newest plan-limit reading the adapter knows of (Codex, Claude Code).
     pub rate_limits: Option<RateLimits>,
 }
 
@@ -265,7 +265,8 @@ pub struct RateWindow {
     pub resets_at_s: Option<i64>,
 }
 
-/// A plan-limit reading (Codex `token_count` events). Metadata only.
+/// A plan-limit reading (Codex `token_count` events, Claude Code's status-line
+/// payload). Metadata only.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RateLimits {
     /// Time of the record that carried it.

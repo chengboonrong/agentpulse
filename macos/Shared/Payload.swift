@@ -27,12 +27,12 @@ struct WidgetPayload: Decodable {
         let palette: [String: [Int]]
     }
 
-    /// Codex's plan limit. Absent from older files and when Codex sent no reading.
+    /// The fullest plan limit of any agent. Absent from older files and when no agent sent a reading.
     struct Limit: Decodable {
         let label: String
         let usedPercent: Double
         let resetsAtMs: Int64?
-        /// When Codex reported it.
+        /// When the agent reported it.
         let asOfMs: Int64
 
         var resetsAt: Date? { resetsAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
@@ -68,12 +68,12 @@ struct WidgetPayload: Decodable {
     let outputRate: String
     let cat: Cat
     let sessions: [Session]
-    let codexLimit: Limit?
+    let limit: Limit?
 
     var generatedAt: Date { Date(timeIntervalSince1970: Double(generatedAtMs) / 1000) }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAtMs, stopped, agents, today, outputRate, cat, sessions, codexLimit
+        case version, generatedAtMs, stopped, agents, today, outputRate, cat, sessions, limit
     }
 
     init(from decoder: Decoder) throws {
@@ -87,7 +87,7 @@ struct WidgetPayload: Decodable {
         cat = try c.decode(Cat.self, forKey: .cat)
         sessions = try c.decode([Session].self, forKey: .sessions)
         // Optional and lenient: a malformed limit drops the bar, not the whole widget.
-        codexLimit = try? c.decodeIfPresent(Limit.self, forKey: .codexLimit)
+        limit = try? c.decodeIfPresent(Limit.self, forKey: .limit)
     }
 }
 

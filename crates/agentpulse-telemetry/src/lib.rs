@@ -4,15 +4,16 @@
 //! is never named, so serde skips it; no line text is ever stored or logged.
 //! Of `cost-state` records only the totals are read, plus how many models
 //! `modelUsage` names (its contents are skipped unread).
+//! Plan limits come from [`RATE_LIMITS_FILE`], of which only `rate_limits` is read.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RecordedCost, SessionDelta,
-    TokenUsage, UsageEvent,
+    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
+    RecordedCost, SessionDelta, TokenUsage, UsageEvent,
 };
 use chrono::NaiveDateTime;
 use serde::Deserialize;
@@ -26,6 +27,51 @@ pub use codex::CodexAdapter;
 pub use grok::GrokAdapter;
 pub use opencode::OpenCodeAdapter;
 use tail::{Groups, Tailer, TranscriptFile, read_lines, ts_ms};
+
+/// Where the status-line command in the README saves Claude Code's status-line
+/// payload, under the Claude Code root. Claude Code itself writes no limits to disk.
+pub const RATE_LIMITS_FILE: &str = "agentpulse-rate-limits.json";
+
+/// The plan windows of a saved status-line payload; its time is the file's.
+/// Claude Code sends no window length, so 5h and 7 days are set by name.
+fn rate_limits(path: &Path) -> Option<RateLimits> {
+    #[derive(Deserialize)]
+    struct Payload {
+        rate_limits: Option<Windows>,
+    }
+    #[derive(Deserialize)]
+    struct Windows {
+        five_hour: Option<Window>,
+        seven_day: Option<Window>,
+    }
+    #[derive(Deserialize)]
+    struct Window {
+        used_percentage: Option<f64>,
+        /// Unix seconds.
+        resets_at: Option<f64>,
+    }
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    let ts_ms = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as i64;
+    let w = serde_json::from_slice::<Payload>(&fs::read(path).ok()?)
+        .ok()?
+        .rate_limits?;
+    let window = |w: Option<Window>, minutes| {
+        let w = w?;
+        Some(RateWindow {
+            used_percent: w.used_percentage?,
+            window_minutes: Some(minutes),
+            resets_at_s: w.resets_at.map(|r| r as i64),
+        })
+    };
+    let primary = window(w.five_hour, 300);
+    let secondary = window(w.seven_day, 10_080);
+    (primary.is_some() || secondary.is_some()).then_some(RateLimits {
+        ts_ms,
+        plan_type: None,
+        primary,
+        secondary,
+    })
+}
 
 pub struct ClaudeCodeAdapter {
     root: PathBuf,
@@ -321,7 +367,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             events: vec![],
             sessions: vec![],
             more: false,
-            rate_limits: None,
+            rate_limits: rate_limits(&self.root.join(RATE_LIMITS_FILE)),
         };
         // A session still running keeps its whole history, however old its files are.
         let live: HashSet<String> = match self.live_sessions() {

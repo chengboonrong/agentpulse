@@ -1766,25 +1766,25 @@ fn pill(text: &str, need: bool, t: Theme) -> Div {
         .child(text.to_string())
 }
 
-/// Today's estimated cost and the Codex plan limit, at the right of the header.
+/// Today's estimated cost and the fullest plan limit, at the right of the header.
 fn today_figure(s: &Snapshot, t: Theme) -> Div {
     let (cost, what) = match format::approx_cost(s.today_cost_usd) {
         Some(c) => (c, "today · estimate"),
         None => (DASH.into(), "today · no price for today's models"),
     };
-    let limit = s.codex_limits.as_ref().and_then(|l| {
-        let w = l.primary.as_ref().or(l.secondary.as_ref())?;
-        Some((
+    let limit = crate::menubar::tightest_limit(&s.limits, s.taken_at_ms).map(|(p, l, w)| {
+        (
+            p,
             w,
             crate::menubar::as_of(l.ts_ms, s.taken_at_ms).unwrap_or_default(),
-        ))
+        )
     });
     let limit = match limit {
-        None => secondary(&format!("Codex limit {DASH}"), t),
-        Some((w, as_of)) if crate::menubar::out_of_date(w, s.taken_at_ms) => {
-            secondary(&format!("Codex limit out of date{as_of}"), t)
+        None => secondary(&format!("Plan limit {DASH}"), t),
+        Some((p, w, as_of)) if crate::menubar::out_of_date(w, s.taken_at_ms) => {
+            secondary(&format!("{} limit out of date{as_of}", p.label()), t)
         }
-        Some((w, as_of)) => {
+        Some((p, w, as_of)) => {
             let pct = w.used_percent.clamp(0., 100.);
             let resets = w.resets_at_s.map(|r| {
                 format!(
@@ -1797,7 +1797,7 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
                 .items_center()
                 .gap(px(6.))
                 .child(secondary(
-                    &format!("Codex {}", charts::window_name(w.window_minutes)),
+                    &format!("{} {}", p.label(), charts::window_name(w.window_minutes)),
                     t,
                 ))
                 .child(
@@ -1811,7 +1811,7 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
                                 .h_full()
                                 .w(gpui::relative(pct as f32 / 100.))
                                 .rounded_full()
-                                .bg(rgb(charts::limit_color(pct, false, t))),
+                                .bg(rgb(charts::limit_color(p, pct, false, t))),
                         ),
                 )
                 .child(secondary(

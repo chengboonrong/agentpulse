@@ -1,10 +1,12 @@
 //! What the menu bar item shows, derived from a snapshot. The AppKit side is
 //! `agentpulse_platform_macos::StatusItem`; this module is pure and tested.
 
+use std::collections::BTreeMap;
+
 use agentpulse_animation::{
     CatAnimator, CatState, Palette, Sprite, frames, rasterize, skid_frames, windup_frames,
 };
-use agentpulse_core::{AgentSession, RateLimits, RateWindow, SessionStatus};
+use agentpulse_core::{AgentSession, Provider, RateLimits, RateWindow, SessionStatus};
 use agentpulse_platform_macos::{MenuAction, MenuImage, MenuLine, WIDEST_TITLE};
 
 use crate::collector::Snapshot;
@@ -80,7 +82,7 @@ pub fn title(s: Option<&Snapshot>, stopped: bool) -> String {
 }
 
 /// The menu's rows at wall-clock `now_ms`: freshness, counts, today's figures,
-/// the output rate with its sparkline, Codex plan limits, then the live
+/// the output rate with its sparkline, each agent's plan limits, then the live
 /// sessions, those waiting for you first, each opening its detail when clicked.
 pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> {
     let line = |text: String| MenuLine {
@@ -118,7 +120,11 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> 
                 image: Some(sparkline(&s.rate_history, s.taken_at_ms)),
                 ..line(format!("Output  {:.1} tok/s", s.output_rate))
             });
-            out.extend(s.codex_limits.iter().flat_map(|l| limit_lines(l, now_ms)));
+            out.extend(
+                s.limits
+                    .iter()
+                    .flat_map(|(&p, l)| limit_lines(p, l, now_ms)),
+            );
             let mut live: Vec<&AgentSession> =
                 s.sessions.iter().filter(|x| x.status.is_live()).collect();
             // Stable: within each group the snapshot's order, newest activity first.
@@ -181,15 +187,15 @@ pub fn session_id(x: &AgentSession) -> String {
     format!("{}/{}", x.provider.as_str(), x.session_id)
 }
 
-/// One row per Codex limit window, each with its bar.
-fn limit_lines(l: &RateLimits, now_ms: i64) -> Vec<MenuLine> {
+/// One row per limit window of an agent, each with its bar.
+fn limit_lines(p: Provider, l: &RateLimits, now_ms: i64) -> Vec<MenuLine> {
     l.primary
         .iter()
         .chain(&l.secondary)
         .map(|w| {
             let stale = out_of_date(w, now_ms);
             MenuLine {
-                text: limit_text(w, now_ms) + &as_of(l.ts_ms, now_ms).unwrap_or_default(),
+                text: limit_text(p, w, now_ms) + &as_of(l.ts_ms, now_ms).unwrap_or_default(),
                 image: Some(limit_bar(w.used_percent, stale)),
                 ..MenuLine::default()
             }
@@ -209,9 +215,25 @@ pub fn as_of(ts_ms: i64, now_ms: i64) -> Option<String> {
         .then(|| format!(" · as of {}", format::start_time(ts_ms, now_ms)))
 }
 
+/// The window nearest its limit across all agents, current readings first:
+/// the one the Overview header and the widget show.
+pub fn tightest_limit(
+    limits: &BTreeMap<Provider, RateLimits>,
+    now_ms: i64,
+) -> Option<(Provider, &RateLimits, &RateWindow)> {
+    limits
+        .iter()
+        .flat_map(|(&p, l)| l.primary.iter().chain(&l.secondary).map(move |w| (p, l, w)))
+        .max_by(|(_, _, a), (_, _, b)| {
+            (!out_of_date(a, now_ms))
+                .cmp(&!out_of_date(b, now_ms))
+                .then(a.used_percent.total_cmp(&b.used_percent))
+        })
+}
+
 /// "Codex 5h · 62% used · resets in 1h 12m", or "Codex 5h · Out of date".
-fn limit_text(w: &RateWindow, now_ms: i64) -> String {
-    let name = format!("Codex {}", short_window(w.window_minutes));
+fn limit_text(p: Provider, w: &RateWindow, now_ms: i64) -> String {
+    let name = format!("{} {}", p.label(), short_window(w.window_minutes));
     match w.resets_at_s {
         _ if out_of_date(w, now_ms) => format!("{name} · Out of date"),
         Some(r) => format!(
@@ -588,7 +610,7 @@ mod tests {
             indexing: false,
             errors: vec![],
             usage: None,
-            codex_limits: None,
+            limits: Default::default(),
             detail: None,
         }
     }
@@ -752,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_limit_rows() {
+    fn limit_rows() {
         let now = 1_800_000_000_000;
         let window = |minutes, pct, resets_in_s: Option<i64>| RateWindow {
             used_percent: pct,
@@ -760,12 +782,15 @@ mod tests {
             resets_at_s: resets_in_s.map(|d| now / 1000 + d),
         };
         let mut s = snapshot(&[]);
-        s.codex_limits = Some(RateLimits {
-            ts_ms: now,
-            plan_type: Some("plus".into()),
-            primary: Some(window(300, 62.4, Some(72 * 60))),
-            secondary: Some(window(10_080, 15.0, Some(-1))),
-        });
+        s.limits.insert(
+            Provider::Codex,
+            RateLimits {
+                ts_ms: now,
+                plan_type: Some("plus".into()),
+                primary: Some(window(300, 62.4, Some(72 * 60))),
+                secondary: Some(window(10_080, 15.0, Some(-1))),
+            },
+        );
         let rows = dump(&lines(Some(&s), false, now));
         assert_eq!(
             rows[5..],
@@ -775,11 +800,33 @@ mod tests {
             ]
         );
         assert_eq!(
-            limit_text(&window(90, 3.0, None), now),
+            limit_text(Provider::Codex, &window(90, 3.0, None), now),
             "Codex 90m · 3% used"
         );
+        // Claude Code's rows come first, in the same form.
+        let claude = RateLimits {
+            ts_ms: now,
+            plan_type: None,
+            primary: Some(window(300, 10.0, Some(600))),
+            secondary: Some(window(10_080, 80.0, Some(86_400))),
+        };
+        let mut both = s.clone();
+        both.limits.insert(Provider::ClaudeCode, claude);
+        let rows = dump(&lines(Some(&both), false, now));
+        assert_eq!(
+            rows[5..7],
+            [
+                "Claude Code 5h · 10% used · resets in 10m 00s <image 40x10 pt>",
+                "Claude Code weekly · 80% used · resets in 1d 00h <image 40x10 pt>",
+            ]
+        );
+        // The header shows the fullest current window, never an out-of-date one.
+        let (p, _, w) = tightest_limit(&both.limits, now).unwrap();
+        assert_eq!((p, w.used_percent), (Provider::ClaudeCode, 80.0));
+        let (p, _, w) = tightest_limit(&s.limits, now).unwrap();
+        assert_eq!((p, w.used_percent), (Provider::Codex, 62.4));
         // A reading over an hour old says when it was taken.
-        s.codex_limits.as_mut().unwrap().ts_ms = now - 3_600_001;
+        s.limits.get_mut(&Provider::Codex).unwrap().ts_ms = now - 3_600_001;
         let rows = dump(&lines(Some(&s), false, now));
         let at = format::start_time(now - 3_600_001, now);
         assert_eq!(
@@ -791,7 +838,7 @@ mod tests {
             None,
             "an hour exactly is recent"
         );
-        // No reading: no rows. No Claude row, which AgentPulse does not collect.
+        // No reading: no rows.
         let rows = dump(&lines(Some(&snapshot(&[])), false, now));
         assert!(
             rows.iter()

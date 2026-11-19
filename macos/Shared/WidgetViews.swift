@@ -124,7 +124,7 @@ struct AgentPulseWidgetView: View {
                 }
             }
             Spacer(minLength: 0)
-            if let limit = p.codexLimit {
+            if let limit = p.limit {
                 LimitBar(limit: limit, outOfDate: limit.outOfDate(at: now), old: limit.old(at: now))
             }
             Text("Today \(p.today.tokens) tokens")
@@ -245,7 +245,7 @@ private struct Ribbon: View {
     }
 }
 
-/// Codex's plan limit: its name, a thin bar and the share used; text alone once out of date.
+/// A plan limit: its name, a thin bar and the share used; text alone once out of date.
 private struct LimitBar: View {
     let limit: WidgetPayload.Limit
     let outOfDate: Bool

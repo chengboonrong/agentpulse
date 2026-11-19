@@ -89,7 +89,8 @@ under heavy output, with a wind-up when it starts and a skid when it stops.
   (Codex reports only active and idle while running).
 - Keeps history in a local SQLite database.
 - Usage screen: estimated cost per day for 30 days by agent, cache efficiency and what
-  caching saved, today's sessions on a timeline, and Codex's plan limit. Clicking a session
+  caching saved, today's sessions on a timeline, and each agent's plan limit (Claude Code's
+  needs the status line command under [Claude Code plan limits](#claude-code-plan-limits)). Clicking a session
   shows its context size per request and its cumulative estimated cost. Days with no stored
   data are drawn as such, never as zero.
 - Lets you dress each agent's cat: 47 coats (tabbies, calico, colourpoints, a galaxy…)
@@ -169,6 +170,29 @@ minutes.
 | Animation speed | The Settings screen. `AGENTPULSE_ANIMATION_SPEED=1.5` (0.25 to 3) overrides it |
 | Log level | `AGENTPULSE_LOG=debug` |
 | Cat coats | The **Cats** screen: pick an agent, then a coat and an eye colour. Saved at once to `settings.json` in the data directory |
+
+### Claude Code plan limits
+
+Claude Code writes its 5-hour and weekly plan usage nowhere on disk. It hands it only to a
+[status line command](https://code.claude.com/docs/en/statusline), and only on Pro, Max
+and Ultra plans. AgentPulse does not change your Claude Code settings. To show these limits,
+set `statusLine` yourself in Claude Code's `settings.json` (in `~/.claude`, unless you set
+`CLAUDE_CONFIG_DIR`):
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "p=$(cat); case $p in *'\"rate_limits\"'*) f=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/agentpulse-rate-limits.json\"; printf %s \"$p\" > \"$f.$$\" && mv \"$f.$$\" \"$f\";; esac; printf %s \"$p\" | { YOUR_STATUS_LINE; }"
+}
+```
+
+Replace `YOUR_STATUS_LINE` with the value of your current `statusLine.command`, pasted
+exactly as it appears in `settings.json`. If you have none, delete
+`; printf %s \"$p\" | { YOUR_STATUS_LINE; }`. The command saves Claude Code's status line data
+to `agentpulse-rate-limits.json`, then passes it on unchanged. That data is session metadata
+such as the model, working directory and cost, not prompts or responses. AgentPulse
+deserializes only its `rate_limits`. The reading is as current as Claude Code's last status
+line update. To stop, restore your old `statusLine`, delete the file, and reopen AgentPulse.
 
 ## Documentation
 

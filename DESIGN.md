@@ -243,7 +243,7 @@ A warm, low-chroma ground of cream, lilac and plum ink, with six state ribbons a
 - **Ended Pale** (ribbon-ended-pale with ribbon-ended-ink label): the only ribbon without a white label; ended sessions recede.
 
 ### Tertiary
-- **Claude Ember** (series-claude) and **Codex Indigo** (series-codex): chart series per agent on the Usage and detail charts, lighter in dark appearance (dark-series-claude, dark-series-codex). Codex Indigo also fills the Codex limit bar below 75%.
+- **Claude Ember** (series-claude) and **Codex Indigo** (series-codex): chart series per agent on the Usage and detail charts, lighter in dark appearance (dark-series-claude, dark-series-codex). Each also fills its agent's limit bar in the window below 75%; the widget's bar stays Codex Indigo.
 - **Warning Amber** (warning-amber / dark-warning-amber) and **Error Red** (error-red / dark-error-red): chart warnings only: the long-context threshold line, and the limit bar at 75% and 90%.
 
 ### Neutral
@@ -342,7 +342,7 @@ The product's face: one agent as a character on its own stage.
 Native-feeling rows separated by 1px rules, 10px gaps between columns, 8px vertical padding, 10px radius on hover (Warm Hover) and focus (Lilac Selected). Each row leads with its cat at 2x and its ribbon; figures are right-aligned; missing values show a muted dash.
 
 ### Charts
-Hand-drawn on the card: daily bars as stacked segments in the agent series colours with a 1px card-coloured hairline between segments and 2px between days; a 1px muted baseline and 1px sand gridlines; lines at 1.5 to 2px. Days with no stored data show three faint 2px dots instead of a bar, never a zero. The limit bar is an 8px capsule on a sand track, Codex Indigo below 75%, amber from 75%, red from 90%, muted when stale.
+Hand-drawn on the card: daily bars as stacked segments in the agent series colours with a 1px card-coloured hairline between segments and 2px between days; a 1px muted baseline and 1px sand gridlines; lines at 1.5 to 2px. Days with no stored data show three faint 2px dots instead of a bar, never a zero. The limit bar is an 8px capsule on a sand track, in the agent's series colour below 75%, amber from 75%, red from 90%, muted when stale.
 
 ### Banner and Tooltip
 - **Banner:** Banner Cream with a 1px Banner Gold border, 10px radius, 8px x 12px, 12px text; sits between the title and the content.

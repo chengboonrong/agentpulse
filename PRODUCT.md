@@ -14,7 +14,7 @@ A developer who runs several AI coding agents (Claude Code, Codex) at once on on
 
 ## Product Purpose
 
-An offline observatory for AI coding agents: live status, tokens, estimated cost, runtime, CPU, memory and GPU per agent session, with history charts (daily cost, cache efficiency, today's timeline, Codex plan limit, per-session context size). Success is answering "is anything stuck, what's busy, what's it costing" at a glance, and "where did the money go" when asked.
+An offline observatory for AI coding agents: live status, tokens, estimated cost, runtime, CPU, memory and GPU per agent session, with history charts (daily cost, cache efficiency, today's timeline, plan limits, per-session context size). Success is answering "is anything stuck, what's busy, what's it costing" at a glance, and "where did the money go" when asked.
 
 ## Positioning
 
@@ -33,7 +33,7 @@ Reads the agents' own local transcripts and the kernel's process data, so it wor
 - Metadata only: no prompts, code or responses are read, stored or shown.
 - Screens today: Overview (live agents), Sessions (last 24 h or running), Session detail, Usage (charts), Cats (coat and eye picker), menu-bar menu, small and medium widgets.
 - 47 cat coats and 7 eye colours, chosen per agent.
-- Codex has no "waiting" state; Claude Code writes no plan-limit data.
+- Codex has no "waiting" state; Claude Code writes no plan-limit data to disk, so its limits need a status line command the user installs.
 
 ## Brand Commitments
 
