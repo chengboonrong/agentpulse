@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
             initializer {
                 DebugHooks.fixture(this@MainActivity, intent) ?: AppModel(
                     PhoneClient(PhoneStore(File(noBackupFilesDir, "link"), KeystoreSecrets(applicationContext))),
+                    finder = MacFinder(applicationContext),
                 ).also { DebugHooks.e2e(it, intent) }
             }
         }
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         open(intent)
+        DebugHooks.e2e(model, intent)
     }
 
     /** An agentpulse://pair link opened from a browser, a scan or `adb`. */

@@ -6,15 +6,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.chengboonrong.agentpulse.link.DirectConnection
 import io.github.chengboonrong.agentpulse.link.LinkException
 import io.github.chengboonrong.agentpulse.link.Pairing
 import io.github.chengboonrong.agentpulse.link.PairingLink
 import io.github.chengboonrong.agentpulse.link.PhoneClient
 import java.io.IOException
+import java.net.InetSocketAddress
 import java.net.URI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -37,11 +40,13 @@ data class PairRequest(val link: String? = null, val step: PairStep? = null, val
 
 /**
  * The paired Macs while the app is in the foreground (docs/mobile.md): `seen` to each
- * Mac on start, then `GET down` every 10 s through the relay. The direct connection
- * comes later.
+ * Mac on start, then a direct connection to each Mac found on the network ([finder]),
+ * else `GET down` every 10 s through the relay.
  */
-class AppModel(val client: PhoneClient, val offline: Boolean = false) : ViewModel() {
+class AppModel(val client: PhoneClient, val offline: Boolean = false, private val finder: MacFinder? = null) : ViewModel() {
     var pairings by mutableStateOf(emptyList<Pairing>())
+    /** Pairing ids connected directly. */
+    var direct by mutableStateOf(emptySet<String>())
     /** Pairing id to the last error, such as "This Mac removed the pairing." */
     var problems by mutableStateOf(emptyMap<String, String>())
     /** The stored pairings couldn't be read. */
@@ -60,6 +65,10 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false) : ViewMode
     var removeOnStart = false
 
     private var refresh: Job? = null
+    // Main thread only.
+    private var macs = emptyList<InetSocketAddress>()
+    private val connections = mutableMapOf<String, DirectConnection>()
+    private val connecting = mutableSetOf<String>()
 
     init {
         if (!offline) reload()
@@ -116,24 +125,43 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false) : ViewMode
         pairings.forEach { p -> viewModelScope.launch { seen(p) } }
         refresh = viewModelScope.launch {
             while (isActive) {
-                // At once, so one unreachable relay doesn't hold up the other Macs.
-                coroutineScope { pairings.forEach { launch { fetch(it.id) } } }
+                // At once, so one unreachable Mac or relay doesn't hold up the others.
+                coroutineScope {
+                    pairings.filter { it.id !in direct }.forEach {
+                        launch {
+                            connectDirect(it.id)
+                            if (it.id !in direct) fetch(it.id)
+                        }
+                    }
+                }
                 delay(10_000)
             }
         }
+        browse()
     }
 
     fun stop() {
         refresh?.cancel()
         refresh = null
+        finder?.stop()
+        macs = emptyList()
+        connections.values.forEach { it.close() }
+        connections.clear()
+        direct = emptySet()
     }
+
+    override fun onCleared() = stop()
 
     /** A pairing that just got its first state. */
     fun added(p: Pairing) {
         pairRequest = null
         reload()
         show = p.id
-        viewModelScope.launch { seen(p) }
+        browse()
+        viewModelScope.launch {
+            seen(p)
+            connectDirect(p.id)
+        }
     }
 
     /**
@@ -143,6 +171,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false) : ViewMode
     fun remove(p: Pairing): Job {
         pairings = pairings.filter { it.id != p.id }
         problems = problems - p.id
+        connections.remove(p.id)?.close()
+        direct = direct - p.id
         generation++
         return viewModelScope.launch {
             io { client.remove(p) }
@@ -159,14 +189,72 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false) : ViewMode
         }
     }
 
+    /** NSD only once a Mac is paired, and while in the foreground. */
+    private fun browse() {
+        if (refresh == null || pairings.isEmpty()) return
+        finder?.start(::found)
+    }
+
+    /** The Macs on the network now, from NSD (or a debug build's e2e hook). */
+    fun found(addresses: List<InetSocketAddress>) {
+        macs = addresses
+        pairings.filter { it.id !in direct }.forEach { viewModelScope.launch { connectDirect(it.id) } }
+    }
+
+    /** Tries each Mac found; one that doesn't know the pairing closes. */
+    private suspend fun connectDirect(id: String) {
+        if (id in connecting || id in connections) return
+        connecting += id
+        try {
+            for (address in macs) {
+                val p = pairing(id) ?: return
+                val c = try {
+                    // Not cancellable: a connection made after stop() must still be closed below.
+                    withContext(NonCancellable + Dispatchers.IO) { client.connect(p, address) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    continue
+                }
+                // Stopped or removed meanwhile.
+                if (refresh == null || pairing(id) == null) return c.close()
+                connections[id] = c
+                direct = direct + id
+                problems = problems - id
+                viewModelScope.launch { listen(id, c) }
+                return
+            }
+        } finally {
+            connecting -= id
+        }
+    }
+
+    private suspend fun listen(id: String, c: DirectConnection) {
+        try {
+            while (true) {
+                val p = io { c.next() }
+                if (pairing(id) != null) pairings = pairings.map { if (it.id == id) p else it }
+            }
+        } catch (e: CancellationException) {
+            c.close()
+            throw e
+        } catch (_: Exception) {
+            // Closed: back to the relay on the next tick.
+        }
+        // Unless stop() or a newer connection already replaced it.
+        if (connections[id] !== c) return
+        connections.remove(id)
+        direct = direct - id
+    }
+
     private suspend fun seen(p: Pairing) = report(p.id) { io { client.post(PhoneClient.Up.SEEN, p) } }
 
     private suspend fun fetch(id: String) {
         val p = pairing(id) ?: return
         report(id) {
             val fetched = io { client.fetchDown(p) }
-            // Unless it was removed meanwhile.
-            if (pairing(id) != null) pairings = pairings.map { if (it.id == id) fetched else it }
+            // Unless it was removed, or connected directly (newer), meanwhile.
+            if (pairing(id) != null && id !in direct) pairings = pairings.map { if (it.id == id) fetched else it }
         }
     }
 

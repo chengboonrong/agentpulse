@@ -1,8 +1,10 @@
 package io.github.chengboonrong.agentpulse.link
 
+import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -136,8 +138,8 @@ class PhoneStore(private val dir: File, private val secrets: SecretStore) {
 }
 
 /**
- * The phone's side of the relay (docs/mobile.md), link/'s `PhoneClient` without the direct
- * connection: pairing, `GET down`, `POST up`, removing. Blocking; call it off the main thread.
+ * The phone's side of the link (docs/mobile.md), link/'s `PhoneClient`: pairing, `GET down`,
+ * `POST up`, removing, and the direct connection. Blocking; call it off the main thread.
  */
 class PhoneClient(val store: PhoneStore) {
     enum class Up(val wire: String) { SEEN("seen"), UNPAIR("unpair") }
@@ -205,6 +207,16 @@ class PhoneClient(val store: PhoneStore) {
         } finally {
             runCatching { store.delete(pairing.id) }
         }
+    }
+
+    /**
+     * Connects directly to a Mac found on the network, `seen` as the first frame. Throws when
+     * that Mac doesn't know the pairing or doesn't answer within 5 s.
+     */
+    fun connect(pairing: Pairing, address: InetSocketAddress): DirectConnection {
+        val link = LinkClient(address, rawId(pairing), store.keys(pairing.id).first, macKey(pairing))
+        link.connect(nextUp(Up.SEEN, pairing.id))
+        return DirectConnection(this, link, pairing.id)
     }
 
     /**
@@ -276,4 +288,22 @@ class PhoneClient(val store: PhoneStore) {
     }
 
     private fun sha256(d: ByteArray) = MessageDigest.getInstance("SHA-256").digest(d)
+}
+
+/** A live direct connection to a paired Mac. Blocking, like [PhoneClient]. */
+class DirectConnection internal constructor(
+    private val client: PhoneClient, private val link: LinkClient, private val id: String,
+) : Closeable {
+    /**
+     * Waits for the Mac's next message (its latest state comes first) and returns the
+     * pairing as stored after it: a newer state is stored first; a heartbeat or an old state
+     * changes nothing. Throws once the connection closes, a frame fails, or the Mac has been
+     * silent for 90 s.
+     */
+    fun next(): Pairing {
+        val message = link.receive()
+        return client.take(message, id) ?: client.store.pairing(id) ?: throw PhoneException(PhoneException.Reason.REMOVED)
+    }
+
+    override fun close() = link.close()
 }

@@ -3,8 +3,7 @@
 //! Prints `LINK <link>` and `CODE <code>` for the script, then `OK`, or `FAIL <why>`
 //! and exits 1. `SEEN` in between, once the phone has sent `seen` and is connected directly
 //! (scripts/e2e-ios.sh screenshots the app then, before it removes the Mac).
-//! `AGENTPULSE_E2E_DIRECT=0` turns the direct connection off and waits for `seen` alone
-//! (scripts/e2e-android.sh, whose phone has no direct connection yet).
+//! `AGENTPULSE_E2E_DIRECT=0` turns the direct connection off and waits for `seen` alone.
 
 use std::io::Write;
 use std::path::Path;

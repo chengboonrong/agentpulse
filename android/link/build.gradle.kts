@@ -25,7 +25,7 @@ tasks.compileKotlin {
 }
 
 dependencies {
-    // HpkeContext lives in Tink's internal package: keep this pinned.
+    // HpkeContext and InsecureNonceChaCha20Poly1305 live in Tink's internal packages: keep this pinned.
     implementation("com.google.crypto.tink:tink-android:1.24.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
     testImplementation(kotlin("test"))
