@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentPulse privacy policy</title>
+<meta name="description" content="What the AgentPulse Mac, iPhone and iPad apps collect, and where it goes: no accounts, no analytics, end-to-end encrypted phone pairing.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://agentpulse.snitco.com/privacy.html">
+<link rel="icon" href="img/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<section aria-labelledby="privacy-h">
+  <h1 id="privacy-h">Privacy policy</h1>
+  <p>Last updated 20 November 2026. This covers AgentPulse for Mac and AgentPulse for iPhone and iPad.</p>
+  <p>AgentPulse collects no personal data. There is no account, no analytics, no advertising, no tracking and no crash reporting. The developer receives nothing from your devices.</p>
+</section>
+
+<section aria-labelledby="mac-h">
+  <h2 id="mac-h">On your Mac</h2>
+  <p>The Mac app reads the AI coding agents' own session files and the system's process table on your Mac, to show status, token counts, estimated cost, CPU and memory. It reads metadata only: never your prompts, code or responses. What it reads stays on your Mac.</p>
+  <p>Its one automatic network request is the update check, which asks GitHub for the public list of AgentPulse releases. You can turn it off in Settings. GitHub's own <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">privacy statement</a> applies to that request.</p>
+</section>
+
+<section aria-labelledby="phone-h">
+  <h2 id="phone-h">iPhone and iPad, and the relay</h2>
+  <p>Nothing leaves your Mac for a phone until you pair one by scanning the QR code the Mac app shows. After that, the Mac sends the phone a small summary: the live sessions (at most five, with each project's folder name and no paths), today's tokens and estimated cost, and which agents are waiting.</p>
+  <p>That summary travels through the AgentPulse relay (relay.snitco.com, a Cloudflare Worker) or directly over your local network when both devices are on it. Everything is end-to-end encrypted with keys made on your devices and kept in their Keychains; the relay cannot read it. Per pairing, the relay stores only:</p>
+  <ul>
+    <li>a random pairing id and hashes of the two devices' relay tokens;</li>
+    <li>the latest encrypted message from the Mac and a few encrypted messages from the phone;</li>
+    <li>when the pairing was created and last used.</li>
+  </ul>
+  <p>Removing a pairing on either device deletes it from the relay at once. A pairing unused for 30 days is deleted automatically. Cloudflare may keep standard request logs, such as IP addresses, as described in its <a href="https://www.cloudflare.com/privacypolicy/">privacy policy</a>.</p>
+  <p>The iPhone app uses the camera only to scan the pairing QR code. Nothing from the camera is stored or sent.</p>
+  <p>You can run your own relay instead: it is open source, and its address is a setting.</p>
+</section>
+
+<section aria-labelledby="contact-h">
+  <h2 id="contact-h">Changes and contact</h2>
+  <p>Changes to this policy appear on this page with a new date. AgentPulse is open source, so you can read exactly what it does in its <a href="https://github.com/chengboonrong/agentpulse">source code</a>. Questions: <a href="https://github.com/chengboonrong/agentpulse/issues">open an issue on GitHub</a>.</p>
+</section>
+</main>
+
+<footer>
+  <nav aria-label="Project links">
+    <a href="./">AgentPulse</a>
+    <a href="https://github.com/chengboonrong/agentpulse">Source</a>
+    <a href="https://github.com/chengboonrong/agentpulse/issues">Issues</a>
+  </nav>
+</footer>
+</body>
+</html>
