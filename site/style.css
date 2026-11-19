@@ -1,29 +1,30 @@
-/* Colours and type from DESIGN.md. System fonts only: this page makes no third-party requests. */
+/* Colours and type from DESIGN.md, on a pale sage ground that the cream app window never
+   blends into. System fonts only: this page makes no third-party requests. */
 :root {
-  --ground: #FFF6E8;
-  --card: #FFFFFF;
-  --keyline: #EBDCC7;
-  --rule: #E8DACB;
+  --ground: #E3EADF;
+  --card: #F4F7F2;
+  --keyline: #C9D3C4;
+  --rule: #CCD6C7;
   --ink: #2B2430;
-  --muted: #66596C;
-  --stage: #FFE9DC;
+  --muted: #4E5249;
   --work: #2F6FE0;
   --idle: #6E737B;
   --sprint: #B9520A;
   --link: #8A3D12;
+  --shadow: rgba(43, 36, 48, 0.18);
   --font: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #1F1823;
-    --card: #2B2231;
-    --keyline: #40344A;
-    --rule: #3E3245;
+    --ground: #1A211B;
+    --card: #242C24;
+    --keyline: #34402F;
+    --rule: #2F3A2E;
     --ink: #F3ECF5;
-    --muted: #B8ACBF;
-    --stage: #4A3329;
+    --muted: #B5BFB0;
     --link: #F0A070;
+    --shadow: rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -40,20 +41,18 @@ a { color: var(--link); text-underline-offset: 2px; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
 img { max-width: 100%; height: auto; }
 
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
 .hero, main, footer { width: min(968px, 100% - 32px); margin: 0 auto; }
 
-.hero { text-align: center; padding-top: 56px; padding-bottom: 32px; }
+/* Hero: centred like a Mac app page, then the window with a cat running along its top. */
+.hero { text-align: center; padding-top: 56px; padding-bottom: 48px; }
 .icon { display: block; margin: 0 auto 16px; border-radius: 22px; }
 h1 { font-size: clamp(32px, 6vw, 48px); font-weight: 800; line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.01em; }
 .lede { max-width: 640px; margin: 0 auto 24px; font-size: 19px; }
-.stage {
-  width: min(320px, 100%);
-  margin: 0 auto 28px;
-  padding: 16px 0 12px;
-  background: var(--stage);
-  border-radius: 14px;
-}
-.cat { display: block; margin: 0 auto; image-rendering: pixelated; }
 .download {
   display: inline-block;
   padding: 14px 28px;
@@ -66,18 +65,77 @@ h1 { font-size: clamp(32px, 6vw, 48px); font-weight: 800; line-height: 1.1; marg
 }
 .download:hover { opacity: 0.88; }
 .fine { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
-.honest { max-width: 560px; margin: 20px auto 0; }
+.honest { max-width: 560px; margin: 16px auto 0; }
 
-section { padding: 40px 0; border-top: 1px solid var(--rule); }
-h2 { font-size: 26px; font-weight: 800; line-height: 1.2; margin: 0 0 20px; }
+.sprite { display: block; image-rendering: pixelated; }
+.shot { display: block; border: 1px solid var(--keyline); border-radius: 14px; box-shadow: 0 12px 36px var(--shadow); }
 
-figure { margin: 0 0 40px; }
-figure img { display: block; border: 2px solid var(--keyline); border-radius: 18px; }
-figcaption { max-width: 680px; margin-top: 12px; color: var(--muted); }
-figcaption strong { color: var(--ink); }
+.window { position: relative; margin-top: 88px; container-type: inline-size; }
+/* The track sits on the window's top edge and clips the cat as it enters and leaves. */
+.track { position: absolute; left: 0; right: 0; bottom: 100%; height: 56px; overflow: hidden; }
+.runner { display: block; width: 112px; transform: translateX(24px); animation: run 9s linear infinite; }
+.runner .sprite { width: 112px; height: 56px; }
+@keyframes run {
+  from { transform: translateX(-112px); }
+  to { transform: translateX(100cqw); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .runner { animation: none; }
+}
+
+section { padding: 56px 0; border-top: 1px solid var(--rule); }
+h2 { font-size: 28px; font-weight: 800; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.005em; }
+h3 { font-size: 21px; font-weight: 800; line-height: 1.25; margin: 0 0 8px; }
+.intro { color: var(--muted); max-width: 640px; margin: 0 0 28px; }
 .note, .more { color: var(--muted); font-size: 15px; }
 
-.table { overflow-x: auto; background: var(--card); border: 2px solid var(--keyline); border-radius: 18px; }
+figure { margin: 40px 0 0; }
+figcaption { max-width: 680px; margin-top: 12px; color: var(--muted); }
+figcaption strong, .row p strong { color: var(--ink); }
+
+/* The cats */
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tiles li {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.35;
+}
+.tiles .sprite { width: 100%; max-width: 128px; margin: 0 auto 8px; }
+.tiles strong { display: block; color: var(--ink); font-size: 16px; }
+@media (min-width: 760px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* Three questions */
+.row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: center; }
+.row + .row { margin-top: 48px; }
+.row p { color: var(--muted); margin: 0; }
+@media (min-width: 760px) {
+  .row { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 40px; }
+  .row:nth-of-type(even) > :first-child { order: 2; }
+  .row:nth-of-type(even) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+}
+#answers .note { margin: 40px 0 0; }
+
+/* Menu bar and widgets */
+.menubar { display: flex; gap: 12px; margin-bottom: 20px; }
+.menubar img { display: block; border-radius: 10px; image-rendering: pixelated; }
+.widgets { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.widgets picture { display: block; min-width: 0; }
+.widgets img { display: block; border-radius: 22px; box-shadow: 0 8px 24px var(--shadow); }
+
+/* Private and light */
+.facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin: 28px 0 48px; }
+.facts li { background: var(--card); border-radius: 14px; padding: 16px 18px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.facts strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 4px; }
+@media (min-width: 520px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 760px) { .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+#private h3 { margin-top: 40px; }
+#private h3#reads { margin-top: 0; }
+
+.table { overflow-x: auto; background: var(--card); border: 1px solid var(--keyline); border-radius: 14px; margin-top: 20px; }
 table { width: 100%; border-collapse: collapse; font-size: 15px; }
 th, td { text-align: left; vertical-align: top; padding: 12px 16px; border-top: 1px solid var(--rule); }
 thead th { border-top: 0; color: var(--muted); font-weight: 700; font-size: 13px; }
@@ -96,12 +154,24 @@ tbody th { font-weight: 700; }
 .estimated { background: var(--sprint); }
 .unavailable { background: var(--idle); }
 
-.cols { display: grid; gap: 0 48px; grid-template-columns: 1fr; }
-.cols h2:not(:first-child) { margin-top: 32px; }
-.cols > div + div { margin-top: 32px; }
-@media (min-width: 760px) { .cols { grid-template-columns: 1fr 1fr; } .cols > div + div { margin-top: 0; } }
+/* Works with */
+.pills { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
+.pills li { background: var(--card); border: 1px solid var(--keyline); border-radius: 9999px; padding: 8px 16px; font-weight: 700; }
+
+/* Download and FAQ */
+.cta { text-align: center; margin-bottom: 48px; }
+.cta h2 { margin-bottom: 20px; }
+.cols { display: grid; gap: 40px 48px; grid-template-columns: minmax(0, 1fr); }
+.cols h3:not(:first-child) { margin-top: 32px; }
+@media (min-width: 760px) { .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 ol, ul { padding-left: 1.3em; }
+/* After the ul rule so it wins; each list's own margin rule below still applies. */
+.tiles, .facts, .pills, .menubar { list-style: none; padding: 0; }
 li { margin-bottom: 8px; }
+.tiles li, .facts li, .pills li, .menubar li { margin-bottom: 0; }
+details { background: var(--card); border-radius: 12px; padding: 12px 16px; margin-bottom: 8px; }
+summary { font-weight: 700; cursor: pointer; }
+details p { color: var(--muted); margin: 8px 0 0; }
 
 footer { padding-top: 24px; padding-bottom: 48px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 15px; }
 footer nav { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 8px; }
@@ -109,6 +179,9 @@ footer nav { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 8px; 
 @media (max-width: 520px) {
   body { font-size: 16px; }
   .lede { font-size: 17px; }
+  h2 { font-size: 24px; }
+  section { padding: 44px 0; }
+  .window { margin-top: 72px; }
   th, td { padding: 10px 12px; }
   /* The three-column table becomes a stack of rows on a phone. */
   thead { display: none; }

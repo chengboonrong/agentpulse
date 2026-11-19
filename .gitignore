@@ -8,3 +8,6 @@ ios/*.xcodeproj
 
 # fastlane run output
 ios/fastlane/report.xml
+
+# Brainstorm mockups (superpowers visual companion)
+.superpowers/

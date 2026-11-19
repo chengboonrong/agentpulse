@@ -2,10 +2,14 @@ name: Site
 
 on:
   pull_request:
-    paths: [site/**, .github/workflows/site.yml]
+    paths: [site/**, scripts/check-site.py, .github/workflows/site.yml]
   push:
     branches: [main]
-    paths: [site/**, .github/workflows/site.yml]
+    paths: [site/**, scripts/check-site.py, .github/workflows/site.yml]
+  # Every Download button needs AgentPulse.dmg on the latest release: re-check the links
+  # whenever a release is published (deploy stays limited to main).
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # The page's own rules: one-click download, section order, contrast, no third parties.
+      - run: python3 scripts/check-site.py
       # Every link on the page, including the releases/latest download, must resolve. The
       # site's own URL is skipped: it only exists once this workflow has deployed.
       - uses: lycheeverse/lychee-action@v2
