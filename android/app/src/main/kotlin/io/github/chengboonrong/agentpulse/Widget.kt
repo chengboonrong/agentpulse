@@ -6,6 +6,10 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -53,6 +57,8 @@ import io.github.chengboonrong.agentpulse.link.Pairing
 import java.util.Date
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
 /** What the widget shows for the first paired Mac (ios/Widget, macos/Shared's `WidgetState`). */
@@ -91,17 +97,28 @@ class AgentPulseWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Responsive(setOf(SMALL, MEDIUM))
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val pairing = withContext(Dispatchers.IO) {
-            runCatching { phoneClient(context).store.pairings().firstOrNull() }.getOrNull()
+        val first = load(context)
+        provideContent {
+            // A running session outlives update(), which only recomposes it: read the store
+            // again whenever RefreshWorker has redrawn.
+            val redraw by redraws.collectAsState()
+            val pairing by produceState(first, redraw) { value = load(context) }
+            val state = WidgetState.of(pairing, System.currentTimeMillis())
+            val cat = remember(state) { (state as? WidgetState.Live)?.payload?.cat?.let(::catBitmap) }
+            Content(state, cat, context)
         }
-        val state = WidgetState.of(pairing, System.currentTimeMillis())
-        val cat = (state as? WidgetState.Live)?.payload?.cat?.let(::catBitmap)
-        provideContent { Content(state, cat, context) }
     }
 
-    private companion object {
-        val SMALL = DpSize(110.dp, 110.dp)
-        val MEDIUM = DpSize(250.dp, 110.dp)
+    companion object {
+        private val SMALL = DpSize(110.dp, 110.dp)
+        private val MEDIUM = DpSize(250.dp, 110.dp)
+
+        /** Bumped after every refresh; the widget and the worker share the app's process. */
+        val redraws = MutableStateFlow(0)
+
+        private suspend fun load(context: Context) = withContext(Dispatchers.IO) {
+            runCatching { phoneClient(context).store.pairings().firstOrNull() }.getOrNull()
+        }
     }
 }
 
@@ -131,6 +148,7 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 client.store.pairings().firstOrNull()?.let(client::fetchDown)
             }
         }
+        AgentPulseWidget.redraws.update { it + 1 }
         AgentPulseWidget().updateAll(context)
         return Result.success()
     }
@@ -264,12 +282,13 @@ private fun lead(a: WidgetPayload.Agents) = when {
 private fun time(context: Context, ms: Long) = DateFormat.getTimeFormat(context).format(Date(ms))
 
 /**
- * The cat sprite (32 cells wide) at [scale] pixels a cell, which the launcher fits. Capped,
- * as a widget update's bitmaps share a memory limit.
+ * The cat sprite (32 cells wide) at whole pixels a cell, about 256 px on its longer side,
+ * which the launcher fits. Capped, as a widget update's bitmaps share a memory limit.
  */
-private fun catBitmap(cat: WidgetPayload.Cat, scale: Int = 8): Bitmap {
+private fun catBitmap(cat: WidgetPayload.Cat): Bitmap {
     val w = cat.width.coerceIn(1, 64)
     val h = cat.height.coerceIn(1, 64)
+    val scale = (256 / maxOf(w, h)).coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(w * scale, h * scale, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint()

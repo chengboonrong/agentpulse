@@ -299,8 +299,9 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   agents, today's cost, "as of"; the medium adds up to three sessions and today's
   tokens), stale after 75 minutes. A WorkManager job fetches `down` through the relay
   every 15 minutes, and once when the app goes to the background, then redraws it;
-  nothing is fetched while no widget is placed. Not yet: the plan limit bar and session
-  timers (Glance has no ticking text).
+  nothing is fetched while no widget is placed. Unlike iPhone's timeline, it turns stale
+  only when that job runs, which Doze can hold back; below Android 12 its corners are
+  square. Not yet: the plan limit bar and session timers (Glance has no ticking text).
 - Push and a Live Activity counterpart (an ongoing notification) need FCM in the push
   gateway, a relay change; not in the first version.
 
