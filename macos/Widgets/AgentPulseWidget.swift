@@ -24,7 +24,7 @@ struct Provider: TimelineProvider {
         if case let .live(p, asOf?, _) = entries[0].state {
             let staleAt = asOf.addingTimeInterval(WidgetState.ageLimit + 1)
             // The limit bar turns "out of date" at its reset, if that comes first.
-            if let resetAt = p.codexLimit?.resetsAt, resetAt > now, resetAt < staleAt {
+            if let resetAt = p.limit?.resetsAt, resetAt > now, resetAt < staleAt {
                 entries.append(AgentPulseEntry(date: resetAt, state: WidgetState.from(data: data, now: resetAt)))
             }
             entries.append(AgentPulseEntry(date: staleAt, state: WidgetState.from(data: data, now: staleAt)))

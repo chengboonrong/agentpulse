@@ -3,7 +3,7 @@
 //! canvas. Unknown is never drawn as zero: days before an agent's first stored
 //! event are "no data", unpriced requests are counted beside the estimates.
 
-use agentpulse_core::{Provider, RateWindow};
+use agentpulse_core::{Provider, RateLimits, RateWindow};
 use chrono::{DateTime, Local, Offset, TimeZone};
 use gpui::{
     Bounds, Div, Pixels, canvas, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
@@ -632,8 +632,9 @@ where
     at.with_timezone(tz).format(fmt).to_string()
 }
 
-/// A limit bar's fill: warning colours as the window fills, muted once out of date.
-pub(super) fn limit_color(pct: f64, stale: bool, t: Theme) -> u32 {
+/// A limit bar's fill: the agent's colour, warning colours as the window
+/// fills, muted once out of date.
+pub(super) fn limit_color(p: Provider, pct: f64, stale: bool, t: Theme) -> u32 {
     if stale {
         t.muted
     } else if pct >= 90. {
@@ -641,14 +642,15 @@ pub(super) fn limit_color(pct: f64, stale: bool, t: Theme) -> u32 {
     } else if pct >= 75. {
         t.waiting
     } else {
-        t.series_codex
+        agent_color(p, t)
     }
 }
 
-fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme) -> Div {
+fn limit_row(p: Provider, w: &RateWindow, l: &RateLimits, now: i64, t: Theme) -> Div {
+    let (plan, as_of) = (l.plan_type.as_deref(), l.ts_ms);
     let stale = crate::menubar::out_of_date(w, now);
     let pct = w.used_percent.clamp(0., 100.);
-    let color = limit_color(pct, stale, t);
+    let color = limit_color(p, pct, stale, t);
     let mut detail = vec![];
     if let Some(r) = w.resets_at_s {
         detail.push(format!("resets {}", reset_label(r, now, &Local)));
@@ -684,7 +686,10 @@ fn limit_row(w: &RateWindow, plan: Option<&str>, as_of: i64, now: i64, t: Theme)
         .child(secondary(&detail.join(" · "), t))
         .children(stale.then(|| {
             secondary(
-                "Out of date: the reset time has passed. Codex sends a new reading with its next request.",
+                &format!(
+                    "Out of date: the reset time has passed. {} sends a new reading with its next request.",
+                    p.label()
+                ),
                 t,
             )
         }))
@@ -696,38 +701,37 @@ fn limits(s: &Snapshot, t: Theme) -> Div {
         .flex_col()
         .gap(px(sp::M))
         .child(section_label("Plan limits", t));
-    let codex = match &s.codex_limits {
-        None => secondary(
-            "No Codex limit data yet. Codex reports it with each request.",
-            t,
-        ),
-        Some(l) => {
-            let windows: Vec<&RateWindow> = l.primary.iter().chain(&l.secondary).collect();
-            if windows.is_empty() {
-                secondary("Codex's latest reading had no limit windows.", t)
-            } else {
-                div().flex().flex_col().gap(px(sp::M)).children(
-                    windows
-                        .into_iter()
-                        .map(|w| limit_row(w, l.plan_type.as_deref(), l.ts_ms, s.taken_at_ms, t)),
-                )
+    section.children([Provider::ClaudeCode, Provider::Codex].map(|p| {
+        let body = match s.limits.get(&p) {
+            None if p == Provider::ClaudeCode => secondary(
+                "No Claude Code limit data. Claude Code shares it only with a status line command; the README shows how to add one.",
+                t,
+            ),
+            None => secondary(
+                "No Codex limit data yet. Codex reports it with each request.",
+                t,
+            ),
+            Some(l) => {
+                let windows: Vec<&RateWindow> = l.primary.iter().chain(&l.secondary).collect();
+                if windows.is_empty() {
+                    secondary(&format!("{}'s latest reading had no limit windows.", p.label()), t)
+                } else {
+                    div().flex().flex_col().gap(px(sp::M)).children(
+                        windows
+                            .into_iter()
+                            .map(|w| limit_row(p, w, l, s.taken_at_ms, t)),
+                    )
+                }
             }
-        }
-    };
-    section
-        .child(
-            div()
-                .max_w(px(480.))
-                .flex()
-                .flex_col()
-                .gap(px(sp::S))
-                .child(div().font_weight(FontWeight::BOLD).child("Codex"))
-                .child(codex),
-        )
-        .child(secondary(
-            "Claude Code writes no plan-limit data to disk, so there is nothing to show for it.",
-            t,
-        ))
+        };
+        div()
+            .max_w(px(480.))
+            .flex()
+            .flex_col()
+            .gap(px(sp::S))
+            .child(div().font_weight(FontWeight::BOLD).child(p.label()))
+            .child(body)
+    }))
 }
 
 // ---------------------------------------------------------- session detail

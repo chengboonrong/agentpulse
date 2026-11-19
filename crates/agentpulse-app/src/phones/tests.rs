@@ -594,11 +594,11 @@ fn declining_deletes_the_pairing() {
 }
 
 #[test]
-fn phones_never_get_the_codex_limit() {
+fn phones_never_get_the_plan_limit() {
     let mut r = rig("no-limit");
     let id = r.pair();
     let mut p = payload(1, 1);
-    p.codex_limit = Some(crate::widget_export::WidgetLimit {
+    p.limit = Some(crate::widget_export::WidgetLimit {
         label: "Codex 5h".into(),
         used_percent: 62.0,
         resets_at_ms: None,
@@ -607,7 +607,7 @@ fn phones_never_get_the_codex_limit() {
     r.publish(p, T0 + 60_000);
     let sent = r.relay.down(&id).unwrap().1;
     assert_eq!(sent["payload"]["agents"]["active"], 1);
-    assert!(sent["payload"].get("codex_limit").is_none());
+    assert!(sent["payload"].get("limit").is_none());
 }
 
 #[test]

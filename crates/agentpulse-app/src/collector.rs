@@ -1,7 +1,7 @@
 //! The collector loop: polls each adapter, stores what it read, samples agent
 //! processes and turns it all into a [`Snapshot`]. Knows nothing about GPUI.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -60,8 +60,8 @@ pub struct Snapshot {
     pub errors: Vec<String>,
     /// None until the history has been indexed and queried.
     pub usage: Option<UsageCharts>,
-    /// Codex's newest plan-limit reading, in memory only.
-    pub codex_limits: Option<RateLimits>,
+    /// Each agent's newest plan-limit reading, in memory only.
+    pub limits: BTreeMap<Provider, RateLimits>,
     /// The session the window asked for with [`Collector::show_detail`].
     #[serde(skip)]
     pub detail: Option<Arc<SessionDetail>>,
@@ -169,7 +169,7 @@ pub struct Collector {
     detail_error: Option<String>,
     history: Option<History>,
     today: Option<Today>,
-    codex_limits: Option<RateLimits>,
+    limits: BTreeMap<Provider, RateLimits>,
     detail_key: Option<Key>,
     detail: Option<Arc<SessionDetail>>,
     pub ingested: IngestStats,
@@ -213,7 +213,7 @@ impl Collector {
             detail_error: None,
             history: None,
             today: None,
-            codex_limits: None,
+            limits: BTreeMap::new(),
             detail_key: None,
             detail: None,
             ingested: IngestStats::default(),
@@ -240,14 +240,12 @@ impl Collector {
                 Ok(batch) => {
                     src.poll_error = None;
                     src.more = batch.more;
-                    if provider == Provider::Codex
-                        && let Some(l) = batch.rate_limits.as_ref().filter(|l| {
-                            self.codex_limits
-                                .as_ref()
-                                .is_none_or(|c| l.ts_ms >= c.ts_ms)
-                        })
-                    {
-                        self.codex_limits = Some(l.clone());
+                    if let Some(l) = batch.rate_limits.as_ref().filter(|l| {
+                        self.limits
+                            .get(&provider)
+                            .is_none_or(|c| l.ts_ms >= c.ts_ms)
+                    }) {
+                        self.limits.insert(provider, l.clone());
                     }
                     if !batch.is_empty() {
                         match self.store.apply(&batch, &|e| self.prices.cost(e)) {
@@ -463,7 +461,7 @@ impl Collector {
         snap.rate_history = self.rate_history.iter().copied().collect();
         snap.indexing = indexing;
         snap.usage = self.usage_charts(now);
-        snap.codex_limits = self.codex_limits.clone();
+        snap.limits = self.limits.clone();
         snap.detail = self.detail.clone();
         snap.errors = self
             .config_errors
@@ -751,7 +749,7 @@ pub fn build_snapshot(
         indexing: false,
         errors: Vec::new(),
         usage: None,
-        codex_limits: None,
+        limits: BTreeMap::new(),
         detail: None,
         sessions,
     }
@@ -1496,13 +1494,14 @@ mod tests {
         assert!((u.cache_saved_usd.unwrap() - 30.0 * 1.9 / 1e6).abs() < 1e-12);
         assert_eq!(u.cache_saved_unpriced, 0);
         assert_eq!(u.today.len(), 2);
-        assert_eq!(s.codex_limits.as_ref().unwrap().ts_ms, 200);
+        assert_eq!(s.limits[&Provider::Codex].ts_ms, 200);
+        assert!(!s.limits.contains_key(&Provider::ClaudeCode));
 
         // An older reading does not replace a newer one.
         b.rate_limits = Some(limits(100, 10.0));
         codex.polls.lock().unwrap().push_back(Ok(b));
         let s = c.tick();
-        let p = s.codex_limits.unwrap().primary.unwrap();
+        let p = s.limits[&Provider::Codex].primary.clone().unwrap();
         assert_eq!(p.used_percent, 62.0);
 
         // A session's requests arrive once asked for.

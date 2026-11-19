@@ -14,7 +14,7 @@ Claude Code 2.1.322 and Codex CLI 0.164.0 on macOS 27.0.
 | Process CPU, resident memory | Measured | OS process table |
 | Cost | **Estimated** | Tokens × price table |
 | Claude Code's own session cost | Measured | The agent's `cost-state` record (per session, for the run that wrote it). Codex has no such record: always "—" |
-| Codex plan limit (used %, window, reset) | Measured | Codex `token_count` records; Claude Code has none |
+| Plan limit (used %, window, reset) | Measured | Codex `token_count` records; Claude Code's status line payload, only when the user installs the status line command from the README |
 | Active execution time | **Estimated** | Gaps between records ≤ 60 s |
 | Status of a session with no registry entry | **Estimated** | Transcript age (30 s / 5 min) |
 | Token rate | Derived | 30 s rolling window over measured tokens |
@@ -70,6 +70,30 @@ read; `modelUsage` is not.
 - It is the agent's own number and is shown as such ("Claude Code $1.24"), next to
   AgentPulse's estimate, which stays labelled as an estimate. A session without a record
   shows "—".
+
+### Plan limits
+Claude Code writes no plan-limit data to disk: transcripts carry none. It passes the plan's
+windows only to the `statusLine` command, as `rate_limits` in the JSON on its stdin, e.g.
+`{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{…}}`, with
+`resets_at` in Unix seconds ([status line docs](https://code.claude.com/docs/en/statusline)).
+`rate_limits` comes only for Pro, Max and Ultra plans, after a session's first response, and
+each window can be missing.
+- AgentPulse never edits Claude Code's settings. The README gives a `statusLine` command for
+  the user to install. It saves the whole payload to `agentpulse-rate-limits.json` under the root, by
+  write-then-rename through a per-process temporary file, only when the payload contains `"rate_limits"`, and passes the
+  payload unchanged to the user's own status line command.
+- Each poll reads that file. Only `rate_limits.five_hour` and `.seven_day`, each
+  `used_percentage` and `resets_at`, are deserialized. The rest of the payload (model, working
+  directory, cost, `spend_limit`…) is skipped unread. A missing or malformed file means no
+  reading, not an error.
+- The reading's time is the file's modification time, so it is as current as Claude Code's
+  last status line update. Claude Code sends no window length, so `five_hour` is a 300-minute
+  window and `seven_day` a 10080-minute one, named "5h" and "weekly" like Codex's.
+- The status line docs list no per-model weekly windows (`seven_day_opus`,
+  `seven_day_sonnet`, which the OAuth usage API has), so none are read. AgentPulse does not
+  call that API.
+- No credential is read and no host is contacted. Out-of-date handling and the "as of" note
+  are the same as for Codex.
 
 ### Token accounting
 - Claude Code writes one `assistant` record per content block, each repeating the response's
@@ -155,7 +179,7 @@ its first bytes is parsed for the metadata fields above rather than dropped.
   nothing new to read, there is no reading until Codex writes one.
 - The window is named from `window_minutes` (10080 weekly, 300 "5-hour"). A reading whose
   `resets_at` has passed is shown as out of date, not as current.
-- Claude Code writes no plan-limit data to disk, so none is shown for it.
+- Claude Code's limits come from elsewhere: see [Claude Code plan limits](#plan-limits).
 
 ### Live sessions and status
 - A rollout is live when a process named `codex` holds it open. Open files come from libproc

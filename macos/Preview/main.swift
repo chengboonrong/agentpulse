@@ -4,7 +4,7 @@
 //   widget-preview <widget.json> <out-dir>
 //
 // Writes {data,stale,not-running,placeholder}-{small,medium}-{light,dark,accented}.png
-// at 2x, plus "limit-reset" when the file's Codex limit resets before it turns stale:
+// at 2x, plus "limit-reset" when the file's plan limit resets before it turns stale:
 // the timeline entry the widget adds at that reset. "placeholder" is the gallery preview from placeholder.json next to
 // this executable (scripts/bundle.sh puts it there).
 // "data" goes through the same age and version checks as the widget; "stale"
@@ -61,7 +61,7 @@ var states: [(String, WidgetState)] = [
     ("not-running", WidgetState.from(data: nil, now: .now)),
     ("placeholder", WidgetState.preview),
 ]
-if let p = decoded, let resetAt = p.codexLimit?.resetsAt,
+if let p = decoded, let resetAt = p.limit?.resetsAt,
    resetAt < p.generatedAt.addingTimeInterval(WidgetState.ageLimit + 1) {
     states.append(("limit-reset", WidgetState.from(data: data, now: max(resetAt, .now).addingTimeInterval(1))))
 }

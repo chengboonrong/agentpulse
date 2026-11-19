@@ -375,13 +375,8 @@ impl Core {
 
     fn handle(&mut self, msg: Msg, now: i64) {
         match msg {
-            // The phone contract has no Codex limit: it stays on this Mac's widget.
-            Msg::Publish(p) => {
-                self.payload = Some(Payload {
-                    codex_limit: None,
-                    ..*p
-                })
-            }
+            // The phone contract has no plan limit: it stays on this Mac's widget.
+            Msg::Publish(p) => self.payload = Some(Payload { limit: None, ..*p }),
             Msg::Event(e) => self.event(&e, now),
             Msg::Wake => {}
             Msg::Command(Command::StartPairing(reply)) => {
