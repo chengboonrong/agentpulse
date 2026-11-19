@@ -52,7 +52,8 @@ object DebugHooks {
         intent.getStringExtra("e2eLink")?.let { model.open(it) }
         // A numeric address, which needs no lookup on the main thread.
         intent.getStringExtra("e2eMac")?.let {
-            model.found(listOf(InetSocketAddress(it.substringBeforeLast(':'), it.substringAfterLast(':').toInt())))
+            val port = it.substringAfterLast(':').toIntOrNull() ?: return
+            model.found(listOf(InetSocketAddress(it.substringBeforeLast(':'), port)))
         }
     }
 

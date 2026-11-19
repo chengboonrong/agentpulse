@@ -17,6 +17,7 @@ import java.net.URI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -208,7 +209,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
             for (address in macs) {
                 val p = pairing(id) ?: return
                 val c = try {
-                    io { client.connect(p, address) }
+                    // Not cancellable: a connection made after stop() must still be closed below.
+                    withContext(NonCancellable + Dispatchers.IO) { client.connect(p, address) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -251,8 +253,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         val p = pairing(id) ?: return
         report(id) {
             val fetched = io { client.fetchDown(p) }
-            // Unless it was removed meanwhile.
-            if (pairing(id) != null) pairings = pairings.map { if (it.id == id) fetched else it }
+            // Unless it was removed, or connected directly (newer), meanwhile.
+            if (pairing(id) != null && id !in direct) pairings = pairings.map { if (it.id == id) fetched else it }
         }
     }
 

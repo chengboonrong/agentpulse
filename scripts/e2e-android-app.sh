@@ -63,7 +63,8 @@ failed() {
 "$ADB" shell "am start -S -W -n $PKG/.MainActivity -e e2eAutoConfirm true -e e2eLink '$LINK'" >/dev/null
 # The driver's direct listener, up once it has a state to send.
 for i in $(seq 600); do
-    LISTEN="$(lsof -a -p "$MAC" -iTCP -sTCP:LISTEN -P -n -Fn 2>/dev/null | sed -n 's/^n.*:\([0-9][0-9]*\)$/\1/p' | head -n1)"
+    # lsof fails until there is one, which set -e mustn't see.
+    LISTEN="$({ lsof -a -p "$MAC" -iTCP -sTCP:LISTEN -P -n -Fn 2>/dev/null || true; } | sed -n 's/^n.*:\([0-9][0-9]*\)$/\1/p' | head -n1)"
     [[ -n "$LISTEN" ]] && break
     kill -0 "$MAC" 2>/dev/null || break
     sleep 0.1

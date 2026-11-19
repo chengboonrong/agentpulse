@@ -37,7 +37,11 @@ class MacFinder(context: Context) {
 
             override fun onDiscoveryStarted(type: String) {}
             override fun onDiscoveryStopped(type: String) {}
-            override fun onStartDiscoveryFailed(type: String, error: Int) {}
+            override fun onStartDiscoveryFailed(type: String, error: Int) {
+                // So the next start() tries again.
+                main.post { if (listener === this) listener = null }
+            }
+
             override fun onStopDiscoveryFailed(type: String, error: Int) {}
         }
         listener = l
@@ -75,9 +79,10 @@ class MacFinder(context: Context) {
                 main.post {
                     resolving = false
                     val host = info.host
-                    // Unless stopped, or stopped and started again, meanwhile.
+                    // Unless stopped, or stopped and started again, meanwhile. Keyed by the
+                    // name as found, which onServiceLost gives; a resolved one can come escaped.
                     if (listener === session && host != null && info.attributes["v"]?.decodeToString() == "1") {
-                        found[info.serviceName] = InetSocketAddress(host, info.port)
+                        found[next.serviceName] = InetSocketAddress(host, info.port)
                         onChange(found.values.toList())
                     }
                     resolveNext()

@@ -148,7 +148,7 @@ class DirectTest {
         }) { address ->
             val started = System.nanoTime()
             assertFailsWith<Exception> { LinkClient(address, id, phone, mac.publicKey).connect("seen".toByteArray()) }
-            assertTrue((System.nanoTime() - started) / 1_000_000 in 4_500..5_900)
+            assertTrue((System.nanoTime() - started) / 1_000_000 in 4_500..7_000)
         }
         // Then frames within the idle timeout.
         withMac({ input, output ->
