@@ -146,8 +146,14 @@ class SiteRules(unittest.TestCase):
         self.assertEqual([i for i in self.page.section_ids if i in EXPECTED], EXPECTED)
 
     def test_cpu_claim(self):
+        # docs/roadmap.md "Measured results": the collector rows, never the 1.5% whole-app row.
         self.assertIn("13 MB", self.visible_text)
+        self.assertIn("1.56%", self.visible_text)
         self.assertNotIn("1.5%", self.visible_text)
+
+    def test_network_claim_is_qualified(self):
+        # Only the automatic update check runs on its own; Check Now and pairing make more.
+        self.assertNotIn("One network request", self.visible_text)
 
     def test_text_tokens_meet_contrast(self):
         blocks = token_blocks(self.css)

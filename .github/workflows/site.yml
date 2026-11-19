@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
     paths: [site/**, scripts/check-site.py, .github/workflows/site.yml]
+  # Every Download button needs AgentPulse.dmg on the latest release: re-check the links
+  # whenever a release is published (deploy stays limited to main).
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:

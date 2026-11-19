@@ -40,7 +40,7 @@ body {
 a { color: var(--link); text-underline-offset: 2px; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
 img { max-width: 100%; height: auto; }
-:where(.tiles, .facts, .pills, .menubar) { list-style: none; padding: 0; margin: 0; }
+
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap;
@@ -165,6 +165,8 @@ tbody th { font-weight: 700; }
 .cols h3:not(:first-child) { margin-top: 32px; }
 @media (min-width: 760px) { .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 ol, ul { padding-left: 1.3em; }
+/* After the ul rule so it wins; each list's own margin rule below still applies. */
+.tiles, .facts, .pills, .menubar { list-style: none; padding: 0; }
 li { margin-bottom: 8px; }
 .tiles li, .facts li, .pills li, .menubar li { margin-bottom: 0; }
 details { background: var(--card); border-radius: 12px; padding: 12px 16px; margin-bottom: 8px; }
