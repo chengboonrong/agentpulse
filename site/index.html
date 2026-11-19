@@ -28,40 +28,125 @@
   </picture>
   <h1>Watch your agents work</h1>
   <p class="lede">AgentPulse is a native Mac app that shows what the AI coding agents on your Mac are doing right now: <strong>Claude Code</strong>, <strong>Codex CLI</strong>, <strong>OpenCode</strong> and <strong>Grok CLI</strong>. Status, tokens, cost, CPU and memory per session, and a pixel cat for each one that runs while its agent works.</p>
-  <div class="stage">
+  <a class="download" href="https://github.com/chengboonrong/agentpulse/releases/latest/download/AgentPulse.dmg">Download for Mac</a>
+  <p class="fine">Free and open source · macOS 14 or later on Apple Silicon · signed and notarized</p>
+  <p class="honest">No account, no API key. It reads metadata only: never your prompts, code or responses.</p>
+
+  <div class="window">
+    <div class="track">
+      <picture class="runner">
+        <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-still.png">
+        <img class="sprite" src="img/cat-running.png" width="256" height="128" alt="A ginger pixel cat running along the top of the window">
+      </picture>
+    </div>
     <picture>
-      <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-still.png">
-      <img class="cat" src="img/cat-running.png" width="256" height="128" alt="A ginger pixel cat running">
+      <source media="(prefers-color-scheme: dark)" srcset="img/dark-overview.webp 1x, img/dark-overview@2x.webp 2x">
+      <img class="shot" src="img/light-overview.webp" srcset="img/light-overview.webp 1x, img/light-overview@2x.webp 2x" width="1120" height="720" alt="The Overview window: a roster of session cards, each with a cat on a pastel stage, the project name, a state ribbon such as working or idle, an estimated cost and a token count, with today's estimated total at the top right">
     </picture>
   </div>
-  <a class="download" href="https://github.com/chengboonrong/agentpulse/releases/latest">Download for macOS</a>
-  <p class="fine">macOS 14 or later on Apple Silicon · signed and notarized</p>
-  <p class="honest">Free and open source. No account, no API key. It reads metadata only: never your prompts, code or responses.</p>
 </header>
 
 <main>
-<section aria-labelledby="shows">
-  <h2 id="shows">What it shows</h2>
+<section id="cats" aria-labelledby="cats-h">
+  <h2 id="cats-h">One cat per agent. Read its mood, not a dashboard.</h2>
+  <p class="intro">Each session gets its own cat, and it moves with what its agent is really doing.</p>
+  <ul class="tiles">
+    <li>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-windup-still.png">
+        <img class="sprite" src="img/cat-windup.png" width="256" height="128" loading="lazy" alt="A ginger pixel cat crouching, about to run">
+      </picture>
+      <strong>Wind-up</strong> a burst is starting
+    </li>
+    <li>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-still.png">
+        <img class="sprite" src="img/cat-running.png" width="256" height="128" loading="lazy" alt="A ginger pixel cat running">
+      </picture>
+      <strong>Running</strong> working
+    </li>
+    <li>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-sprinting-still.png">
+        <img class="sprite" src="img/cat-sprinting.png" width="256" height="128" loading="lazy" alt="A ginger pixel cat sprinting at full stretch">
+      </picture>
+      <strong>Sprinting</strong> heavy output
+    </li>
+    <li>
+      <picture>
+        <source media="(prefers-reduced-motion: reduce)" srcset="img/cat-skid-still.png">
+        <img class="sprite" src="img/cat-skid.png" width="256" height="128" loading="lazy" alt="A ginger pixel cat skidding to a stop">
+      </picture>
+      <strong>Skid</strong> just stopped
+    </li>
+  </ul>
   <figure>
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="img/dark-overview.webp 1x, img/dark-overview@2x.webp 2x">
-      <img src="img/light-overview.webp" srcset="img/light-overview.webp 1x, img/light-overview@2x.webp 2x" width="1120" height="720" alt="The Overview window: a roster of session cards, each with a cat on a pastel stage, the project name, a state ribbon such as working or idle, an estimated cost and a token count, with today's estimated total at the top right">
-    </picture>
-    <figcaption><strong>The roster.</strong> One card per session. Look at the ribbon first: blue is working, grey is idle, and a card that is waiting on you turns pink and goes to the front. The figures under it are the session's tokens and its cost, marked ≈ when it is an estimate.</figcaption>
-  </figure>
-  <figure>
-    <img src="img/light-usage.webp" srcset="img/light-usage.webp 1x, img/light-usage@2x.webp 2x" width="1120" height="720" loading="lazy" alt="The Usage screen: estimated cost per day for 30 days as bars split into Claude Code and Codex, with days that have no stored data shown as dotted gaps, and below it the cache efficiency card">
-    <figcaption><strong>Usage.</strong> Where the money went: estimated cost per day for 30 days by agent, what caching saved, and today's sessions on a timeline. A day with no stored data is drawn as a gap, never as zero.</figcaption>
-  </figure>
-  <figure>
-    <img src="img/dark-cats.webp" srcset="img/dark-cats.webp 1x, img/dark-cats@2x.webp 2x" width="1120" height="720" loading="lazy" alt="The Cats screen in dark appearance: a Claude Code and Codex switch, a preview of the ginger tabby sitting and running, a row of eye colour chips and a grid of coats">
+    <img class="shot" src="img/dark-cats.webp" srcset="img/dark-cats.webp 1x, img/dark-cats@2x.webp 2x" width="1120" height="720" loading="lazy" alt="The Cats screen in dark appearance: a Claude Code and Codex switch, a preview of the ginger tabby sitting and running, a row of eye colour chips and a grid of coats">
     <figcaption><strong>Cats.</strong> Pick a coat and an eye colour for each agent, from 47 and 7. The cat sits when its session is idle, looks around while it waits for you, runs while it works, and sprints under heavy output.</figcaption>
   </figure>
+</section>
+
+<section id="answers" aria-labelledby="answers-h">
+  <h2 id="answers-h" class="visually-hidden">Three questions it answers</h2>
+  <div class="row">
+    <div>
+      <h3>Is anything stuck?</h3>
+      <p><strong>The roster.</strong> One card per session. Look at the ribbon first: blue is working, grey is idle, and a card that is waiting on you turns pink and goes to the front. The figures under it are the session's tokens and its cost, marked ≈ when it is an estimate.</p>
+    </div>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/dark-overview.webp 1x, img/dark-overview@2x.webp 2x">
+      <img class="shot" src="img/light-overview.webp" srcset="img/light-overview.webp 1x, img/light-overview@2x.webp 2x" width="1120" height="720" loading="lazy" alt="The Overview roster with session cards and their state ribbons">
+    </picture>
+  </div>
+  <div class="row">
+    <div>
+      <h3>What's it costing?</h3>
+      <p><strong>Usage.</strong> Where the money went: estimated cost per day for 30 days by agent, what caching saved, and today's sessions on a timeline. A day with no stored data is drawn as a gap, never as zero.</p>
+    </div>
+    <img class="shot" src="img/light-usage.webp" srcset="img/light-usage.webp 1x, img/light-usage@2x.webp 2x" width="1120" height="720" loading="lazy" alt="The Usage screen: estimated cost per day for 30 days as bars split into Claude Code and Codex, with days that have no stored data shown as dotted gaps, and below it the cache efficiency card">
+  </div>
+  <div class="row">
+    <div>
+      <h3>How hard is it working?</h3>
+      <p><strong>Session detail.</strong> Open any session to see its context size per request, its running estimated cost, CPU and memory.</p>
+    </div>
+    <img class="shot" src="img/light-detail.webp" srcset="img/light-detail.webp 1x, img/light-detail@2x.webp 2x" width="1120" height="720" loading="lazy" alt="A session's detail screen: its context size for each request, its running estimated cost, and its CPU and memory">
+  </div>
   <p class="note">These images are rendered by the app's own screenshot mode from the developer's real sessions, not mocked up.</p>
 </section>
 
-<section aria-labelledby="reads">
-  <h2 id="reads">What it reads, and how sure each number is</h2>
+<section id="menubar" aria-labelledby="menubar-h">
+  <h2 id="menubar-h">Close the window. The cat stays in your menu bar.</h2>
+  <ul class="menubar">
+    <li><img src="img/menubar-sleeping.png" width="72" height="80" loading="lazy" alt="The menu-bar cat asleep, in a light and a dark menu bar"></li>
+    <li><img src="img/menubar-lookingaround.png" width="72" height="80" loading="lazy" alt="The menu-bar cat looking around"></li>
+    <li><img src="img/menubar-running.png" width="72" height="80" loading="lazy" alt="The menu-bar cat running"></li>
+  </ul>
+  <p class="intro">A cat follows overall activity next to the number of active agents. Desktop widgets show today's figures.</p>
+  <div class="widgets">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/widget-small-dark.webp">
+      <img src="img/widget-small-light.webp" width="170" height="170" loading="lazy" alt="The small desktop widget with today's figures">
+    </picture>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/widget-medium-dark.webp">
+      <img src="img/widget-medium-light.webp" width="364" height="170" loading="lazy" alt="The medium desktop widget with today's figures">
+    </picture>
+  </div>
+</section>
+
+<section id="private" aria-labelledby="private-h">
+  <h2 id="private-h">Your prompts never leave your Mac. AgentPulse never reads them.</h2>
+  <ul class="facts">
+    <li><strong>No account, no API key</strong> Install it and open it. There is nothing to sign in to.</li>
+    <li><strong>Metadata only</strong> Prompts, code and responses are never read, stored or shown.</li>
+    <li><strong>One network request</strong> The update check, which asks GitHub for the public list of releases. You can turn it off.</li>
+    <li><strong>About 1% of one CPU core</strong> And 13 MB for the collector, measured with three live agents.</li>
+    <li><strong>Counts checked</strong> Token totals matched an independent count exactly, in every session checked.</li>
+    <li><strong>Open source</strong> MIT or Apache 2.0. <a href="https://github.com/chengboonrong/agentpulse">Read every line on GitHub.</a></li>
+  </ul>
+
+  <h3 id="reads">What it reads, and how sure each number is</h3>
   <p>AgentPulse reads the agents' own files on your Mac and the system's process table. Every figure says whether it was measured or estimated, and anything it cannot know is shown as unavailable, never as zero.</p>
   <div class="table">
   <table>
@@ -80,29 +165,61 @@
   </table>
   </div>
   <p class="more">The full method, agent by agent: <a href="https://github.com/chengboonrong/agentpulse/blob/main/docs/telemetry-spec.md">telemetry specification</a>.</p>
+
+  <h3 id="privacy">Privacy</h3>
+  <p>Everything AgentPulse reads stays on your Mac. It never reads or stores prompt, response or file content.</p>
+  <p>On its own it makes one kind of network request: the update check, which asks GitHub for the public list of AgentPulse releases every 2 hours. It sends no cookies, identifiers or anything about you or your agents; GitHub sees your IP address, as with any connection. You can turn the automatic check off in Settings.</p>
+  <p>Phone pairing is an opt-in setting for a companion phone app that is not released yet. Until you pair a phone, it sends nothing.</p>
+  <p>This page sets no cookies and loads nothing from anywhere else.</p>
 </section>
 
-<section aria-labelledby="install" class="cols">
-  <div>
-    <h2 id="install">Install</h2>
-    <ol>
-      <li><a href="https://github.com/chengboonrong/agentpulse/releases/latest">Download the DMG</a>, open it and drag AgentPulse to Applications.</li>
-      <li>Open AgentPulse. A cat appears in the menu bar; closing the window keeps it running there.</li>
-      <li>Updates: it checks GitHub for a new release and shows a notice. Nothing installs until you click Install Update, and an update is installed only if its signature checks out.</li>
-    </ol>
-    <p>It is not in the App Store on purpose: the App Store sandbox would stop it reading other apps' session files and the process table.</p>
-    <h2 id="requirements">Requirements</h2>
-    <ul>
-      <li>macOS 14 or later on an Apple Silicon Mac.</li>
-      <li>At least one of Claude Code, Codex CLI, OpenCode or Grok CLI on the same Mac.</li>
-    </ul>
+<section id="agents" aria-labelledby="agents-h">
+  <h2 id="agents-h">Works with the agents you already run</h2>
+  <ul class="pills">
+    <li>Claude Code</li>
+    <li>Codex CLI</li>
+    <li>OpenCode</li>
+    <li>Grok CLI</li>
+  </ul>
+  <p class="intro">Subagents included. Nothing to install or configure in the agents.</p>
+</section>
+
+<section id="download" aria-labelledby="download-h">
+  <div class="cta">
+    <h2 id="download-h">Try it in a minute.</h2>
+    <a class="download" href="https://github.com/chengboonrong/agentpulse/releases/latest/download/AgentPulse.dmg">Download AgentPulse</a>
+    <p class="fine">Signed and notarized by Apple · macOS 14 or later on Apple Silicon · <a href="https://github.com/chengboonrong/agentpulse/releases/latest">Release notes</a> · <a href="https://github.com/chengboonrong/agentpulse/releases">All releases</a></p>
   </div>
-  <div>
-    <h2 id="privacy">Privacy</h2>
-    <p>Everything AgentPulse reads stays on your Mac. It never reads or stores prompt, response or file content.</p>
-    <p>On its own it makes one kind of network request: the update check, which asks GitHub for the public list of AgentPulse releases every 2 hours. It sends no cookies, identifiers or anything about you or your agents; GitHub sees your IP address, as with any connection. You can turn the automatic check off in Settings.</p>
-    <p>Phone pairing is an opt-in setting for a companion phone app that is not released yet. Until you pair a phone, it sends nothing.</p>
-    <p>This page sets no cookies and loads nothing from anywhere else.</p>
+  <div class="cols">
+    <div>
+      <h3 id="install">Install</h3>
+      <ol>
+        <li><a href="https://github.com/chengboonrong/agentpulse/releases/latest/download/AgentPulse.dmg">Download the DMG</a>, open it and drag AgentPulse to Applications.</li>
+        <li>Open AgentPulse. A cat appears in the menu bar; closing the window keeps it running there.</li>
+        <li>Updates: it checks GitHub for a new release and shows a notice. Nothing installs until you click Install Update, and an update is installed only if its signature checks out.</li>
+      </ol>
+      <p>It is not in the App Store on purpose: the App Store sandbox would stop it reading other apps' session files and the process table.</p>
+      <h3 id="requirements">Requirements</h3>
+      <ul>
+        <li>macOS 14 or later on an Apple Silicon Mac.</li>
+        <li>At least one of Claude Code, Codex CLI, OpenCode or Grok CLI on the same Mac.</li>
+      </ul>
+    </div>
+    <div class="faq">
+      <h3 id="faq">Questions</h3>
+      <details>
+        <summary>Does it work on Intel Macs?</summary>
+        <p>Not yet. It needs an Apple Silicon Mac.</p>
+      </details>
+      <details>
+        <summary>Are the costs exact?</summary>
+        <p>No. For Claude Code and Codex CLI they're estimates at API list prices, and the app always says so; OpenCode and Grok CLI record their own charge.</p>
+      </details>
+      <details>
+        <summary>How do updates work?</summary>
+        <p>It checks GitHub for a new release and shows a notice. Nothing installs until you click Install Update, and an update is installed only if its signature checks out.</p>
+      </details>
+    </div>
   </div>
 </section>
 </main>
