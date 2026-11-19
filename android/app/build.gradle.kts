@@ -40,5 +40,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.6.2")
     implementation("androidx.camera:camera-view:1.6.2")
     implementation("com.google.zxing:core:3.5.4")
+    // The home-screen widget, refreshed every 15 minutes.
+    implementation("androidx.glance:glance-appwidget:1.2.0")
+    implementation("androidx.work:work-runtime:2.12.0")
     testImplementation(kotlin("test-junit"))
 }
