@@ -295,7 +295,12 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   to the Mac's listener; NSD itself needs a real device (an emulator's can't see the
   host's services). Android 17's local network permission applies once the app targets
   API 37; it targets 36.
-- Widgets: Glance, refreshed by WorkManager every 15 minutes through the relay.
+- Widget, done: Glance, small and medium, the first paired Mac as on iPhone (the cat,
+  agents, today's cost, "as of"; the medium adds up to three sessions and today's
+  tokens), stale after 75 minutes. A WorkManager job fetches `down` through the relay
+  every 15 minutes, and once when the app goes to the background, then redraws it;
+  nothing is fetched while no widget is placed. Not yet: the plan limit bar and session
+  timers (Glance has no ticking text).
 - Push and a Live Activity counterpart (an ongoing notification) need FCM in the push
   gateway, a relay change; not in the first version.
 

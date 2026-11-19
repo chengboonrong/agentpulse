@@ -6,7 +6,7 @@ The AgentPulse Android app (Kotlin, Jetpack Compose, minimum SDK 26), the phone 
 | Path | What |
 |---|---|
 | `link/` | Kotlin/JVM port of `link/`: the relay crypto, the pairing link, the relay client, the store and the direct connection (handshake, frames, a socket client). Plain JVM, so its tests need no emulator. |
-| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (scan the code or paste the link), secrets under the Android Keystore, Macs on the network found with NSD. `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
+| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (scan the code or paste the link), secrets under the Android Keystore, Macs on the network found with NSD, the home-screen widget (Glance) and its 15-minute refresh (WorkManager). `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
 | `e2e/` | UI tests of the phone and tablet layouts on the fixtures ([below](#ui-tests-phone-and-tablet-layouts)). |
 
 ## Build and run

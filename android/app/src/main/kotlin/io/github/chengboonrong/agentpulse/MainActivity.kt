@@ -1,5 +1,6 @@
 package io.github.chengboonrong.agentpulse
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
         viewModelFactory {
             initializer {
                 DebugHooks.fixture(this@MainActivity, intent) ?: AppModel(
-                    PhoneClient(PhoneStore(File(noBackupFilesDir, "link"), KeystoreSecrets(applicationContext))),
+                    phoneClient(applicationContext),
                     finder = MacFinder(applicationContext),
                 ).also { DebugHooks.e2e(it, intent) }
             }
@@ -65,7 +66,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         // Not for a rotation: start() would send `seen` to every Mac again.
-        if (!isChangingConfigurations) model.stop()
+        if (!isChangingConfigurations) {
+            model.stop()
+            RefreshWorker.now(applicationContext)
+        }
         super.onStop()
     }
 }
+
+/** The pairings and their secrets, shared by the app, its widget and [RefreshWorker] in one process. */
+fun phoneClient(context: Context) =
+    PhoneClient(PhoneStore(File(context.noBackupFilesDir, "link"), KeystoreSecrets(context.applicationContext)))
