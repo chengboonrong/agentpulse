@@ -139,7 +139,9 @@ Release checklist:
    the feed.
 3. Publish `v<version>` as a full release (not a pre-release) with the DMG, the zip and
    `appcast.xml` from `target/bundle/`; its notes are what the notice shows:
-   `gh release create v<version> --title "AgentPulse v<version>" --notes-file <notes.md> target/bundle/AgentPulse-<version>.{dmg,zip} target/bundle/appcast.xml`.
+   `gh release create v<version> --title "AgentPulse v<version>" --notes-file <notes.md> target/bundle/AgentPulse-<version>.{dmg,zip} target/bundle/AgentPulse.dmg target/bundle/appcast.xml`.
+   The version-less `AgentPulse.dmg` is there because the landing page's Download button
+   links to `releases/latest/download/AgentPulse.dmg`.
 4. Smoke-test from the previous version: open it, Check Now, Install Update, and confirm it
    relaunches as the new version with the menu-bar cat running.
 

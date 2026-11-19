@@ -304,6 +304,9 @@ if [[ $DMG == 1 ]]; then
         xcrun stapler validate "$IMAGE"
         step "Gatekeeper assessment"
         spctl --assess --type open --context context:primary-signature --verbose=2 "$IMAGE"
+        # Version-less copy for the landing page's one-click link
+        # (releases/latest/download/AgentPulse.dmg); byte-identical, so the staple comes along.
+        cp "$IMAGE" "$OUT/AgentPulse.dmg"
     fi
     shasum -a 256 "$IMAGE"
 fi
@@ -342,7 +345,7 @@ EOF
     "$SPARKLE_BIN/sign_update" --verify "$APPCAST"
     shasum -a 256 "$ARCHIVE"
     echo "Publish v$VERSION as a full release (not a pre-release) with AgentPulse-$VERSION.dmg,"
-    echo "AgentPulse-$VERSION.zip and appcast.xml from $OUT; see macos/README.md, \"Updates\"."
+    echo "AgentPulse.dmg, AgentPulse-$VERSION.zip and appcast.xml from $OUT; see macos/README.md, \"Updates\"."
 fi
 
 echo
