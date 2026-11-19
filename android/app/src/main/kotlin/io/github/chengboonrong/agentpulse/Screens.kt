@@ -186,7 +186,7 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
             }
             else -> LazyColumn(contentPadding = padding) {
                 items(model.pairings, key = { it.id }) { p ->
-                    MacRow(p, model.problems[p.id], selected = p.id == selected, onClick = { onPick(p.id) })
+                    MacRow(p, model.problems[p.id], p.id in model.direct, selected = p.id == selected, onClick = { onPick(p.id) })
                     HorizontalDivider()
                 }
             }
@@ -195,7 +195,7 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun MacRow(pairing: Pairing, problem: String?, selected: Boolean, onClick: () -> Unit) {
+private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, selected: Boolean, onClick: () -> Unit) {
     val payload = WidgetPayload.decode(pairing.lastState)
     val now by rememberNow(30_000)
     Column(
@@ -214,11 +214,12 @@ private fun MacRow(pairing: Pairing, problem: String?, selected: Boolean, onClic
             }
         }
         val at = pairing.lastStateAtMs
+        val via = if (direct) " · Direct" else ""
         Text(
             when {
                 problem != null -> problem
-                at != null && now - at < 60_000 -> "Updated just now"
-                at != null -> "Updated " + DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS)
+                at != null && now - at < 60_000 -> "Updated just now$via"
+                at != null -> "Updated " + DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS) + via
                 else -> "Waiting for your Mac"
             },
             style = MaterialTheme.typography.bodySmall,
@@ -262,7 +263,8 @@ private fun MacPane(model: AppModel, id: String, selected: String?, back: (() ->
                 item { Field("Needs you", payload.agents.waiting.toString()) }
                 item { Field("Working", payload.agents.active.toString()) }
                 item { Field("Idle", payload.agents.idle.toString()) }
-                footer("As of ${DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))} · Through the relay")
+                footer("As of ${DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))} · " +
+                    if (id in model.direct) "Connected directly" else "Through the relay")
                 header("Sessions")
                 if (payload.sessions.isEmpty()) {
                     item { Text("No live sessions", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }

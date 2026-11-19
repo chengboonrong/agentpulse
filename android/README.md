@@ -5,8 +5,8 @@ The AgentPulse Android app (Kotlin, Jetpack Compose, minimum SDK 26), the phone 
 
 | Path | What |
 |---|---|
-| `link/` | Kotlin/JVM port of `link/`: the relay crypto, the pairing link, the relay client and the store. Plain JVM, so its tests need no emulator. |
-| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (scan the code or paste the link), secrets under the Android Keystore. `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
+| `link/` | Kotlin/JVM port of `link/`: the relay crypto, the pairing link, the relay client, the store and the direct connection (handshake, frames, a socket client). Plain JVM, so its tests need no emulator. |
+| `app/` | The app: Macs, a Mac, a session (Material 3 adaptive panes), Pair (scan the code or paste the link), secrets under the Android Keystore, Macs on the network found with NSD. `src/debug` has the fixtures and e2e hooks; `src/release` a no-op. |
 | `e2e/` | UI tests of the phone and tablet layouts on the fixtures ([below](#ui-tests-phone-and-tablet-layouts)). |
 
 ## Build and run
@@ -15,7 +15,7 @@ Needs JDK 17 and the Android SDK (`ANDROID_HOME`) with platform 37.
 
 ```sh
 cd android
-./gradlew :link:test                  # crypto, link, store, relay client
+./gradlew :link:test                  # crypto, link, store, relay client, direct connection
 ./gradlew :app:assembleDebug          # app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n io.github.chengboonrong.agentpulse/.MainActivity
@@ -71,7 +71,11 @@ scripts/e2e-android-app.sh      # the app on a booted emulator (ANDROID_SERIAL t
 ```
 
 Both run the Mac side of `scripts/e2e-phones.sh` (throwaway keychain, the e2e driver, a
-local relay) with the direct connection off. `e2e-android-app.sh` passes the link as the
-debug-only extra `e2eLink`, answers the app's "Pair with <Mac>?" with `e2eAutoConfirm`,
-screenshots the Mac view (`target/e2e-android-app.png`), then relaunches with
+local relay, the direct listener) and require the phone to connect directly.
+`e2e-android.sh`'s phone finds the listener with macOS's `dns-sd`, as the JVM has no
+DNS-SD. `e2e-android-app.sh` passes the link as the debug-only extra `e2eLink`, answers
+the app's "Pair with <Mac>?" with `e2eAutoConfirm`, and, since an emulator's NSD can't see
+the host's services, hands the app the driver's listener as `e2eMac` through `adb reverse`.
+It screenshots the Mac view (`target/e2e-android-app.png`), then relaunches with
 `e2eRemove`, which removes the Mac, and checks the Mac deleted the pairing at the relay.
+Finding a Mac with NSD needs a real device on the Mac's network.

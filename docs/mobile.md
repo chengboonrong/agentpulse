@@ -273,7 +273,7 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   `GET down`, `POST up`, removing) and `PhoneStore` (`pairings.json` with the `seq`
   records, shared by the app and its widgets in one process, so no App Group).
   `scripts/e2e-android.sh` runs it as the phone (`./gradlew :link:phoneSim`) against the
-  Mac side of `scripts/e2e-phones.sh` and a local relay, with the direct connection off.
+  Mac side of `scripts/e2e-phones.sh` and a local relay.
 - Keys, done: each pairing's private key and relay token behind `PhoneStore`'s
   `SecretStore`; in the app AES-GCM under one Android Keystore key, the pairing id as
   associated data. No backup (`allowBackup="false"`): the key can't be restored.
@@ -287,8 +287,14 @@ speaks the same protocol as the iPhone app, so a Mac pairs it like any phone.
   from 1200 dp (tablets in landscape) all three. The same fixtures as iPhone, checked by
   `android/e2e` on a phone and a tablet emulator. `scripts/e2e-android-app.sh` pairs the
   real app on an emulator with the Mac through a local relay, and removes it.
-- Direct connection: NSD (DNS-SD) for `_agentpulse._tcp`, then the handshake in "Direct
-  connection".
+- Direct connection, done: `android/link`'s `LinkClient` (the handshake and frames in
+  "Direct connection", over a blocking socket, on Tink's X25519, HKDF and
+  ChaCha20-Poly1305) and `PhoneClient.connect`; the app finds Macs with NSD (DNS-SD,
+  `_agentpulse._tcp`, TXT `v=1`) while in the foreground, tries each, and polls the relay
+  for a Mac it can't reach. `scripts/e2e-android.sh` and `scripts/e2e-android-app.sh` connect
+  to the Mac's listener; NSD itself needs a real device (an emulator's can't see the
+  host's services). Android 17's local network permission applies once the app targets
+  API 37; it targets 36.
 - Widgets: Glance, refreshed by WorkManager every 15 minutes through the relay.
 - Push and a Live Activity counterpart (an ongoing notification) need FCM in the push
   gateway, a relay change; not in the first version.

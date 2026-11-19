@@ -9,13 +9,16 @@ import io.github.chengboonrong.agentpulse.link.PhoneClient
 import io.github.chengboonrong.agentpulse.link.PhoneStore
 import io.github.chengboonrong.agentpulse.link.SecretStore
 import java.io.File
+import java.net.InetSocketAddress
 
 /**
  * Debug builds only (the release source set has a no-op). Intent extras, as `am start -e`:
  * - `fixture` `macs|mac|session|pair-confirm|pair-code|empty`: a screen from fixture data
  *   without network, for screenshots and android/e2e (ios/App/Fixtures.swift's set).
- * - `e2eLink <link>` pairs with that link, `e2eAutoConfirm true` without the Pair tap, and
- *   `e2eRemove true` removes every Mac on start: scripts/e2e-android-app.sh, with no taps.
+ * - `e2eLink <link>` pairs with that link, `e2eAutoConfirm true` without the Pair tap,
+ *   `e2eRemove true` removes every Mac on start, and `e2eMac <ip>:<port>` is a Mac found on
+ *   the network (an emulator's NSD can't see the host's): scripts/e2e-android-app.sh, with
+ *   no taps. Also on a new intent, so only the extras given change anything.
  */
 object DebugHooks {
     fun fixture(context: Context, intent: Intent): AppModel? {
@@ -23,6 +26,8 @@ object DebugHooks {
         val store = PhoneStore(File(context.cacheDir, "fixtures"), Memory())
         val model = AppModel(PhoneClient(store), offline = true)
         val studio = pairing("Studio", minutesAgo = 1, payload = ::busy)
+        // As on iPhone: Studio is connected directly, the others through the relay.
+        if (name in setOf("macs", "mac", "session")) model.direct = setOf(studio.id)
         when (name) {
             "macs" -> model.pairings = listOf(
                 studio, pairing("MacBook Pro", minutesAgo = 42, payload = ::quiet), pairing("Mac mini", minutesAgo = null),
@@ -42,9 +47,13 @@ object DebugHooks {
     }
 
     fun e2e(model: AppModel, intent: Intent) {
-        model.autoConfirm = intent.getStringExtra("e2eAutoConfirm") == "true"
-        model.removeOnStart = intent.getStringExtra("e2eRemove") == "true"
+        intent.getStringExtra("e2eAutoConfirm")?.let { model.autoConfirm = it == "true" }
+        intent.getStringExtra("e2eRemove")?.let { model.removeOnStart = it == "true" }
         intent.getStringExtra("e2eLink")?.let { model.open(it) }
+        // A numeric address, which needs no lookup on the main thread.
+        intent.getStringExtra("e2eMac")?.let {
+            model.found(listOf(InetSocketAddress(it.substringBeforeLast(':'), it.substringAfterLast(':').toInt())))
+        }
     }
 
     private val LINK = "agentpulse://pair?v=1&r=https://relay.example.com" +
