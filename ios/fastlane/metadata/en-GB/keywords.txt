@@ -1,0 +1,1 @@
+ai,agent,claude,codex,coding,developer,tokens,cost,monitor,status,widget,llm,terminal,cli,opencode

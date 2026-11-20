@@ -13,6 +13,8 @@ skip_docs
 
 ROOT = File.expand_path("../..", __dir__)
 APP_ID = "io.github.chengboonrong.AgentPulse.phone"
+# One version for the Mac and iPhone apps: the workspace version in Cargo.toml.
+VERSION = File.read("#{ROOT}/Cargo.toml")[/^version = "([^"]+)"/, 1]
 
 lane :beta do
   # Xcode packages the .ipa with rsync and Apple-only flags; a Homebrew rsync earlier on
@@ -25,10 +27,8 @@ lane :beta do
     UI.user_error!("No 10-character team id: set AGENTPULSE_TEAM_ID or macos/signing.local")
   end
   api_key = app_store_connect_api_key
-  # One version for the Mac and iPhone apps: the workspace version in Cargo.toml.
-  version = File.read("#{ROOT}/Cargo.toml")[/^version = "([^"]+)"/, 1]
   build = latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID,
-                                         version: version, initial_build_number: 0) + 1
+                                         version: VERSION, initial_build_number: 0) + 1
   auth = "-allowProvisioningUpdates" \
          " -authenticationKeyPath #{File.expand_path(ENV.fetch('APP_STORE_CONNECT_API_KEY_KEY_FILEPATH')).shellescape}" \
          " -authenticationKeyID #{ENV.fetch('APP_STORE_CONNECT_API_KEY_KEY_ID')}" \
@@ -44,11 +44,52 @@ lane :beta do
     # gym passes xcargs to the export step too, so the API key flags reach both.
     xcargs: "#{auth} CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=#{team} " \
             "CODE_SIGN_IDENTITY='Apple Development' " \
-            "MARKETING_VERSION=#{version} CURRENT_PROJECT_VERSION=#{build}",
+            "MARKETING_VERSION=#{VERSION} CURRENT_PROJECT_VERSION=#{build}",
     export_method: "app-store",
     export_options: { signingStyle: "automatic" },
     export_team_id: team,
     skip_profile_detection: true
   )
   upload_to_testflight(skip_waiting_for_build_processing: true)
+end
+
+# `fastlane listing`: upload the App Store text (metadata/, en-GB is the primary language)
+# and screenshots/ to the editable App Store version, renaming it to VERSION if needed.
+# Age rating, App Privacy, pricing and content rights are set in App Store Connect.
+lane :listing do
+  deliver(
+    api_key: app_store_connect_api_key,
+    app_identifier: APP_ID,
+    platform: "ios",
+    app_version: VERSION,
+    skip_binary_upload: true,
+    metadata_path: "#{ROOT}/ios/fastlane/metadata",
+    screenshots_path: "#{ROOT}/ios/fastlane/screenshots",
+    overwrite_screenshots: true,
+    run_precheck_before_submit: false,
+    force: true
+  )
+end
+
+# `fastlane submit`: attach VERSION's latest TestFlight build and submit it for review.
+# Release stays manual: "Release This Version" in App Store Connect after approval.
+lane :submit do
+  api_key = app_store_connect_api_key
+  build = latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID, version: VERSION)
+  deliver(
+    api_key: api_key,
+    app_identifier: APP_ID,
+    platform: "ios",
+    app_version: VERSION,
+    build_number: build.to_s,
+    skip_binary_upload: true,
+    skip_metadata: true,
+    skip_screenshots: true,
+    submit_for_review: true,
+    automatic_release: false,
+    run_precheck_before_submit: false,
+    force: true,
+    # ITSAppUsesNonExemptEncryption is NO in Info.plist; no IDFA.
+    submission_information: { add_id_info_uses_idfa: false, export_compliance_uses_encryption: false }
+  )
 end

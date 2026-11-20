@@ -105,3 +105,21 @@ developer portal and App Store Connect: the App Group above registered on the te
 ticked on both App IDs (`io.github.chengboonrong.AgentPulse.phone` and `.phone.Widgets`),
 and an App Store Connect app record for the first bundle id. The app declares
 `ITSAppUsesNonExemptEncryption = NO`: it only uses the system's CryptoKit.
+
+## App Store
+
+With the same API key exported, after `fastlane beta` has a build for the version and it
+has finished processing:
+
+```sh
+cd ios && fastlane listing   # text in fastlane/metadata/, screenshots in fastlane/screenshots/
+cd ios && fastlane submit    # attach the version's latest TestFlight build, submit for review
+```
+
+The App Store version is named after the `Cargo.toml` version; `listing` renames the
+editable one to match. The listing's primary language is en-GB. Screenshots are the Debug
+fixtures (above) on an iPhone 6.9" and an iPad 13" simulator, light and dark, with
+`xcrun simctl status_bar <udid> override --time 9:41`. Release after approval is manual
+("Release This Version"). Age rating, App Privacy ("Data Not Collected"), pricing (Free)
+and content rights are set once in App Store Connect; the privacy policy is
+`site/privacy.html`.
