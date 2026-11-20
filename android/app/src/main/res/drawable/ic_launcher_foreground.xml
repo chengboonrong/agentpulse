@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The pixel cat of macos/AppIcon.icon/Assets/cat.svg, centred for an adaptive icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="1600" android:viewportHeight="1600">
+    <group android:translateX="288" android:translateY="36">
+        <path android:fillColor="#964E1E" android:pathData="M188 386h108v54h-108zM728 386h108v54h-108zM134 440h216v54h-216zM674 440h216v54h-216zM134 494h270v54h-270zM620 494h270v54h-270zM134 548h756v54h-756zM80 602h864v54h-864zM80 656h864v54h-864zM80 710h864v54h-864zM80 764h864v54h-864zM80 818h864v54h-864zM80 872h864v54h-864zM80 926h864v54h-864zM134 980h756v54h-756zM188 1034h648v54h-648zM296 1088h432v54h-432z" />
+        <path android:fillColor="#E88C38" android:pathData="M188 440h108v54h-108zM728 440h108v54h-108zM188 494h54v54h-54zM296 494h54v54h-54zM674 494h54v54h-54zM782 494h54v54h-54zM188 548h216v54h-216zM620 548h216v54h-216zM134 602h756v54h-756zM134 656h108v54h-108zM296 656h432v54h-432zM782 656h108v54h-108zM134 710h108v54h-108zM350 710h324v54h-324zM782 710h108v54h-108zM134 764h108v54h-108zM350 764h324v54h-324zM782 764h108v54h-108zM134 818h324v54h-324zM566 818h324v54h-324zM134 872h216v54h-216zM674 872h216v54h-216zM242 926h54v54h-54zM728 926h54v54h-54zM242 980h108v54h-108zM674 980h108v54h-108zM296 1034h432v54h-432z" />
+        <path android:fillColor="#B0581C" android:pathData="M242 494h54v54h-54zM728 494h54v54h-54zM242 656h54v54h-54zM728 656h54v54h-54zM134 926h108v54h-108zM782 926h108v54h-108zM188 980h54v54h-54zM782 980h54v54h-54z" />
+        <path android:fillColor="#FADEB0" android:pathData="M350 872h324v54h-324zM296 926h432v54h-432zM350 980h324v54h-324z" />
+        <path android:fillColor="#1E1814" android:pathData="M242 710h108v54h-108zM674 710h108v54h-108zM242 764h108v54h-108zM674 764h108v54h-108z" />
+        <path android:fillColor="#F0788C" android:pathData="M458 818h108v54h-108z" />
+    </group>
+</vector>

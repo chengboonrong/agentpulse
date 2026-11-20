@@ -63,6 +63,33 @@ On the tablet, whose natural orientation is landscape, agent-device's `portrait`
 landscape; `tests/tablet.e2e.ts` names them by what the screen shows. The CLI sends
 anonymous usage data; `E2E_TELEMETRY_DISABLED=1` turns it off.
 
+## Google Play
+
+`fastlane/` builds the signed release bundle and talks to Play Console; run it from
+`android/` with `bundle install` once, then `bundle exec fastlane <lane>`.
+
+| Lane | What |
+|---|---|
+| `build` | Signed release AAB, version code = the highest on any Play track + 1. `build first:true`: version code 1, for the very first upload, which Play only takes by hand. |
+| `play` | `build`, then upload to `internal` (`track:alpha` for the closed test) as a draft release, rolled out in Play Console. `PLAY_RELEASE_STATUS=completed` once the app has a production release. |
+| `listing` | The store listing in `fastlane/metadata/android/en-GB`: text, icon, feature graphic, phone and tablet screenshots. |
+| `promote` | `promote version_code:N from:alpha`: to production as a 10% staged rollout (`rollout:`, `to:` to change). |
+
+Secrets live outside the repo and reach fastlane through the environment:
+
+- `PLAY_JSON_KEY_PATH`: the Play service-account JSON key, with release access to this app.
+- `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`: the upload key. They default to
+  `~/.android-keys/agentpulse-upload.jks` and the password in `agentpulse-upload.pass`
+  beside it (alias `upload`). Play App Signing holds the app key; a lost upload key is
+  reset through Play Console support.
+- `ANDROID_HOME`: the Android SDK, as for any build.
+
+`versionName` is the workspace version from `Cargo.toml`, as on the Mac and iPhone.
+The screenshots come from the fixtures above on a 1080×2400 phone (cropped to 1080×2160,
+Play's 2:1 limit) and a 2560×1600 tablet, with `adb shell cmd uimode night yes` for dark.
+`fastlane/app_access.txt` is the text for Play Console's App access section, which needs
+a paired Mac to see anything.
+
 ## End to end
 
 ```sh

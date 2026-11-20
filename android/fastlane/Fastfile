@@ -1,0 +1,78 @@
+# Google Play lanes for the Android app, run from android/ (README.md, "Google Play"):
+#
+#   bundle exec fastlane build first:true    the very first AAB (version code 1), uploaded by hand
+#   bundle exec fastlane play                 next version code from Play, upload to internal
+#   bundle exec fastlane play track:alpha     ... to the closed test
+#   bundle exec fastlane listing              store listing text and images (fastlane/metadata)
+#   bundle exec fastlane promote version_code:N from:alpha    to production, 10% staged
+#
+# Secrets stay outside the repo. PLAY_JSON_KEY_PATH: the Play service-account JSON key.
+# ANDROID_KEYSTORE_PATH and ANDROID_KEYSTORE_PASSWORD: the upload key, defaulting to
+# ~/.android-keys/agentpulse-upload.jks and the password in agentpulse-upload.pass beside it.
+
+opt_out_usage
+skip_docs
+
+ANDROID = File.expand_path("..", __dir__)
+PACKAGE = "io.github.chengboonrong.agentpulse"
+
+def play_key
+  File.expand_path(ENV.fetch("PLAY_JSON_KEY_PATH"))
+end
+
+# Version codes are unique across all tracks.
+# ponytail: the four standard tracks; add a custom closed-test track's name here if one is made.
+def next_version_code
+  codes = %w[internal alpha beta production].flat_map do |track|
+    google_play_track_version_codes(track: track, package_name: PACKAGE, json_key: play_key)
+  end
+  (codes.max || 0) + 1
+end
+
+def build_aab(version_code)
+  keystore = File.expand_path(ENV["ANDROID_KEYSTORE_PATH"] || "~/.android-keys/agentpulse-upload.jks")
+  UI.user_error!("No upload key at #{keystore}") unless File.file?(keystore)
+  ENV["ANDROID_KEYSTORE_PATH"] = keystore
+  ENV["ANDROID_KEYSTORE_PASSWORD"] ||= File.read(keystore.sub(/\.jks\z/, ".pass")).strip
+  gradle(project_dir: ANDROID, task: "bundle", build_type: "Release",
+         properties: { "versionCode" => version_code.to_s })
+  aab = lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
+  UI.success("Version code #{version_code}: #{aab}")
+  aab
+end
+
+desc "Build the signed release AAB with the next version code from Play (first:true for the very first, 1)"
+lane :build do |opts|
+  build_aab(opts[:first] ? 1 : next_version_code)
+end
+
+desc "Build with the next version code and upload to a track (track: internal | alpha | beta)"
+lane :play do |opts|
+  aab = build_aab(next_version_code)
+  upload_to_play_store(
+    package_name: PACKAGE, json_key: play_key, track: opts[:track] || "internal", aab: aab,
+    # Until the first production release, Play only accepts drafts; roll them out in the console.
+    release_status: ENV.fetch("PLAY_RELEASE_STATUS", "draft"),
+    skip_upload_metadata: true, skip_upload_images: true,
+    skip_upload_screenshots: true, skip_upload_changelogs: true
+  )
+end
+
+desc "Upload the store listing in fastlane/metadata/android (text, icon, feature graphic, screenshots)"
+lane :listing do
+  upload_to_play_store(
+    package_name: PACKAGE, json_key: play_key,
+    skip_upload_aab: true, skip_upload_apk: true, skip_upload_changelogs: true
+  )
+end
+
+desc "Promote a tested version code (default: to production as a 10% staged rollout)"
+lane :promote do |opts|
+  upload_to_play_store(
+    package_name: PACKAGE, json_key: play_key,
+    track: opts[:from] || "alpha", track_promote_to: opts[:to] || "production",
+    version_code: opts.fetch(:version_code), rollout: opts[:rollout] || "0.1",
+    skip_upload_aab: true, skip_upload_apk: true, skip_upload_metadata: true,
+    skip_upload_images: true, skip_upload_screenshots: true, skip_upload_changelogs: true
+  )
+end
