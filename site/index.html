@@ -135,6 +135,36 @@
   </div>
 </section>
 
+<section id="iphone" aria-labelledby="iphone-h">
+  <h2 id="iphone-h">Step away from your desk. Your phone still knows.</h2>
+  <p class="intro">AgentPulse for iPhone and iPad shows which of your Mac's agents need you, which are working and what today has cost. Pair it with the Mac app by scanning a QR code.</p>
+  <ul class="facts">
+    <li><strong>Who needs you, first</strong> Sessions waiting on your answer are flagged at the top.</li>
+    <li><strong>Several Macs</strong> Pair as many as you like and switch between them. Home Screen widgets show the latest state.</li>
+    <li><strong>End-to-end encrypted</strong> On the same network the phone talks to your Mac directly; elsewhere, through a relay that only ever sees ciphertext.</li>
+  </ul>
+  <div class="devices">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/iphone-mac-dark.webp">
+      <img class="device" src="img/iphone-mac-light.webp" width="220" height="478" loading="lazy" alt="AgentPulse on iPhone: a Mac named Studio with its cat, how many agents need you, are working or idle, and its sessions with tokens and estimated cost">
+    </picture>
+    <img class="device" src="img/iphone-macs.webp" width="220" height="478" loading="lazy" alt="AgentPulse on iPhone: a list of paired Macs, each with its number of agents and when it last updated">
+    <picture class="ipad">
+      <source media="(prefers-color-scheme: dark)" srcset="img/ipad-session-dark.webp">
+      <img class="device" src="img/ipad-session-light.webp" width="360" height="480" loading="lazy" alt="AgentPulse on iPad: a Mac's sessions beside one session's details, its status, model, run time, tokens and estimated cost">
+    </picture>
+  </div>
+  <p class="store">
+    <a class="appstore" href="https://apps.apple.com/app/idAPP_STORE_ID">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="img/app-store-badge-white.svg">
+        <img src="img/app-store-badge-black.svg" width="144" height="48" alt="Download on the App Store">
+      </picture>
+    </a>
+    <span>Requires AgentPulse for Mac. No account, no sign-in.</span>
+  </p>
+</section>
+
 <section id="private" aria-labelledby="private-h">
   <h2 id="private-h">Your prompts never leave your Mac. AgentPulse never reads them.</h2>
   <ul class="facts">
@@ -169,7 +199,7 @@
   <h3 id="privacy">Privacy</h3>
   <p>Everything AgentPulse reads stays on your Mac. It never reads or stores prompt, response or file content.</p>
   <p>On its own it makes one kind of network request: the update check, which asks GitHub for the public list of AgentPulse releases every 2 hours. It sends no cookies, identifiers or anything about you or your agents; GitHub sees your IP address, as with any connection. You can turn the automatic check off in Settings.</p>
-  <p>Phone pairing is an opt-in setting for a companion phone app that is not released yet. Until you pair a phone, it sends nothing.</p>
+  <p>Pairing with AgentPulse for iPhone and iPad is opt-in. Until you pair a phone, it sends nothing.</p>
   <p>This page sets no cookies and loads nothing from anywhere else.</p>
 </section>
 
@@ -198,7 +228,7 @@
         <li>Open AgentPulse. A cat appears in the menu bar; closing the window keeps it running there.</li>
         <li>Updates: it checks GitHub for a new release and shows a notice. Nothing installs until you click Install Update, and an update is installed only if its signature checks out.</li>
       </ol>
-      <p>It is not in the App Store on purpose: the App Store sandbox would stop it reading other apps' session files and the process table.</p>
+      <p>The Mac app is not in the App Store on purpose: the App Store sandbox would stop it reading other apps' session files and the process table.</p>
       <h3 id="requirements">Requirements</h3>
       <ul>
         <li>macOS 14 or later on an Apple Silicon Mac.</li>
