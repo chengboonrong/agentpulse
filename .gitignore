@@ -11,3 +11,11 @@ ios/fastlane/report.xml
 
 # Brainstorm mockups (superpowers visual companion)
 .superpowers/
+android/fastlane/report.xml
+
+# Signing keys and Play service-account keys never enter the repo
+*.jks
+*.keystore
+*.p8
+*.pass
+*play*.json

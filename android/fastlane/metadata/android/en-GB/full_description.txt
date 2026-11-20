@@ -1,0 +1,22 @@
+AgentPulse puts the AI coding agents running on your Mac in your pocket. Step away from your desk and still know when Claude Code, Codex CLI, OpenCode or Grok CLI is waiting for you.
+
+Pair your Android phone or tablet with AgentPulse for Mac by scanning a QR code, and see:
+
+• Who needs you: how many sessions are waiting on your answer, at the top of each Mac.
+• What's working: each live session with its project, model, run time, tokens and estimated cost.
+• Today: total tokens, estimated cost and the current output rate.
+• The cat: a pixel cat that sleeps, sits or runs with your agents' activity.
+• Several Macs: pair as many as you like and switch between them.
+• A home-screen widget that shows the latest state with an "as of" time.
+
+On tablets and foldables, the layout widens to show your Macs, a Mac's sessions and one session's details side by side.
+
+Private by design
+• No account and no sign-in.
+• Metadata only: AgentPulse never reads your prompts, code or responses.
+• End-to-end encrypted. On the same network the phone talks to the Mac directly; elsewhere, through a relay that only ever sees ciphertext. You can run your own relay.
+• No analytics, no ads, no tracking.
+
+Costs are estimates at API list prices and are labelled as such.
+
+Requires AgentPulse for Mac (free and open source, macOS 14 or later on Apple Silicon) from agentpulse.snitco.com.

@@ -17,8 +17,20 @@ android {
         applicationId = "io.github.chengboonrong.agentpulse"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // Play's version code (max over all tracks + 1), passed by fastlane (android/fastlane).
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = workspaceVersion
+    }
+    // The Play upload key, from the environment (android/README.md, "Google Play"). Without
+    // it a release build is left unsigned.
+    System.getenv("ANDROID_KEYSTORE_PATH")?.let { path ->
+        val release = signingConfigs.create("release") {
+            storeFile = file(path)
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "upload"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: storePassword
+        }
+        buildTypes.getByName("release").signingConfig = release
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
