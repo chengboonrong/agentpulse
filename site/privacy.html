@@ -28,7 +28,7 @@
 <section aria-labelledby="phone-h">
   <h2 id="phone-h">Phones and tablets, and the relay</h2>
   <p>Nothing leaves your Mac for a phone until you pair one by scanning the QR code the Mac app shows. After that, the Mac sends the phone a small summary: the live sessions (at most five, with each project's folder name and no paths), today's tokens and estimated cost, and which agents are waiting.</p>
-  <p>That summary travels through the AgentPulse relay (relay.snitco.com, a Cloudflare Worker) or directly over your local network when both devices are on it. Everything is end-to-end encrypted with keys made on your devices and kept in their secure storage (the Keychain on Apple devices, the Android Keystore on Android); the relay cannot read it. Per pairing, the relay stores only:</p>
+  <p>That summary travels through the AgentPulse relay (relay.snitco.com, a Cloudflare Worker) or directly over your local network when both devices are on it. Everything is end-to-end encrypted with keys made on your devices and kept on the devices: in the Keychain on Apple devices, and on Android encrypted with a key held in the Android Keystore; the relay cannot read it. Per pairing, the relay stores only:</p>
   <ul>
     <li>a random pairing id and hashes of the two devices' relay tokens;</li>
     <li>the latest encrypted message from the Mac and a few encrypted messages from the phone;</li>

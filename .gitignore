@@ -17,4 +17,5 @@ android/fastlane/report.xml
 *.jks
 *.keystore
 *.p8
+*.pass
 *play*.json

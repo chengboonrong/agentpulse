@@ -70,8 +70,8 @@ anonymous usage data; `E2E_TELEMETRY_DISABLED=1` turns it off.
 
 | Lane | What |
 |---|---|
-| `build` | Signed release AAB, version code = the highest on any Play track + 1. `build first:true`: version code 1, for the very first upload, which Play only takes by hand. |
-| `play` | `build`, then upload to `internal` (`track:alpha` for the closed test) as a draft release, rolled out in Play Console. `PLAY_RELEASE_STATUS=completed` once the app has a production release. |
+| `build` | Signed release AAB, version code = the highest on any Play track or uploaded bundle + 1. `build first:true`: version code 1, for the very first upload, which Play only takes by hand. |
+| `play` | `build`, then upload to `internal` (`track:alpha` for the closed test) as a draft release, rolled out in Play Console. `PLAY_RELEASE_STATUS=completed` once the app is published (Play only takes drafts until then). `version_code:` overrides the code. |
 | `listing` | The store listing in `fastlane/metadata/android/en-GB`: text, icon, feature graphic, phone and tablet screenshots. |
 | `promote` | `promote version_code:N from:alpha`: to production as a 10% staged rollout (`rollout:`, `to:` to change). |
 

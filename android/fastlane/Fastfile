@@ -20,20 +20,30 @@ def play_key
   File.expand_path(ENV.fetch("PLAY_JSON_KEY_PATH"))
 end
 
-# Version codes are unique across all tracks.
-# ponytail: the four standard tracks; add a custom closed-test track's name here if one is made.
+# Play never takes a version code twice, even one whose release was discarded: take the
+# highest on any track (custom closed tests too) and of any bundle uploaded, plus one.
 def next_version_code
-  codes = %w[internal alpha beta production].flat_map do |track|
-    google_play_track_version_codes(track: track, package_name: PACKAGE, json_key: play_key)
+  require "supply"
+  client = Supply::Client.make_from_config(params: { json_key: play_key, timeout: 300 })
+  client.begin_edit(package_name: PACKAGE)
+  begin
+    codes = client.tracks.flat_map { |t| Array(t.releases).flat_map { |r| Array(r.version_codes) } } +
+            client.aab_version_codes
+  ensure
+    client.abort_current_edit
   end
-  (codes.max || 0) + 1
+  (codes.map(&:to_i).max || 0) + 1
 end
 
 def build_aab(version_code)
   keystore = File.expand_path(ENV["ANDROID_KEYSTORE_PATH"] || "~/.android-keys/agentpulse-upload.jks")
   UI.user_error!("No upload key at #{keystore}") unless File.file?(keystore)
   ENV["ANDROID_KEYSTORE_PATH"] = keystore
-  ENV["ANDROID_KEYSTORE_PASSWORD"] ||= File.read(keystore.sub(/\.jks\z/, ".pass")).strip
+  unless ENV["ANDROID_KEYSTORE_PASSWORD"]
+    pass = keystore.sub(/\.[^.\/]+\z/, "") + ".pass"
+    UI.user_error!("Set ANDROID_KEYSTORE_PASSWORD or put it in #{pass}") unless File.file?(pass)
+    ENV["ANDROID_KEYSTORE_PASSWORD"] = File.read(pass).strip
+  end
   gradle(project_dir: ANDROID, task: "bundle", build_type: "Release",
          properties: { "versionCode" => version_code.to_s })
   aab = lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
@@ -46,12 +56,13 @@ lane :build do |opts|
   build_aab(opts[:first] ? 1 : next_version_code)
 end
 
-desc "Build with the next version code and upload to a track (track: internal | alpha | beta)"
+desc "Build with the next version code and upload to a track (track: internal | alpha | beta; version_code: to override)"
 lane :play do |opts|
-  aab = build_aab(next_version_code)
+  aab = build_aab(opts[:version_code] || next_version_code)
   upload_to_play_store(
     package_name: PACKAGE, json_key: play_key, track: opts[:track] || "internal", aab: aab,
-    # Until the first production release, Play only accepts drafts; roll them out in the console.
+    # While the app is a draft (never published), Play only accepts draft releases; roll
+    # them out in the console.
     release_status: ENV.fetch("PLAY_RELEASE_STATUS", "draft"),
     skip_upload_metadata: true, skip_upload_images: true,
     skip_upload_screenshots: true, skip_upload_changelogs: true
@@ -60,8 +71,12 @@ end
 
 desc "Upload the store listing in fastlane/metadata/android (text, icon, feature graphic, screenshots)"
 lane :listing do
+  # supply looks up one release on the track it is given (production by default, which is
+  # empty before launch and holds two releases during a staged rollout): pin internal's newest.
+  code = google_play_track_version_codes(track: "internal", package_name: PACKAGE, json_key: play_key).max
+  UI.user_error!("Upload a build to internal testing first") unless code
   upload_to_play_store(
-    package_name: PACKAGE, json_key: play_key,
+    package_name: PACKAGE, json_key: play_key, track: "internal", version_code: code,
     skip_upload_aab: true, skip_upload_apk: true, skip_upload_changelogs: true
   )
 end
