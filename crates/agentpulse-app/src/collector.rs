@@ -545,15 +545,17 @@ impl Collector {
                 .is_none_or(|t| t.elapsed() >= SWEEP_INTERVAL)
             {
                 // A sweep forced by a command keeps that command's error.
-                if self.last_sweep.is_some() {
+                let forced = self.last_sweep.is_none();
+                if !forced {
                     self.command_error = None;
                 }
                 self.last_sweep = Some(Instant::now());
-                // Without a live agent there is no recent sample to reuse.
+                // Without a live agent there is no recent sample to reuse. A forced
+                // sweep needs one taken after the command, not up to 2 s before it.
                 let fresh;
                 let t = match table {
-                    Some(t) => t,
-                    None => {
+                    Some(t) if sampled || !forced => t,
+                    _ => {
                         fresh = Sampler::new().sample();
                         &fresh
                     }

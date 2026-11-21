@@ -104,6 +104,8 @@ pub struct CleanupItem {
     pub clean_at_ms: Option<i64>,
     /// An orphan the user kept: never warned about or ended. False for other rows.
     pub kept: bool,
+    /// SIGTERM sent and the process still alive: it cannot be ended or kept again.
+    pub ending: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -124,6 +126,9 @@ pub struct Tracker {
     /// Log entries for signals already sent but not yet saved. A sweep saves
     /// them before it sends any SIGKILL, so no process is ended unlogged.
     unlogged: Vec<CleanupLogEntry>,
+    /// Untracked and idle-session processes the user ended, with their SIGTERM
+    /// time, until they are gone. In memory only.
+    ending: HashMap<ProcessIdentity, i64>,
 }
 
 /// `p`'s entry in `table`, if the PID still belongs to that process.
@@ -152,6 +157,7 @@ impl Tracker {
             last_suggest_ms: None,
             dirty: HashSet::new(),
             unlogged: Vec::new(),
+            ending: HashMap::new(),
         })
     }
 
@@ -238,9 +244,10 @@ impl Tracker {
         self.flush(store)
     }
 
-    /// Once per SWEEP_INTERVAL. Order: retry unsaved writes; delete rows whose process is gone; set ended_at = now
-    /// on rows whose root is gone; send SIGKILL where term_sent_at_ms is set; warn; clean;
-    /// warn idle sessions; memory suggestion; build the view.
+    /// Once per SWEEP_INTERVAL. Order: retry unsaved writes; delete rows whose process is gone;
+    /// set ended_at = now on rows whose root is gone; send SIGKILL where term_sent_at_ms is set
+    /// and to other processes the user ended; warn; clean; warn idle sessions; memory
+    /// suggestion; build the view.
     pub fn sweep(
         &mut self,
         store: &mut Store,
@@ -293,6 +300,12 @@ impl Tracker {
                     .is_some_and(|t| now_ms - t >= KILL_GRACE_MS)
             {
                 host.signal(row.process, Signal::Kill);
+            }
+        }
+        self.ending.retain(|&p, _| alive(table, p).is_some());
+        for (&p, &t) in &self.ending {
+            if now_ms - t >= KILL_GRACE_MS {
+                host.signal(p, Signal::Kill);
             }
         }
 
@@ -392,6 +405,7 @@ impl Tracker {
                 warned: true,
                 clean_at_ms: None,
                 kept: false,
+                ending: s.process.is_some_and(|p| self.ending.contains_key(&p)),
             });
         }
 
@@ -420,6 +434,7 @@ impl Tracker {
                 warned: false,
                 clean_at_ms: None,
                 kept: false,
+                ending: self.ending.contains_key(&p),
             });
         }
 
@@ -463,6 +478,7 @@ impl Tracker {
                     warned: row.warned_at_ms.is_some(),
                     clean_at_ms: clean_at,
                     kept: row.kept,
+                    ending: row.term_sent_at_ms.is_some() && !row.kept,
                 })
             })
             .collect();
@@ -479,7 +495,9 @@ impl Tracker {
     }
 
     /// The user's End: SIGTERM now and a log entry with automatic = false. A tracked row
-    /// gets term_sent_at_ms, so the next sweep can send SIGKILL, and loses an earlier Keep.
+    /// gets term_sent_at_ms and loses an earlier Keep; any other process goes into
+    /// `ending`. Either way a sweep after KILL_GRACE_MS sends SIGKILL. Does nothing
+    /// for a process whose SIGTERM was already sent.
     pub fn end(
         &mut self,
         store: &mut Store,
@@ -488,6 +506,13 @@ impl Tracker {
         now_ms: i64,
         host: &mut dyn Host,
     ) -> anyhow::Result<()> {
+        let sent = match self.rows.get(&p) {
+            Some(row) => row.term_sent_at_ms.is_some() && !row.kept,
+            None => self.ending.contains_key(&p),
+        };
+        if sent {
+            return Ok(());
+        }
         // The name is read before the signal, while the process still exists.
         let name = match self.rows.get(&p) {
             Some(row) => row.name.clone(),
@@ -506,6 +531,8 @@ impl Tracker {
             self.dirty.insert(p);
             provider = Some(row.provider);
             session_id = Some(row.session_id.clone());
+        } else {
+            self.ending.insert(p, now_ms);
         }
         self.unlogged.push(CleanupLogEntry {
             at_ms: now_ms,
@@ -1012,7 +1039,58 @@ pub(crate) mod tests {
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].provider, Some(Provider::Codex));
         sweep(&mut t, &mut s, &tbl, &cfg, T0 + 2 * MIN, &mut h);
-        assert_eq!(h.signals.last(), Some(&(11, Signal::Kill)));
+        // Both ignored their SIGTERM: the untracked node too gets SIGKILL.
+        let mut kills = h.signals[2..].to_vec();
+        kills.sort_by_key(|k| k.0);
+        assert_eq!(kills, [(11, Signal::Kill), (30, Signal::Kill)]);
+    }
+
+    #[test]
+    fn second_end_sends_nothing_and_logs_nothing() {
+        let (mut s, mut t, mut h) = tracked();
+        add(&mut h, id(30, 130), "node", UID);
+        let tbl = table(&[(11, 1, 111, RSS), (30, 1, 130, 5)]);
+        sweep(&mut t, &mut s, &tbl, &Cleanup::default(), T0, &mut h);
+        for now in [T0 + MIN, T0 + MIN + 1] {
+            t.end(&mut s, id(11, 111), &tbl, now, &mut h).unwrap();
+            t.end(&mut s, id(30, 130), &tbl, now, &mut h).unwrap();
+        }
+        assert_eq!(h.signals, vec![(11, Signal::Term), (30, Signal::Term)]);
+        assert_eq!(s.cleanup_log(LOG_SHOWN).unwrap().len(), 2);
+        assert_eq!(row(&s).term_sent_at_ms, Some(T0 + MIN));
+    }
+
+    #[test]
+    fn ended_untracked_gets_kill_after_the_grace() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut t = Tracker::load(&s).unwrap();
+        let mut h = host();
+        add(&mut h, id(30, 130), "node", UID);
+        let tbl = table(&[(30, 1, 130, 5)]);
+        let cfg = Cleanup::default();
+        t.end(&mut s, id(30, 130), &tbl, T0, &mut h).unwrap();
+        let v = sweep(&mut t, &mut s, &tbl, &cfg, T0 + MIN - 1, &mut h);
+        assert_eq!(h.signals, vec![(30, Signal::Term)]);
+        assert!(v.items[0].ending);
+        sweep(&mut t, &mut s, &tbl, &cfg, T0 + MIN, &mut h);
+        assert_eq!(h.signals, vec![(30, Signal::Term), (30, Signal::Kill)]);
+        // Gone: no further signal, and End works again for a new process.
+        sweep(&mut t, &mut s, &table(&[]), &cfg, T0 + 2 * MIN, &mut h);
+        sweep(&mut t, &mut s, &table(&[]), &cfg, T0 + 3 * MIN, &mut h);
+        assert_eq!(h.signals.len(), 2);
+        assert!(t.ending.is_empty());
+    }
+
+    #[test]
+    fn ending_is_shown_after_end() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        assert!(!v.items[0].ending);
+        t.end(&mut s, id(11, 111), &orphaned(), T0 + 1, &mut h)
+            .unwrap();
+        let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 2, &mut h);
+        assert!(v.items[0].ending);
     }
 
     #[test]

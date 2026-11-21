@@ -228,6 +228,10 @@ fn item_row(
     let Some(p) = i.process else {
         return row.child(secondary("Shared with other sessions", t).flex_none());
     };
+    // SIGTERM sent: a second End or a Keep would do nothing.
+    if i.ending {
+        return row.child(secondary("Ending…", t).flex_none());
+    }
     let confirm = armed == Some(p);
     let label = if confirm { "Confirm end" } else { "End" };
     let end = if confirm {
@@ -295,6 +299,7 @@ pub(super) fn fixture(now: i64) -> crate::cleanup::CleanupView {
         warned: true,
         clean_at_ms,
         kept: false,
+        ending: false,
     };
     let orphan = |provider, id: &str| Reason::Orphan {
         provider,
@@ -376,6 +381,7 @@ mod tests {
             warned: false,
             clean_at_ms: None,
             kept: false,
+            ending: false,
         }
     }
 
