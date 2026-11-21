@@ -60,7 +60,7 @@ impl Host for SystemHost {
     }
 
     fn notify(&mut self, title: &str, body: &str) {
-        tracing::info!(title, body, "notification");
+        agentpulse_platform_macos::notify(title, body);
     }
 
     fn memory(&self) -> (Option<Pressure>, Option<u64>) {

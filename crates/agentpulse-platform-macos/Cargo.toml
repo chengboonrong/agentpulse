@@ -11,11 +11,15 @@ license.workspace = true
 # NSURLSession's completion handler is a block. The version already in Cargo.lock.
 block2 = "=0.6.2"
 objc2 = "0.6.5"
+# UserNotifications bindings; already in Cargo.lock through gpui.
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationRequest", "UNNotificationContent", "UNNotificationTrigger"] }
+tracing.workspace = true
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
     "NSArray",
     "NSAttributedString",
+    "NSBundle",
     "NSData",
     "NSDate",
     "NSDictionary",

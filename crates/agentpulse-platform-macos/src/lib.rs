@@ -2,10 +2,12 @@
 
 mod fetch;
 mod gpu;
+mod notify;
 mod status_item;
 
 pub use fetch::{Response, fetch, request};
 pub use gpu::gpu_utilization;
+pub use notify::notify;
 pub use objc2::MainThreadMarker;
 pub use status_item::{MenuAction, MenuImage, MenuLine, StatusItem, WIDEST_TITLE};
 
