@@ -508,6 +508,11 @@ pub fn swap_used_bytes() -> Option<u64> {
     sysctl::<libc::xsw_usage>("vm.swapusage").map(|x| x.xsu_used)
 }
 
+/// Swap allocated, in bytes.
+pub fn swap_total_bytes() -> Option<u64> {
+    sysctl::<libc::xsw_usage>("vm.swapusage").map(|x| x.xsu_total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,5 +829,6 @@ mod tests {
     fn memory_readings_are_available() {
         assert!(memory_pressure().is_some());
         assert!(swap_used_bytes().is_some());
+        assert!(swap_total_bytes().is_some());
     }
 }
