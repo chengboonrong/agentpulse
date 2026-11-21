@@ -1143,12 +1143,6 @@ fn axis_label(v: f32) -> String {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme();
-        if self
-            .armed
-            .is_some_and(|(_, at)| at.elapsed() >= cleanup::CONFIRM)
-        {
-            self.armed = None;
-        }
         let nav = [
             self.nav("Overview", Screen::Overview, t, cx),
             self.nav("Sessions", Screen::Sessions, t, cx),

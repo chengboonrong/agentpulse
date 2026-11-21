@@ -18,7 +18,7 @@ use agentpulse_process::{ProcTable, Sampler, attribute, verify};
 use agentpulse_storage::{DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
-use crate::cleanup::{CleanupView, Host, SWEEP_INTERVAL, SystemHost, Tracker};
+use crate::cleanup::{CleanupView, Host, SWEEP_INTERVAL, Tracker};
 use crate::phones::PhoneLink;
 use crate::settings::{Cleanup, Settings};
 use crate::widget_export::{self, WidgetExporter};
@@ -938,6 +938,9 @@ fn days_in<Tz: TimeZone>(now_ms: i64, n: usize, tz: &Tz) -> Vec<(String, i64, i6
 /// `settings` as they are at each tick. If the loop
 /// panics, the widgets are marked stopped and the thread ends, which closes
 /// the channel.
+/// `host` is what the sweep observes and acts through; `cleanup`, when given,
+/// replaces the stored clean-up settings.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut collector: Collector,
     sender: async_channel::Sender<Snapshot>,
@@ -945,16 +948,17 @@ pub fn spawn(
     settings: Settings,
     mut widgets: Option<WidgetExporter>,
     phones: Option<PhoneLink>,
+    mut host: Box<dyn Host + Send>,
+    cleanup: Option<Cleanup>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("agentpulse-collector".into())
         .spawn(move || {
             // The collector is dropped right after a panic, so its state is never reused.
             let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut host = SystemHost::default();
                 loop {
-                    let cfg = settings.cleanup();
-                    let snap = collector.tick_with(Some((&cfg, &mut host)));
+                    let cfg = cleanup.unwrap_or_else(|| settings.cleanup());
+                    let snap = collector.tick_with(Some((&cfg, host.as_mut())));
                     let indexing = snap.indexing;
                     let live = snap.sessions.iter().any(|s| s.status.is_live());
                     if let Some(w) = &mut widgets {
@@ -980,7 +984,7 @@ pub fn spawn(
                             for c in std::iter::once(first).chain(commands.try_iter()) {
                                 match c {
                                     Command::Detail(key) => detail = Some(key),
-                                    c => collector.command(c, &mut host),
+                                    c => collector.command(c, host.as_mut()),
                                 }
                             }
                             if let Some(key) = detail {

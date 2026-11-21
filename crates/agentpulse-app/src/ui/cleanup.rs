@@ -155,7 +155,7 @@ impl AppView {
         })
     }
 
-    /// End's first click arms it; a second within [`CONFIRM`] ends the process.
+    /// End's first click arms it for [`CONFIRM`]; a second click within that ends the process.
     fn end(&mut self, p: ProcessIdentity, cx: &mut Context<Self>) {
         if self
             .armed
@@ -164,7 +164,20 @@ impl AppView {
             self.armed = None;
             send(Command::End(p), cx);
         } else {
-            self.armed = Some((p, Instant::now()));
+            let armed = Some((p, Instant::now()));
+            self.armed = armed;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(CONFIRM).await;
+                this.update(cx, |this, cx| {
+                    // Only this arming: a later click has its own timer.
+                    if this.armed == armed {
+                        this.armed = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }
         cx.notify();
     }

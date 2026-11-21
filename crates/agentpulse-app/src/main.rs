@@ -89,6 +89,19 @@ fn open_collector() -> anyhow::Result<Collector> {
 }
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
+    // A screenshot run reads the system but never acts on it or marks a process.
+    #[cfg(feature = "screenshot")]
+    let inert = options.screenshot_dir.is_some();
+    #[cfg(not(feature = "screenshot"))]
+    let inert = false;
+    let (host, cleanup): (Box<dyn Host + Send>, _) = if inert {
+        (
+            Box::new(InertHost(SystemHost::default())),
+            Some(INERT_CLEANUP),
+        )
+    } else {
+        (Box::new(SystemHost::default()), None)
+    };
     let (tx, rx) = async_channel::bounded(1);
     let (command_tx, command_rx) = std::sync::mpsc::channel();
     let dir = data_dir()?;
@@ -102,6 +115,8 @@ fn gui(options: ui::Options) -> anyhow::Result<()> {
         settings.clone(),
         widgets,
         Some(phones.clone()),
+        host,
+        cleanup,
     )?;
     ui::run(rx, command_tx, options, settings, phones);
     Ok(())
@@ -136,10 +151,17 @@ fn own_usage() -> (Duration, u64) {
     (tv(ru.ru_utime) + tv(ru.ru_stime), ru.ru_maxrss as u64)
 }
 
-/// Reads the system like the app, but never signals or notifies.
-struct BenchHost(SystemHost);
+/// Clean-up settings under which no clock starts: no process is warned about or ended.
+const INERT_CLEANUP: Cleanup = Cleanup {
+    warn_after_hours: u32::MAX,
+    clean_after_hours: u32::MAX,
+    auto_clean: false,
+};
 
-impl Host for BenchHost {
+/// Observes the system like the app, but never signals or notifies.
+struct InertHost(SystemHost);
+
+impl Host for InertHost {
     fn details(&self, p: ProcessIdentity) -> Option<ProcDetails> {
         self.0.details(p)
     }
@@ -160,12 +182,8 @@ fn bench() -> anyhow::Result<()> {
     while c.tick().indexing {}
     const TICKS: u32 = 20;
     // Clean-up runs as in the app, but no clock starts and nothing is signalled or notified.
-    let cfg = Cleanup {
-        warn_after_hours: u32::MAX,
-        clean_after_hours: u32::MAX,
-        auto_clean: false,
-    };
-    let mut host = BenchHost(SystemHost::default());
+    let cfg = INERT_CLEANUP;
+    let mut host = InertHost(SystemHost::default());
     let (cpu_before, _) = own_usage();
     let start = Instant::now();
     let mut ticks = Vec::new();
