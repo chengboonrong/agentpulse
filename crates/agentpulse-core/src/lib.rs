@@ -39,6 +39,18 @@ impl Provider {
         }
     }
 
+    /// The inverse of [`Provider::as_str`].
+    pub fn parse(key: &str) -> Option<Provider> {
+        [
+            Provider::ClaudeCode,
+            Provider::Codex,
+            Provider::OpenCode,
+            Provider::Grok,
+        ]
+        .into_iter()
+        .find(|p| p.as_str() == key)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Provider::ClaudeCode => "Claude Code",
@@ -421,6 +433,19 @@ impl ActivityMeter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_keys_round_trip() {
+        for p in [
+            Provider::ClaudeCode,
+            Provider::Codex,
+            Provider::OpenCode,
+            Provider::Grok,
+        ] {
+            assert_eq!(Provider::parse(p.as_str()), Some(p));
+        }
+        assert_eq!(Provider::parse("nope"), None);
+    }
 
     #[test]
     fn active_time_counts_short_gaps_only() {
