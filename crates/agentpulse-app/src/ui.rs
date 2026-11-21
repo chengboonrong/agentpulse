@@ -23,7 +23,7 @@ use gpui::{
     transparent_black,
 };
 
-use crate::collector::{Key, Snapshot};
+use crate::collector::{Command, Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
 use crate::phones::PhoneLink;
@@ -83,8 +83,8 @@ impl Options {
 struct Shared {
     hub: Entity<Hub>,
     appearance: Option<bool>,
-    /// Asks the collector for one session's requests (None: no session).
-    details: Sender<Option<Key>>,
+    /// Sends the collector commands, such as which session's requests to carry.
+    details: Sender<Command>,
     settings: Settings,
 }
 
@@ -92,7 +92,7 @@ impl Global for Shared {}
 
 pub fn run(
     rx: async_channel::Receiver<Snapshot>,
-    details: Sender<Option<Key>>,
+    details: Sender<Command>,
     options: Options,
     settings: Settings,
     phones: PhoneLink,
@@ -698,7 +698,10 @@ impl AppView {
     /// Opens a session's detail, or closes it with None.
     fn show_detail(&mut self, key: Option<Key>, cx: &mut Context<Self>) {
         if key != self.detail {
-            cx.global::<Shared>().details.send(key.clone()).ok();
+            cx.global::<Shared>()
+                .details
+                .send(Command::Detail(key.clone()))
+                .ok();
             self.detail = key;
         }
         // Each page opens at its top.

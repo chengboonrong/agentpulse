@@ -423,8 +423,6 @@ impl Settings {
         self.read().phones.clone()
     }
 
-    // Read by the clean-up tasks that follow; drop this attribute once used.
-    #[allow(dead_code)]
     pub fn cleanup(&self) -> Cleanup {
         self.read().cleanup
     }

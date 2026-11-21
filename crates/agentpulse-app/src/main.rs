@@ -1,5 +1,3 @@
-// Used from the collector in the next change.
-#[allow(dead_code)]
 mod cleanup;
 mod collector;
 mod format;
@@ -21,7 +19,9 @@ use agentpulse_cost::PriceBook;
 use agentpulse_storage::Store;
 use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
 use anyhow::{Context, bail};
+use cleanup::SystemHost;
 use collector::Collector;
+use settings::Cleanup;
 use tracing_subscriber::filter::LevelFilter;
 
 const USAGE: &str = "usage: agentpulse [--dump | --bench]";
@@ -89,7 +89,7 @@ fn open_collector() -> anyhow::Result<Collector> {
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(1);
-    let (detail_tx, detail_rx) = std::sync::mpsc::channel();
+    let (command_tx, command_rx) = std::sync::mpsc::channel();
     let dir = data_dir()?;
     let settings = settings::Settings::load(&dir);
     let widgets = widget_export::WidgetExporter::detect(settings.clone());
@@ -97,11 +97,12 @@ fn gui(options: ui::Options) -> anyhow::Result<()> {
     collector::spawn(
         open_collector()?,
         tx,
-        detail_rx,
+        command_rx,
+        settings.clone(),
         widgets,
         Some(phones.clone()),
     )?;
-    ui::run(rx, detail_tx, options, settings, phones);
+    ui::run(rx, command_tx, options, settings, phones);
     Ok(())
 }
 
@@ -138,12 +139,18 @@ fn bench() -> anyhow::Result<()> {
     let mut c = open_collector()?;
     while c.tick().indexing {}
     const TICKS: u32 = 20;
+    // Clean-up runs as in the app, but with auto clean off nothing is ended.
+    let cfg = Cleanup {
+        auto_clean: false,
+        ..Cleanup::default()
+    };
+    let mut host = SystemHost::default();
     let (cpu_before, _) = own_usage();
     let start = Instant::now();
     let mut ticks = Vec::new();
     for _ in 0..TICKS {
         let t = Instant::now();
-        c.tick();
+        c.tick_with(Some((&cfg, &mut host)));
         ticks.push(t.elapsed());
         thread::sleep(Duration::from_secs(1));
     }

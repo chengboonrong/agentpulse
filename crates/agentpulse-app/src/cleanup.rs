@@ -153,9 +153,14 @@ impl Tracker {
         })
     }
 
-    /// Saves the dirty rows and the pending log entries. On an error both stay
-    /// pending for the next call.
+    /// Saves the pending log entries, then the dirty rows. On an error both stay
+    /// pending for the next call. Log entries go first: a saved term_sent_at_ms
+    /// without its entry would let a sweep after a restart send an unlogged SIGKILL.
     fn flush(&mut self, store: &mut Store) -> anyhow::Result<()> {
+        while let Some(e) = self.unlogged.first() {
+            store.log_cleanup(e)?;
+            self.unlogged.remove(0);
+        }
         if !self.dirty.is_empty() {
             let rows: Vec<TrackedProcess> = self
                 .dirty
@@ -164,10 +169,6 @@ impl Tracker {
                 .collect();
             store.save_tracked(&rows)?;
             self.dirty.clear();
-        }
-        while let Some(e) = self.unlogged.first() {
-            store.log_cleanup(e)?;
-            self.unlogged.remove(0);
         }
         Ok(())
     }
@@ -473,7 +474,7 @@ impl Tracker {
     }
 
     /// The user's End: SIGTERM now and a log entry with automatic = false. A tracked row
-    /// gets term_sent_at_ms, so the next sweep can send SIGKILL.
+    /// gets term_sent_at_ms, so the next sweep can send SIGKILL, and loses an earlier Keep.
     pub fn end(
         &mut self,
         store: &mut Store,
@@ -496,6 +497,7 @@ impl Tracker {
         let (mut provider, mut session_id) = (None, None);
         if let Some(row) = self.rows.get_mut(&p) {
             row.term_sent_at_ms = Some(now_ms);
+            row.kept = false;
             self.dirty.insert(p);
             provider = Some(row.provider);
             session_id = Some(row.session_id.clone());
@@ -1003,6 +1005,19 @@ pub(crate) mod tests {
         assert_eq!(log[0].provider, Some(Provider::Codex));
         sweep(&mut t, &mut s, &tbl, &cfg, T0 + 2 * MIN, &mut h);
         assert_eq!(h.signals.last(), Some(&(11, Signal::Kill)));
+    }
+
+    #[test]
+    fn end_on_kept_orphan_still_follows_up_with_kill() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        t.keep(&mut s, id(11, 111)).unwrap();
+        t.end(&mut s, id(11, 111), &orphaned(), T0 + MIN, &mut h)
+            .unwrap();
+        assert!(!row(&s).kept);
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 2 * MIN, &mut h);
+        assert_eq!(h.signals, vec![(11, Signal::Term), (11, Signal::Kill)]);
     }
 
     #[test]

@@ -612,6 +612,7 @@ mod tests {
             usage: None,
             limits: Default::default(),
             detail: None,
+            cleanup: Default::default(),
         }
     }
 
