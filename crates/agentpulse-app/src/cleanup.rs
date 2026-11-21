@@ -38,7 +38,12 @@ pub trait Host {
     fn my_uid(&self) -> u32;
 }
 
-pub struct SystemHost;
+#[derive(Default)]
+pub struct SystemHost {
+    /// Processes whose signal failure was already logged, so a process that
+    /// keeps failing writes one warning, not one per sweep.
+    failed: HashSet<ProcessIdentity>,
+}
 
 impl Host for SystemHost {
     fn details(&self, p: ProcessIdentity) -> Option<ProcDetails> {
@@ -47,7 +52,9 @@ impl Host for SystemHost {
 
     fn signal(&mut self, p: ProcessIdentity, s: Signal) -> bool {
         agentpulse_process::signal(p, s).unwrap_or_else(|e| {
-            tracing::warn!(pid = p.pid, signal = ?s, "could not signal process: {e}");
+            if self.failed.insert(p) {
+                tracing::warn!(pid = p.pid, signal = ?s, "could not signal process: {e}");
+            }
             false
         })
     }
@@ -109,6 +116,12 @@ pub struct Tracker {
     /// In memory only, so idle warnings can repeat after a restart.
     warned_sessions: HashSet<(Provider, String)>,
     last_suggest_ms: Option<i64>,
+    /// Rows changed in memory but not yet saved. Retried by every write, so a
+    /// failed save is not lost.
+    dirty: HashSet<ProcessIdentity>,
+    /// Log entries for signals already sent but not yet saved. A sweep saves
+    /// them before it sends any SIGKILL, so no process is ended unlogged.
+    unlogged: Vec<CleanupLogEntry>,
 }
 
 /// `p`'s entry in `table`, if the PID still belongs to that process.
@@ -135,7 +148,28 @@ impl Tracker {
                 .collect(),
             warned_sessions: HashSet::new(),
             last_suggest_ms: None,
+            dirty: HashSet::new(),
+            unlogged: Vec::new(),
         })
+    }
+
+    /// Saves the dirty rows and the pending log entries. On an error both stay
+    /// pending for the next call.
+    fn flush(&mut self, store: &mut Store) -> anyhow::Result<()> {
+        if !self.dirty.is_empty() {
+            let rows: Vec<TrackedProcess> = self
+                .dirty
+                .iter()
+                .filter_map(|p| self.rows.get(p).cloned())
+                .collect();
+            store.save_tracked(&rows)?;
+            self.dirty.clear();
+        }
+        while let Some(e) = self.unlogged.first() {
+            store.log_cleanup(e)?;
+            self.unlogged.remove(0);
+        }
+        Ok(())
     }
 
     /// After each process sample with live agents. Records new descendants of `roots`
@@ -153,7 +187,6 @@ impl Tracker {
         for r in roots {
             by_pid.entry(r.0.pid).or_insert(r);
         }
-        let mut changed = Vec::new();
         for (pid, root_pid) in agentpulse_process::roots_of(table, &ids) {
             // Agent processes themselves are not tracked.
             if pid == root_pid {
@@ -178,7 +211,7 @@ impl Tracker {
                     row.ended_at_ms = None;
                     row.warned_at_ms = None;
                     row.term_sent_at_ms = None;
-                    changed.push(row.clone());
+                    self.dirty.insert(process);
                 }
                 continue;
             }
@@ -196,16 +229,13 @@ impl Tracker {
                 term_sent_at_ms: None,
                 kept: false,
             };
-            changed.push(row.clone());
             self.rows.insert(process, row);
+            self.dirty.insert(process);
         }
-        if !changed.is_empty() {
-            store.save_tracked(&changed)?;
-        }
-        Ok(())
+        self.flush(store)
     }
 
-    /// Once per SWEEP_INTERVAL. Order: delete rows whose process is gone; set ended_at = now
+    /// Once per SWEEP_INTERVAL. Order: retry unsaved writes; delete rows whose process is gone; set ended_at = now
     /// on rows whose root is gone; send SIGKILL where term_sent_at_ms is set; warn; clean;
     /// warn idle sessions; memory suggestion; build the view.
     pub fn sweep(
@@ -225,6 +255,10 @@ impl Tracker {
             .filter_map(|s| s.process)
             .collect();
 
+        // Writes that failed earlier go first: no SIGKILL below until every
+        // SIGTERM before it is logged.
+        self.flush(store)?;
+
         // First, so a child that exited with its agent is never marked ended.
         // A row that is now a live agent is dropped too: agents are never cleaned.
         let gone: Vec<ProcessIdentity> = self
@@ -237,21 +271,23 @@ impl Tracker {
             store.delete_tracked(&gone)?;
             for p in &gone {
                 self.rows.remove(p);
+                self.dirty.remove(p);
             }
         }
 
-        let mut changed = HashSet::new();
         for row in self.rows.values_mut() {
             if row.ended_at_ms.is_none() && alive(table, row.root).is_none() {
                 row.ended_at_ms = Some(now_ms);
-                changed.insert(row.process);
+                self.dirty.insert(row.process);
             }
         }
 
+        // term_sent_at_ms is set only by a SIGTERM that was delivered.
         for row in self.rows.values() {
-            if row
-                .term_sent_at_ms
-                .is_some_and(|t| now_ms - t >= KILL_GRACE_MS)
+            if !row.kept
+                && row
+                    .term_sent_at_ms
+                    .is_some_and(|t| now_ms - t >= KILL_GRACE_MS)
             {
                 host.signal(row.process, Signal::Kill);
             }
@@ -275,7 +311,7 @@ impl Tracker {
             );
             host.notify("Leftover process", &body);
             row.warned_at_ms = Some(now_ms);
-            changed.insert(row.process);
+            self.dirty.insert(row.process);
         }
 
         if cfg.auto_clean {
@@ -290,21 +326,21 @@ impl Tracker {
                 {
                     continue;
                 }
-                // Set even when the signal fails, so a failure is not retried every sweep.
-                row.term_sent_at_ms = Some(now_ms);
-                changed.insert(row.process);
+                // A failed SIGTERM leaves the row as it was, so the next sweep retries it.
                 if !host.signal(row.process, Signal::Term) {
                     continue;
                 }
+                row.term_sent_at_ms = Some(now_ms);
+                self.dirty.insert(row.process);
                 let rss = alive(table, row.process).map_or(0, |i| i.rss_bytes);
-                store.log_cleanup(&CleanupLogEntry {
+                self.unlogged.push(CleanupLogEntry {
                     at_ms: now_ms,
                     name: row.name.clone(),
                     provider: Some(row.provider),
                     session_id: Some(row.session_id.clone()),
                     rss_bytes: rss,
                     automatic: true,
-                })?;
+                });
                 let body = format!(
                     "{} ({} MB) was ended after {} hours.",
                     row.name,
@@ -315,10 +351,7 @@ impl Tracker {
             }
         }
 
-        if !changed.is_empty() {
-            let rows: Vec<TrackedProcess> = changed.iter().map(|p| self.rows[p].clone()).collect();
-            store.save_tracked(&rows)?;
-        }
+        self.flush(store)?;
 
         let mut idle = Vec::new();
         for s in sessions {
@@ -405,9 +438,13 @@ impl Tracker {
             .values()
             .filter_map(|row| {
                 let ended = row.ended_at_ms?;
+                // Not yet warned: the warning comes at the next sweep past
+                // warn_after, and the clean at least WARN_LEAD_MS after it.
                 let clean_at = (cfg.auto_clean && !row.kept).then(|| {
-                    let lead = row.warned_at_ms.map_or(i64::MIN, |w| w + WARN_LEAD_MS);
-                    (ended + clean_ms).max(lead)
+                    let warned = row
+                        .warned_at_ms
+                        .unwrap_or_else(|| now_ms.max(ended + warn_ms));
+                    (ended + clean_ms).max(warned + WARN_LEAD_MS)
                 });
                 Some(CleanupItem {
                     process: Some(row.process),
@@ -459,29 +496,29 @@ impl Tracker {
         let (mut provider, mut session_id) = (None, None);
         if let Some(row) = self.rows.get_mut(&p) {
             row.term_sent_at_ms = Some(now_ms);
-            store.save_tracked(std::slice::from_ref(row))?;
+            self.dirty.insert(p);
             provider = Some(row.provider);
             session_id = Some(row.session_id.clone());
         }
-        store.log_cleanup(&CleanupLogEntry {
+        self.unlogged.push(CleanupLogEntry {
             at_ms: now_ms,
             name,
             provider,
             session_id,
             rss_bytes: alive(table, p).map_or(0, |i| i.rss_bytes),
             automatic: false,
-        })
+        });
+        self.flush(store)
     }
 
     /// The user's Keep: kept = true, so this process is never warned about or cleaned again.
+    /// It applies in memory at once, even if the save fails and is retried later.
     pub fn keep(&mut self, store: &mut Store, p: ProcessIdentity) -> anyhow::Result<()> {
-        match self.rows.get_mut(&p) {
-            Some(row) if !row.kept => {
-                row.kept = true;
-                store.save_tracked(std::slice::from_ref(row))
-            }
-            _ => Ok(()),
+        if let Some(row) = self.rows.get_mut(&p).filter(|r| !r.kept) {
+            row.kept = true;
+            self.dirty.insert(p);
         }
+        self.flush(store)
     }
 }
 
@@ -966,6 +1003,88 @@ pub(crate) mod tests {
         assert_eq!(log[0].provider, Some(Provider::Codex));
         sweep(&mut t, &mut s, &tbl, &cfg, T0 + 2 * MIN, &mut h);
         assert_eq!(h.signals.last(), Some(&(11, Signal::Kill)));
+    }
+
+    #[test]
+    fn clean_state_survives_reload() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        for now in [T0, T0 + 3 * H, T0 + 24 * H] {
+            sweep(&mut t, &mut s, &orphaned(), &cfg, now, &mut h);
+        }
+        let again = Tracker::load(&s).unwrap();
+        let r = &again.rows[&id(11, 111)];
+        assert_eq!(
+            (r.ended_at_ms, r.warned_at_ms, r.term_sent_at_ms),
+            (Some(T0), Some(T0 + 3 * H), Some(T0 + 24 * H))
+        );
+        assert!(t.dirty.is_empty() && t.unlogged.is_empty());
+    }
+
+    #[test]
+    fn failed_term_is_retried_not_killed() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 3 * H, &mut h);
+        // Still in the table, but the signal is refused.
+        h.alive.clear();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 24 * H, &mut h);
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 24 * H + MIN, &mut h);
+        assert_eq!(h.signals, vec![(11, Signal::Term), (11, Signal::Term)]);
+        assert_eq!(row(&s).term_sent_at_ms, None);
+        assert!(s.cleanup_log(LOG_SHOWN).unwrap().is_empty());
+        assert_eq!(h.notes.len(), 1);
+
+        h.alive.insert(id(11, 111));
+        sweep(
+            &mut t,
+            &mut s,
+            &orphaned(),
+            &cfg,
+            T0 + 24 * H + 2 * MIN,
+            &mut h,
+        );
+        assert_eq!(s.cleanup_log(LOG_SHOWN).unwrap().len(), 1);
+        sweep(
+            &mut t,
+            &mut s,
+            &orphaned(),
+            &cfg,
+            T0 + 24 * H + 3 * MIN,
+            &mut h,
+        );
+        assert_eq!(h.signals[2..], [(11, Signal::Term), (11, Signal::Kill)]);
+    }
+
+    #[test]
+    fn keep_after_term_blocks_kill() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        for now in [T0, T0 + 3 * H, T0 + 24 * H] {
+            sweep(&mut t, &mut s, &orphaned(), &cfg, now, &mut h);
+        }
+        assert_eq!(h.signals, vec![(11, Signal::Term)]);
+        t.keep(&mut s, id(11, 111)).unwrap();
+        for now in [T0 + 24 * H + MIN, T0 + 48 * H] {
+            sweep(&mut t, &mut s, &orphaned(), &cfg, now, &mut h);
+        }
+        assert_eq!(h.signals, vec![(11, Signal::Term)]);
+    }
+
+    #[test]
+    fn clean_at_waits_for_the_warning_lead() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup {
+            warn_after_hours: 3,
+            clean_after_hours: 3,
+            auto_clean: true,
+        };
+        let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        assert_eq!(v.items[0].clean_at_ms, Some(T0 + 3 * H + WARN_LEAD_MS));
+        // Warned late, at +5 h: the clean moves with the warning.
+        let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 5 * H, &mut h);
+        assert_eq!(v.items[0].clean_at_ms, Some(T0 + 5 * H + WARN_LEAD_MS));
     }
 
     #[test]
