@@ -257,7 +257,8 @@ impl Tracker {
     /// Once per SWEEP_INTERVAL. Order: retry unsaved writes; delete rows whose process is gone;
     /// set ended_at = now on rows whose root is gone; send SIGKILL where term_sent_at_ms is set
     /// and to other processes the user ended; warn; clean; warn idle sessions; memory
-    /// suggestion; build the view.
+    /// suggestion; build the view. None: skipped, because the table does not hold
+    /// AgentPulse itself (a failed sample), so it cannot say what is gone.
     pub fn sweep(
         &mut self,
         store: &mut Store,
@@ -266,7 +267,10 @@ impl Tracker {
         cfg: &Cleanup,
         now_ms: i64,
         host: &mut dyn Host,
-    ) -> anyhow::Result<CleanupView> {
+    ) -> anyhow::Result<Option<CleanupView>> {
+        if !table.procs.contains_key(&std::process::id()) {
+            return Ok(None);
+        }
         let warn_ms = i64::from(cfg.warn_after_hours) * HOUR_MS;
         let clean_ms = i64::from(cfg.clean_after_hours) * HOUR_MS;
         let agents: HashSet<ProcessIdentity> = sessions
@@ -278,6 +282,13 @@ impl Tracker {
         // Writes that failed earlier go first: no SIGKILL below until every
         // SIGTERM before it is logged.
         self.flush(store)?;
+        // Nothing is pending now, so the store holds every change, including
+        // those of another AgentPulse on the same database (a Keep, say).
+        self.rows = store
+            .tracked_processes()?
+            .into_iter()
+            .map(|r| (r.process, r))
+            .collect();
 
         // First, so a child that exited with its agent is never marked ended.
         // A row that is now a live agent is dropped too: agents are never cleaned.
@@ -360,10 +371,12 @@ impl Tracker {
                 let (Some(ended), Some(warned)) = (row.ended_at_ms, row.warned_at_ms) else {
                     continue;
                 };
+                // The root check guards against a sample that missed a live agent.
                 if row.kept
                     || row.term_sent_at_ms.is_some()
                     || now_ms - ended < clean_ms
                     || now_ms - warned < WARN_LEAD_MS
+                    || alive(table, row.root).is_some()
                 {
                     continue;
                 }
@@ -540,11 +553,11 @@ impl Tracker {
             group.sort_by_key(|i| Reverse(i.rss_bytes));
             items.append(group);
         }
-        Ok(CleanupView {
+        Ok(Some(CleanupView {
             items,
             log: store.cleanup_log(LOG_SHOWN)?,
             memory_low,
-        })
+        }))
     }
 
     /// The user's End: SIGTERM now and a log entry with automatic = false. A tracked row
@@ -665,11 +678,13 @@ pub(crate) mod tests {
         }
     }
 
-    /// Rows of (pid, ppid, start, rss).
+    /// Rows of (pid, ppid, start, rss), plus this process, as in every real sample.
     fn table(rows: &[(u32, u32, u64, u64)]) -> ProcTable {
+        let me = (std::process::id(), 0, 1, 0);
         ProcTable {
             procs: rows
                 .iter()
+                .chain([&me])
                 .map(|&(pid, ppid, start, rss)| {
                     let info = ProcInfo {
                         ppid: Some(ppid),
@@ -727,7 +742,7 @@ pub(crate) mod tests {
         now: i64,
         h: &mut FakeHost,
     ) -> CleanupView {
-        t.sweep(s, table, &[], cfg, now, h).unwrap()
+        t.sweep(s, table, &[], cfg, now, h).unwrap().unwrap()
     }
 
     fn row(s: &Store) -> TrackedProcess {
@@ -872,6 +887,50 @@ pub(crate) mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn a_table_without_agentpulse_is_not_swept() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        // A failed list_pids(): an empty table.
+        let failed = ProcTable::default();
+        for now in [T0 + 3 * H, T0 + 48 * H] {
+            let v = t.sweep(&mut s, &failed, &[], &cfg, now, &mut h).unwrap();
+            assert_eq!(v, None);
+        }
+        assert_eq!(row(&s).warned_at_ms, None);
+        assert!(h.notes.is_empty() && h.signals.is_empty());
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 48 * H, &mut h);
+        assert_eq!(row(&s).warned_at_ms, Some(T0 + 48 * H));
+    }
+
+    #[test]
+    fn root_back_in_the_table_is_not_cleaned() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 3 * H, &mut h);
+        // The sample at T0 missed agent 10; it is still running.
+        let back = table(&[(10, 1, 100, 0), (11, 1, 111, RSS)]);
+        sweep(&mut t, &mut s, &back, &cfg, T0 + 24 * H, &mut h);
+        assert!(h.signals.is_empty());
+        assert_eq!(row(&s).term_sent_at_ms, None);
+    }
+
+    #[test]
+    fn keep_from_another_instance_is_honoured() {
+        let (mut s, mut t, mut h) = tracked();
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0, &mut h);
+        sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 3 * H, &mut h);
+        // A second AgentPulse on the same database.
+        let mut other = Tracker::load(&s).unwrap();
+        other.keep(&mut s, id(11, 111)).unwrap();
+        let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 24 * H, &mut h);
+        assert!(h.signals.is_empty());
+        assert!(v.items[0].kept);
     }
 
     #[test]
@@ -1027,7 +1086,10 @@ pub(crate) mod tests {
             session("a", SessionStatus::Active, Some(active)),
         ];
         let cfg = Cleanup::default();
-        let v = t.sweep(&mut s, &live, &sessions, &cfg, T0, &mut h).unwrap();
+        let v = t
+            .sweep(&mut s, &live, &sessions, &cfg, T0, &mut h)
+            .unwrap()
+            .unwrap();
         // Both idle sessions in one notification.
         assert_eq!(
             h.notes,
@@ -1078,6 +1140,7 @@ pub(crate) mod tests {
                 T0,
                 &mut h,
             )
+            .unwrap()
             .unwrap();
         assert_eq!(v.items.len(), 1);
         assert_eq!(v.items[0].process, None);

@@ -89,7 +89,9 @@ fn open_collector() -> anyhow::Result<Collector> {
 }
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
-    // A screenshot run reads the system but never acts on it or marks a process.
+    // A screenshot run never signals or notifies, and no clock reaches a warning or an
+    // end. It still writes to the database: it records agents' children and sets
+    // ended_at on those whose agent is gone.
     #[cfg(feature = "screenshot")]
     let inert = options.screenshot_dir.is_some();
     #[cfg(not(feature = "screenshot"))]

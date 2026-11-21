@@ -565,7 +565,10 @@ impl Collector {
                     .sweep(&mut self.store, t, &snap.sessions, cfg, now, host)
                 {
                     Ok(v) => {
-                        self.cleanup = v;
+                        // None: a failed sample; the last view stays.
+                        if let Some(v) = v {
+                            self.cleanup = v;
+                        }
                         self.sweep_error = None;
                     }
                     Err(e) => {
