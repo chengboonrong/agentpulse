@@ -54,7 +54,8 @@ New module `crates/agentpulse-app/src/tidy.rs`: blocking functions that shell ou
 `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.cargo/bin` and `/usr/bin`, in that
 order. Run each child with PATH set to the binary's own directory followed by
 `/usr/bin:/bin:/usr/sbin:/sbin`, so that `npm` can find `node`. A tool that isn't found is left
-out of the card.
+out of the card. `/usr/bin/git` and `/usr/bin/xcrun` are stubs that open the Command Line Tools
+installer when those are missing, so they count as found only when `xcode-select -p` succeeds.
 
 **Sizes.** Use `du -sk <dir>` (blocks actually allocated). It takes 0.3 s for the 4.7 GB npm
 cache. A missing directory counts as 0.
@@ -73,22 +74,39 @@ A failing command shows its exit status and the last line of its stderr on the r
 ### Worktrees
 
 - **Repos:** the `git rev-parse --path-format=absolute --git-common-dir` of every snapshot
-  session's `project_path` (live and ended), de-duplicated. A repo no agent session touched
-  isn't listed: this is an accepted gap.
-- For each repo, parse `git worktree list --porcelain` (`worktree`, `HEAD`, `branch`,
-  `detached`, `locked`, `prunable` lines). The first entry is the main worktree and is never
-  listed for removal.
+  session's `project_path`, de-duplicated. Accepted gaps: repos come from sessions in the
+  snapshot (live, or active in the last 24 h), so a repo no recent session touched isn't
+  listed.
+- For each repo, parse `git worktree list --porcelain -z` (NUL-separated `worktree`, `HEAD`,
+  `branch`, `detached`, `locked`, `prunable` fields; an empty field ends an entry). The first
+  entry is the main worktree and is never listed for removal.
 - **Prunable** (folder gone): one **Prune** action per repo, `git worktree prune`.
-- **Stale:** not locked, no live session's `project_path` inside it, and either its HEAD is
-  merged into the default branch (`origin/HEAD`, else `main`, else `master`:
-  `git merge-base --is-ancestor HEAD <default>`) or its last commit is more than 14 days old.
-  The row shows the branch, why it's stale, and `du -sk` of its folder (Rust `target/` is
-  usually the bulk).
-- **Remove is offered only when it's safe:** `git status --porcelain` is empty (this includes
-  untracked files) and `git rev-list HEAD --not --remotes` is empty (every commit is on some
-  remote). Otherwise the row shows why ("Uncommitted changes", "3 commits not pushed") and has
-  no button. The action is `git -C <repo> worktree remove <path>`, without `--force`, so git
-  itself refuses a tree that changed since Check. The branch stays.
+- **A live session anywhere in the repo means no worktree in it is stale.** A session's
+  `project_path` is its first folder, so an agent that moved into `.claude/worktrees/agent-*`
+  after it started still shows the repo root. If any live session's `project_path` resolves to
+  the repo's common dir, none of its worktrees is listed (Prune is still offered).
+- **Stale:** not locked, and either its HEAD is merged into the default branch (`origin/HEAD`,
+  else `main`, else `master`: `git merge-base --is-ancestor HEAD <default>`) or its last commit
+  is more than 14 days old. A worktree on the default branch itself (its branch is the
+  default's name with any `origin/` stripped) or whose HEAD is the default's tip is not
+  "merged": it holds no finished work, so only the 14-day rule applies to it. The row shows the
+  branch, why it's stale, and `du -sk` of its folder (Rust `target/` is usually the bulk).
+- **Remove is offered only when it's safe**, otherwise the row shows the first reason and has
+  no button:
+  - no other worktree's folder is inside it ("Holds another worktree");
+  - `git status --porcelain --untracked-files=all --ignore-submodules=none` is empty
+    ("Uncommitted changes"; explicit flags, so `status.showUntrackedFiles=no` can't hide files);
+  - `git rev-list HEAD --not --remotes` is empty ("3 commits not pushed");
+  - every ignored entry of `git status --porcelain --ignored` (traditional mode, so a wholly
+    ignored folder is one `!! dir/`) has a path component in a rebuildable set: `target`,
+    `node_modules`, `build`, `dist`, `.gradle`, `.next`, `.turbo`, `__pycache__`, `.venv`,
+    `venv`, `DerivedData`, `.build`. `git worktree remove` deletes ignored files even without
+    `--force`, so anything else blocks it ("Ignored files: .env, .omc/", up to three).
+- Paths are compared after `realpath` (falling back to the path as given).
+- The action is `git -C <repo> worktree remove <path>`, without `--force`. Just before it runs,
+  every check above is made again, with the live sessions as the window sees them at the
+  click ("An agent is working in this repo"), and the path is checked not to be the main
+  worktree. The branch stays.
 
 ### This Mac
 

@@ -86,7 +86,18 @@ not been measured.
   suggestion (memory pressure warn/critical or swap at least 2 GiB, at most every 6 h).
   Bench: collector overhead 1.19% of one core with 19 agent processes and clean-up on
   (pre-feature baseline: 1.05% with 3).
-  Not done: worktrees, caches, simulators, VMs.
+- Done: manual clean-up (rest of #60). Three cards under the process groups on Clean-up,
+  each with Check (lists, changes nothing) and two-click actions that show what they freed.
+  Disk caches: Homebrew (`brew cleanup`, unused formulae via `brew autoremove`), uv
+  (`uv cache prune`), npm (`npm cache clean --force`), sized with `du -sk`. Worktrees of repos
+  recent agent sessions worked in: Prune for deleted folders; stale ones (merged into the
+  default branch but not on or at its tip, or no commit for 14 days; none at all in a repo with
+  a live session) can be removed only when clean, every commit is on a remote, they hold no
+  other worktree and their ignored files are only build output, all re-checked just before,
+  never `--force`, branch kept. This Mac:
+  swap used of total, memory pressure, iOS simulators (shut down booted, delete unavailable),
+  and VMs/emulators by memory, report only. Commands run on background tasks, never on the
+  collector thread.
 
 ## Phase 4 — Cats: dashboard cats done
 - Done: original sprites for seven states, state machine with smoothing and hysteresis, one

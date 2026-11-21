@@ -5,6 +5,7 @@ mod hub;
 mod menubar;
 mod phones;
 mod settings;
+mod tidy;
 mod ui;
 mod updates;
 mod widget_export;
