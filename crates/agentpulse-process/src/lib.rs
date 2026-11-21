@@ -445,6 +445,10 @@ pub enum Signal {
 pub fn signal(p: ProcessIdentity, s: Signal) -> std::io::Result<bool> {
     // ponytail: the check and the kill are not atomic, so a PID reused in
     // between is still possible. macOS has no pidfd to close that gap.
+    // A pid of 0 or above i32::MAX would make kill target a process group.
+    let Some(pid) = libc::pid_t::try_from(p.pid).ok().filter(|&n| n > 0) else {
+        return Ok(false);
+    };
     if bsd(p.pid).is_none_or(|i| i.pbi_start_tvsec != p.start_time_s) {
         return Ok(false);
     }
@@ -453,7 +457,7 @@ pub fn signal(p: ProcessIdentity, s: Signal) -> std::io::Result<bool> {
         Signal::Kill => libc::SIGKILL,
     };
     // SAFETY: kill has no memory-safety preconditions.
-    if unsafe { libc::kill(p.pid as libc::pid_t, sig) } == 0 {
+    if unsafe { libc::kill(pid, sig) } == 0 {
         return Ok(true);
     }
     let err = std::io::Error::last_os_error();
@@ -791,11 +795,13 @@ mod tests {
 
     #[test]
     fn details_and_signal_check_the_start_time() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
+        let mut child = Child(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
         let start = bsd(pid).unwrap().pbi_start_tvsec;
         assert_eq!(details(id(pid, start)).unwrap().name, "sleep");
         assert!(details(id(pid, start + 5)).is_none());
@@ -804,8 +810,14 @@ mod tests {
             "reused PID is never signalled"
         );
         assert!(signal(id(pid, start), Signal::Term).unwrap());
-        child.wait().unwrap();
+        child.0.wait().unwrap();
         assert!(!signal(id(pid, start), Signal::Kill).unwrap());
+    }
+
+    #[test]
+    fn signal_never_targets_a_process_group() {
+        assert!(!signal(id(0, 0), Signal::Term).unwrap());
+        assert!(!signal(id(u32::MAX, 0), Signal::Term).unwrap());
     }
 
     #[test]
