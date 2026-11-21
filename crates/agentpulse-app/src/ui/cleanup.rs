@@ -31,6 +31,12 @@ fn span(ms: i64) -> String {
     }
 }
 
+/// "Codex · agentpulse", or the session id's first 8 characters when its project is unknown.
+fn source(provider: Provider, session_id: &str, project: Option<&str>) -> String {
+    let name = project.map_or_else(|| session_id.chars().take(8).collect(), str::to_owned);
+    format!("{} · {name}", provider.label())
+}
+
 /// Why the row is listed. `project` names an orphan's session, when known.
 pub(super) fn why(item: &CleanupItem, project: Option<&str>, now_ms: i64) -> String {
     let since = span(now_ms - item.since_ms);
@@ -38,11 +44,10 @@ pub(super) fn why(item: &CleanupItem, project: Option<&str>, now_ms: i64) -> Str
         Reason::Orphan {
             provider,
             session_id,
-        } => {
-            let source =
-                project.map_or_else(|| session_id.chars().take(8).collect(), str::to_owned);
-            format!("From {} · {source}", provider.label())
-        }
+        } => format!(
+            "From {} · ended {since} ago",
+            source(*provider, session_id, project)
+        ),
         Reason::IdleSession { waiting: true, .. } => format!("Waiting on you for {since}"),
         Reason::IdleSession { .. } => format!("Idle for {since}"),
         Reason::Untracked => "Not started by an agent AgentPulse saw".into(),
@@ -61,18 +66,11 @@ fn ends(item: &CleanupItem, now_ms: i64) -> Option<String> {
     })
 }
 
-/// The project of the session an orphan came from, if the snapshot lists it.
-fn project<'a>(s: &'a Snapshot, r: &Reason) -> Option<&'a str> {
-    let Reason::Orphan {
-        provider,
-        session_id,
-    } = r
-    else {
-        return None;
-    };
+/// The project of a session, if the snapshot lists it.
+fn project<'a>(s: &'a Snapshot, provider: Provider, session_id: &str) -> Option<&'a str> {
     s.sessions
         .iter()
-        .find(|x| x.provider == *provider && x.session_id == *session_id)
+        .find(|x| x.provider == provider && x.session_id == session_id)
         .and_then(|x| x.project_path.as_deref())
         .map(|p| format::project_name(Some(p)))
 }
@@ -116,7 +114,14 @@ impl AppView {
                 .enumerate()
                 .filter(|(_, i)| group(&i.reason) == g)
                 .map(|(n, i)| {
-                    let line = [Some(why(i, project(s, &i.reason), s.taken_at_ms))]
+                    let from = match &i.reason {
+                        Reason::Orphan {
+                            provider,
+                            session_id,
+                        } => project(s, *provider, session_id),
+                        _ => None,
+                    };
+                    let line = [Some(why(i, from, s.taken_at_ms))]
                         .into_iter()
                         .chain([ends(i, s.taken_at_ms)])
                         .flatten()
@@ -147,7 +152,13 @@ impl AppView {
                     .mt(px(sp::L))
                     .gap(px(sp::M))
                     .child(card_title("Recently ended"))
-                    .children(c.log.iter().map(|e| log_row(e, s.taken_at_ms, t))),
+                    .children(c.log.iter().map(|e| {
+                        let from = e
+                            .provider
+                            .zip(e.session_id.as_deref())
+                            .and_then(|(p, id)| project(s, p, id));
+                        line_row(&e.name, &log_line(e, from, s.taken_at_ms), e.rss_bytes, t)
+                    })),
             )
         })
     }
@@ -268,14 +279,19 @@ fn item_row(
     )
 }
 
-fn log_row(e: &CleanupLogEntry, now_ms: i64, t: Theme) -> Div {
+/// How and when a log entry's process was ended, and from which session.
+fn log_line(e: &CleanupLogEntry, project: Option<&str>, now_ms: i64) -> String {
     let by = if e.automatic {
         "automatically"
     } else {
         "by you"
     };
-    let line = format!("Ended {by} · {} ago", ago(now_ms - e.at_ms));
-    line_row(&e.name, &line, e.rss_bytes, t)
+    let from = e
+        .provider
+        .zip(e.session_id.as_deref())
+        .map(|(p, id)| format!(" · {}", source(p, id, project)))
+        .unwrap_or_default();
+    format!("Ended {by}{from} · {} ago", ago(now_ms - e.at_ms))
 }
 
 /// One row of each kind, the log, and low memory, for screenshots; the first
@@ -409,13 +425,44 @@ mod tests {
             "Idle for 40 min"
         );
         assert_eq!(
-            why(&item(orphan.clone(), 0), Some("agentpulse"), H),
-            "From Codex · agentpulse"
+            why(&item(orphan.clone(), 0), Some("agentpulse"), 21 * H),
+            "From Codex · agentpulse · ended 21 h ago"
         );
-        assert_eq!(why(&item(orphan, 0), None, H), "From Codex · 0193a7c2");
+        assert_eq!(
+            why(&item(orphan, 0), None, 40 * 60_000),
+            "From Codex · 0193a7c2 · ended 40 min ago"
+        );
         assert_eq!(
             why(&item(Reason::Untracked, 0), None, 0),
             "Not started by an agent AgentPulse saw"
+        );
+    }
+
+    #[test]
+    fn log_line_names_the_session() {
+        let entry = |provider, automatic| CleanupLogEntry {
+            at_ms: 0,
+            name: "node".into(),
+            provider,
+            session_id: provider.map(|_| "0193a7c2-4b1e".to_string()),
+            rss_bytes: 0,
+            automatic,
+        };
+        assert_eq!(
+            log_line(
+                &entry(Some(Provider::Codex), true),
+                Some("agentpulse"),
+                2 * H
+            ),
+            "Ended automatically · Codex · agentpulse · 2 h 00 min ago"
+        );
+        assert_eq!(
+            log_line(&entry(Some(Provider::Codex), false), None, 2 * H),
+            "Ended by you · Codex · 0193a7c2 · 2 h 00 min ago"
+        );
+        assert_eq!(
+            log_line(&entry(None, false), None, 2 * H),
+            "Ended by you · 2 h 00 min ago"
         );
     }
 

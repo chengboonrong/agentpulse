@@ -139,6 +139,16 @@ fn alive(table: &ProcTable, p: ProcessIdentity) -> Option<&ProcInfo> {
         .filter(|i| i.start_time_s == p.start_time_s)
 }
 
+/// "a", "a and b", "a, b and c", "a, b, c and 2 more", in name order.
+fn names(mut v: Vec<String>) -> String {
+    v.sort();
+    match v.len() {
+        n @ 4.. => format!("{} and {} more", v[..3].join(", "), n - 3),
+        n @ 2.. => format!("{} and {}", v[..n - 1].join(", "), v[n - 1]),
+        _ => v.concat(),
+    }
+}
+
 /// Untracked candidates: `node*`, `python*` and Spline processes.
 fn leftover_name(name: &str) -> bool {
     let n = name.to_lowercase();
@@ -309,6 +319,8 @@ impl Tracker {
             }
         }
 
+        // One notification per kind per sweep: (single-item body, name).
+        let mut warned = Vec::new();
         for row in self.rows.values_mut() {
             let Some(ended) = row.ended_at_ms else {
                 continue;
@@ -325,11 +337,24 @@ impl Tracker {
                 row.name,
                 row.provider.label()
             );
-            host.notify("Leftover process", &body);
+            warned.push((body, row.name.clone()));
             row.warned_at_ms = Some(now_ms);
             self.dirty.insert(row.process);
         }
+        match warned.len() {
+            0 => {}
+            1 => host.notify("Leftover process", &warned[0].0),
+            n => host.notify(
+                &format!("{n} leftover processes"),
+                &format!(
+                    "{} from finished agent sessions are still running.",
+                    names(warned.into_iter().map(|w| w.1).collect())
+                ),
+            ),
+        }
 
+        // (single-item body, name, rss, hours since the agent ended).
+        let mut cleaned = Vec::new();
         if cfg.auto_clean {
             for row in self.rows.values_mut() {
                 let (Some(ended), Some(warned)) = (row.ended_at_ms, row.warned_at_ms) else {
@@ -357,19 +382,35 @@ impl Tracker {
                     rss_bytes: rss,
                     automatic: true,
                 });
+                let hours = (now_ms - ended) / HOUR_MS;
                 let body = format!(
-                    "{} ({} MB) was ended after {} hours.",
+                    "{} ({} MB) was ended after {hours} hours.",
                     row.name,
-                    rss >> 20,
-                    (now_ms - ended) / HOUR_MS
+                    rss >> 20
                 );
-                host.notify("Ended leftover process", &body);
+                cleaned.push((body, row.name.clone(), rss, hours));
+            }
+        }
+        match cleaned.len() {
+            0 => {}
+            1 => host.notify("Ended leftover process", &cleaned[0].0),
+            n => {
+                let rss: u64 = cleaned.iter().map(|c| c.2).sum();
+                let hours = cleaned.iter().map(|c| c.3).min().unwrap_or(0);
+                let body = format!(
+                    "{} were ended after {hours} hours, freeing {} MB.",
+                    names(cleaned.into_iter().map(|c| c.1).collect()),
+                    rss >> 20
+                );
+                host.notify(&format!("Ended {n} leftover processes"), &body);
             }
         }
 
         self.flush(store)?;
 
         let mut idle = Vec::new();
+        // (single-item body, "Codex in project", hours since last activity).
+        let mut idle_new = Vec::new();
         for s in sessions {
             let waiting = match s.status {
                 SessionStatus::Idle => false,
@@ -386,11 +427,10 @@ impl Tracker {
                 .insert((s.provider, s.session_id.clone()))
             {
                 let state = if waiting { "waiting on you" } else { "idle" };
-                let body = format!(
-                    "{label} session in {project} has been {state} for {} hours.",
-                    (now_ms - last) / HOUR_MS
-                );
-                host.notify("Idle session", &body);
+                let hours = (now_ms - last) / HOUR_MS;
+                let body =
+                    format!("{label} session in {project} has been {state} for {hours} hours.");
+                idle_new.push((body, format!("{label} in {project}"), hours));
             }
             idle.push(CleanupItem {
                 process: s.process,
@@ -407,6 +447,19 @@ impl Tracker {
                 kept: false,
                 ending: s.process.is_some_and(|p| self.ending.contains_key(&p)),
             });
+        }
+
+        match idle_new.len() {
+            0 => {}
+            1 => host.notify("Idle session", &idle_new[0].0),
+            n => {
+                let hours = idle_new.iter().map(|i| i.2).min().unwrap_or(0);
+                let body = format!(
+                    "{} have had no activity for {hours} hours or more.",
+                    names(idle_new.into_iter().map(|i| i.1).collect())
+                );
+                host.notify(&format!("{n} idle sessions"), &body);
+            }
         }
 
         let uid = host.my_uid();
@@ -782,6 +835,46 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn one_notification_per_kind_per_sweep() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut t = Tracker::load(&s).unwrap();
+        let mut h = host();
+        let kids = [(11, "python3"), (12, "node"), (13, "vite"), (14, "esbuild")];
+        let mut live = vec![(10, 1, 100, 0)];
+        let mut gone = Vec::new();
+        for (pid, name) in kids {
+            add(&mut h, id(pid, 100 + u64::from(pid)), name, UID);
+            live.push((pid, 10, 100 + u64::from(pid), RSS));
+            gone.push((pid, 1, 100 + u64::from(pid), RSS));
+        }
+        let roots = [(id(10, 100), Provider::Codex, "s".to_string())];
+        t.observe(&mut s, &table(&live), &roots, &h).unwrap();
+        let gone = table(&gone);
+        let cfg = Cleanup::default();
+        sweep(&mut t, &mut s, &gone, &cfg, T0, &mut h);
+        sweep(&mut t, &mut s, &gone, &cfg, T0 + 3 * H, &mut h);
+        assert_eq!(
+            h.notes,
+            [(
+                "4 leftover processes".to_string(),
+                "esbuild, node, python3 and 1 more from finished agent sessions are still running."
+                    .to_string()
+            )]
+        );
+        sweep(&mut t, &mut s, &gone, &cfg, T0 + 24 * H, &mut h);
+        assert_eq!(h.signals.len(), 4);
+        assert_eq!(h.notes.len(), 2);
+        assert_eq!(
+            h.notes[1],
+            (
+                "Ended 4 leftover processes".to_string(),
+                "esbuild, node, python3 and 1 more were ended after 24 hours, freeing 200 MB."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn late_start_warns_before_cleaning() {
         let mut s = Store::open_in_memory().unwrap();
         let saved = TrackedProcess {
@@ -935,12 +1028,20 @@ pub(crate) mod tests {
         ];
         let cfg = Cleanup::default();
         let v = t.sweep(&mut s, &live, &sessions, &cfg, T0, &mut h).unwrap();
-        assert_eq!(h.notes.len(), 2);
+        // Both idle sessions in one notification.
+        assert_eq!(
+            h.notes,
+            [(
+                "2 idle sessions".to_string(),
+                "Claude Code in i and Claude Code in w have had no activity for 48 hours or more."
+                    .to_string()
+            )]
+        );
         t.sweep(&mut s, &live, &sessions, &cfg, T0 + MIN, &mut h)
             .unwrap();
         t.sweep(&mut s, &live, &sessions, &cfg, T0 + 48 * H, &mut h)
             .unwrap();
-        assert_eq!(h.notes.len(), 2);
+        assert_eq!(h.notes.len(), 1);
         assert!(h.signals.is_empty());
         let reasons: Vec<_> = v.items.iter().map(|i| (i.process, &i.reason)).collect();
         assert_eq!(reasons.len(), 2);
