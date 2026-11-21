@@ -1,3 +1,6 @@
+// Used from the collector in the next change.
+#[allow(dead_code)]
+mod cleanup;
 mod collector;
 mod format;
 mod hub;
