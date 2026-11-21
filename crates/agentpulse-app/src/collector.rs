@@ -75,10 +75,7 @@ pub struct Snapshot {
 pub enum Command {
     /// Which session's requests the snapshots carry; None for none.
     Detail(Option<Key>),
-    // Sent by the clean-up page in a later change; drop this attribute once used.
-    #[allow(dead_code)]
     End(ProcessIdentity),
-    #[allow(dead_code)]
     Keep(ProcessIdentity),
 }
 

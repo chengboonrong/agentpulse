@@ -35,7 +35,7 @@ fn agent_color(p: Provider, t: Theme) -> u32 {
     }
 }
 
-fn scroll_page(id: &'static str, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
+pub(super) fn scroll_page(id: &'static str, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .track_scroll(scroll)

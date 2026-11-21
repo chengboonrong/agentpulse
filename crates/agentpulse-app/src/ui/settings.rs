@@ -8,12 +8,14 @@ use super::cats::toggled;
 use super::*;
 use crate::hub::{self, now_ms};
 use crate::phones::{Phone, Qr, Started, State};
-use crate::settings::{PUBLIC_RELAY, SPEEDS};
+use crate::settings::{CLEAN_CHOICES, Cleanup, PUBLIC_RELAY, SPEEDS, WARN_CHOICES};
 use crate::updates::{self, CURRENT, Check, Release};
 
 const CARD_MAX_W: f32 = 640.;
 const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
 const DIRECT_DETAIL: &str = "Phones on the same Wi-Fi get updates straight from this Mac.";
+const CLEANUP_DETAIL: &str =
+    "AgentPulse only ends processes it saw an agent start. Idle sessions are never ended for you.";
 const PHONES_PRIVACY: &str =
     "Updates go through the relay sealed for your phone: the relay can't read them.";
 /// The QR code's side, about; modules are whole points so none blur.
@@ -52,6 +54,7 @@ pub(super) fn screen(
         .flex_col()
         .child(heading("Settings"))
         .child(animation_card(hub, entity, t).mt(px(sp::XL)))
+        .child(cleanup_card(hub, entity, t).mt(px(sp::L)))
         .child(updates_card(hub, entity, t).mt(px(sp::L)))
         .child(phones_card(hub, entity, phone, t).mt(px(sp::L)))
 }
@@ -139,6 +142,92 @@ fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                 ),
         )
         .children(why.map(|w| secondary(w, t).px(px(sp::S))))
+}
+
+fn cleanup_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
+    let c = hub.settings.cleanup();
+    card(t)
+        .max_w(px(CARD_MAX_W))
+        .gap(px(sp::M))
+        .child(card_title("Clean-up"))
+        .child(row("Warn after").child(hours(
+            "Warn after",
+            &WARN_CHOICES,
+            c.warn_after_hours,
+            t,
+            entity,
+            |c, h| c.warn_after_hours = h,
+        )))
+        .child(row("End after").child(hours(
+            "End after",
+            &CLEAN_CHOICES,
+            c.clean_after_hours,
+            t,
+            entity,
+            |c, h| c.clean_after_hours = h,
+        )))
+        .child(switch(
+            "auto-clean",
+            "End leftover processes automatically",
+            None,
+            c.auto_clean,
+            t,
+            on_hub(entity, |h, cx| {
+                let mut c = h.settings.cleanup();
+                c.auto_clean = !c.auto_clean;
+                h.set_cleanup(c, cx);
+            }),
+        ))
+        .child(secondary(CLEANUP_DETAIL, t).px(px(sp::S)))
+}
+
+/// A radio group of hours, styled as the Speed group; a click saves `set(c, hours)`.
+fn hours(
+    label: &'static str,
+    choices: &[u32],
+    on: u32,
+    t: Theme,
+    entity: &Entity<Hub>,
+    set: fn(&mut Cleanup, u32),
+) -> Stateful<Div> {
+    let options = choices.iter().enumerate().map(|(i, &h)| {
+        let chosen = h == on;
+        let text = format!("{h} h");
+        div()
+            .id((label, i))
+            .role(Role::RadioButton)
+            .aria_label(text.clone())
+            .aria_toggled(toggled(chosen))
+            .px(px(sp::M))
+            .py(px(sp::XS))
+            .rounded(px(8.))
+            .with_focus_ring(t)
+            .map(|d| {
+                if chosen {
+                    d.bg(rgb(t.card)).font_weight(FontWeight::BOLD)
+                } else {
+                    d.hover(|s| s.bg(rgb(t.surface)))
+                }
+            })
+            .on_click(on_hub(entity, move |hub, cx| {
+                let mut c = hub.settings.cleanup();
+                set(&mut c, h);
+                hub.set_cleanup(c, cx);
+            }))
+            .child(text)
+    });
+    div()
+        .id(label)
+        .role(Role::RadioGroup)
+        .aria_label(label)
+        .flex()
+        .gap(px(sp::XS))
+        .p(px(3.))
+        .rounded(px(10.))
+        .bg(rgb(t.chrome))
+        .border_1()
+        .border_color(rgb(t.border))
+        .children(options)
 }
 
 fn updates_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
@@ -621,7 +710,7 @@ pub(super) fn banner(
     )
 }
 
-fn card_title(text: &'static str) -> Div {
+pub(super) fn card_title(text: &'static str) -> Div {
     div()
         .text_size(px(ty::ROW_TITLE))
         .font_weight(FontWeight::BOLD)

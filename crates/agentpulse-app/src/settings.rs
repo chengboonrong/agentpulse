@@ -176,11 +176,8 @@ impl Cleanup {
     }
 }
 
-/// The hours Settings offers for the warning and for the clean-up. Read by the
-/// clean-up tasks that follow; drop the attributes once used.
-#[allow(dead_code)]
+/// The hours Settings offers for the warning and for the clean-up.
 pub const WARN_CHOICES: [u32; 4] = [1, 3, 6, 12];
-#[allow(dead_code)]
 pub const CLEAN_CHOICES: [u32; 4] = [12, 24, 48, 72];
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -199,8 +196,6 @@ enum Part {
     Animation,
     Updates,
     Phones,
-    // Read by the clean-up tasks that follow; drop this attribute once used.
-    #[allow(dead_code)]
     Cleanup,
 }
 
@@ -447,8 +442,6 @@ impl Settings {
         self.change(Part::Phones, |s| s.phones = p);
     }
 
-    // Read by the clean-up tasks that follow; drop this attribute once used.
-    #[allow(dead_code)]
     pub fn set_cleanup(&self, c: Cleanup) {
         self.change(Part::Cleanup, |s| s.cleanup = c.raised());
     }

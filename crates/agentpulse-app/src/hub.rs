@@ -190,6 +190,12 @@ impl Hub {
         self.follow(cx);
     }
 
+    /// Saves the clean-up settings; the collector reads them on its next tick.
+    pub fn set_cleanup(&mut self, c: settings::Cleanup, cx: &mut Context<Self>) {
+        self.settings.set_cleanup(c);
+        cx.notify();
+    }
+
     /// The release newer than this build found this run, if any.
     pub fn available(&self) -> Option<&Release> {
         self.found.as_ref()
