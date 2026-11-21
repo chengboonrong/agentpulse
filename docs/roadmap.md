@@ -84,7 +84,8 @@ not been measured.
   Clean-up screen (between Usage and Cats) lists them with End (confirm) and Keep, plus a
   "Recently ended" log. Notifications for warnings, automatic ends and a low-memory
   suggestion (memory pressure warn/critical or swap at least 2 GiB, at most every 6 h).
-  Bench: collector overhead 1.19% of one core with 19 agent processes (1.05% with 3).
+  Bench: collector overhead 1.19% of one core with 19 agent processes and clean-up on
+  (pre-feature baseline: 1.05% with 3).
   Not done: worktrees, caches, simulators, VMs.
 
 ## Phase 4 — Cats: dashboard cats done

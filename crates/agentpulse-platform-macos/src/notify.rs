@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use block2::RcBlock;
+use objc2::rc::autoreleasepool;
 use objc2::runtime::Bool;
 use objc2_foundation::{NSBundle, NSError, NSString};
 use objc2_user_notifications::{
@@ -18,6 +19,11 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// bundle (`cargo run`, tests), where UserNotifications would throw.
 /// Failures are logged, never returned.
 pub fn notify(title: &str, body: &str) {
+    // The long-lived collector thread has no pool of its own to drain autoreleased objects.
+    autoreleasepool(|_| notify_in_pool(title, body))
+}
+
+fn notify_in_pool(title: &str, body: &str) {
     if NSBundle::mainBundle().bundleIdentifier().is_none() {
         tracing::info!(title, body, "notification (no app bundle)");
         return;
