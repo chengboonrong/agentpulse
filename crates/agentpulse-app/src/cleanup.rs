@@ -102,6 +102,8 @@ pub struct CleanupItem {
     pub warned: bool,
     /// Orphans with auto clean on: when it will be ended.
     pub clean_at_ms: Option<i64>,
+    /// An orphan the user kept: never warned about or ended. False for other rows.
+    pub kept: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -389,6 +391,7 @@ impl Tracker {
                 since_ms: last,
                 warned: true,
                 clean_at_ms: None,
+                kept: false,
             });
         }
 
@@ -416,6 +419,7 @@ impl Tracker {
                 since_ms: 0,
                 warned: false,
                 clean_at_ms: None,
+                kept: false,
             });
         }
 
@@ -458,6 +462,7 @@ impl Tracker {
                     since_ms: ended,
                     warned: row.warned_at_ms.is_some(),
                     clean_at_ms: clean_at,
+                    kept: row.kept,
                 })
             })
             .collect();
@@ -836,6 +841,7 @@ pub(crate) mod tests {
         for now in [T0 + 3 * H, T0 + 24 * H, T0 + 24 * H + MIN, T0 + 48 * H] {
             let v = sweep(&mut t, &mut s, &orphaned(), &cfg, now, &mut h);
             assert_eq!(v.items[0].clean_at_ms, None);
+            assert!(v.items[0].kept);
         }
         assert!(h.notes.is_empty());
         assert!(h.signals.is_empty());
@@ -854,6 +860,8 @@ pub(crate) mod tests {
         let v = sweep(&mut t, &mut s, &orphaned(), &cfg, T0 + 48 * H, &mut h);
         assert!(h.signals.is_empty());
         assert_eq!(v.items[0].clean_at_ms, None);
+        // Not kept: the screen reads "Automatic end is off", not "Kept".
+        assert!(!v.items[0].kept);
     }
 
     #[test]

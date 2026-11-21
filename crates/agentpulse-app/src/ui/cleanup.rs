@@ -49,16 +49,15 @@ pub(super) fn why(item: &CleanupItem, project: Option<&str>, now_ms: i64) -> Str
     }
 }
 
-/// When an orphan will be ended; None for other rows. With automatic clean-up
-/// on, an orphan with no end time is one the user kept.
-fn ends(item: &CleanupItem, auto_clean: bool, now_ms: i64) -> Option<String> {
+/// When an orphan will be ended, as the last sweep saw it; None for other rows.
+fn ends(item: &CleanupItem, now_ms: i64) -> Option<String> {
     let Reason::Orphan { .. } = item.reason else {
         return None;
     };
     Some(match item.clean_at_ms {
-        _ if !auto_clean => "Automatic end is off".into(),
+        _ if item.kept => "Kept".into(),
         Some(at) => format!("Ends in {}", span(at - now_ms)),
-        None => "Kept".into(),
+        None => "Automatic end is off".into(),
     })
 }
 
@@ -91,7 +90,6 @@ impl AppView {
         view: WeakEntity<Self>,
     ) -> impl IntoElement {
         let c = &s.cleanup;
-        let auto_clean = self.settings.cleanup().auto_clean;
         let armed = self.armed.map(|(p, _)| p);
         let mut page = charts::scroll_page("cleanup", &self.page_scroll)
             .child(heading("Clean-up"))
@@ -120,12 +118,11 @@ impl AppView {
                 .map(|(n, i)| {
                     let line = [Some(why(i, project(s, &i.reason), s.taken_at_ms))]
                         .into_iter()
-                        .chain([ends(i, auto_clean, s.taken_at_ms)])
+                        .chain([ends(i, s.taken_at_ms)])
                         .flatten()
                         .collect::<Vec<_>>()
                         .join(" · ");
-                    let kept = auto_clean && i.clean_at_ms.is_none();
-                    let keep = g == 0 && !kept;
+                    let keep = g == 0 && !i.kept;
                     item_row(n, i, &line, armed, keep, t, &view)
                 })
                 .collect();
@@ -297,6 +294,7 @@ pub(super) fn fixture(now: i64) -> crate::cleanup::CleanupView {
         since_ms,
         warned: true,
         clean_at_ms,
+        kept: false,
     };
     let orphan = |provider, id: &str| Reason::Orphan {
         provider,
@@ -315,42 +313,45 @@ pub(super) fn fixture(now: i64) -> crate::cleanup::CleanupView {
         rss_bytes,
         automatic,
     };
+    let mut items = vec![
+        item(
+            p(4242),
+            "node",
+            orphan(Provider::Codex, "0193a7c2-4b1e-7d2a"),
+            1400 * MB,
+            now - 21 * H,
+            Some(now + 3 * H),
+        ),
+        item(
+            p(4243),
+            "vite",
+            orphan(Provider::ClaudeCode, "8d1f0c3e"),
+            300 * MB,
+            now - 30 * 60_000,
+            None,
+        ),
+        item(
+            p(5001),
+            "Claude Code · agentpulse",
+            idle(Provider::ClaudeCode, true),
+            600 * MB,
+            now - 5 * H,
+            None,
+        ),
+        item(
+            None,
+            "Codex · website",
+            idle(Provider::Codex, false),
+            0,
+            now - 40 * 60_000,
+            None,
+        ),
+        item(p(6100), "python3.12", Reason::Untracked, 90 * MB, 0, None),
+    ];
+    // vite: kept.
+    items[1].kept = true;
     crate::cleanup::CleanupView {
-        items: vec![
-            item(
-                p(4242),
-                "node",
-                orphan(Provider::Codex, "0193a7c2-4b1e-7d2a"),
-                1400 * MB,
-                now - 21 * H,
-                Some(now + 3 * H),
-            ),
-            item(
-                p(4243),
-                "vite",
-                orphan(Provider::ClaudeCode, "8d1f0c3e"),
-                300 * MB,
-                now - 30 * 60_000,
-                None,
-            ),
-            item(
-                p(5001),
-                "Claude Code · agentpulse",
-                idle(Provider::ClaudeCode, true),
-                600 * MB,
-                now - 5 * H,
-                None,
-            ),
-            item(
-                None,
-                "Codex · website",
-                idle(Provider::Codex, false),
-                0,
-                now - 40 * 60_000,
-                None,
-            ),
-            item(p(6100), "python3.12", Reason::Untracked, 90 * MB, 0, None),
-        ],
+        items,
         log: vec![
             log(now - 2 * H, "esbuild", 210 * MB, true),
             log(now - 26 * H, "node", 1100 * MB, false),
@@ -374,6 +375,7 @@ mod tests {
             since_ms,
             warned: false,
             clean_at_ms: None,
+            kept: false,
         }
     }
 
@@ -413,8 +415,9 @@ mod tests {
 
     #[test]
     fn ends_reads_plainly() {
-        let orphan = |clean_at_ms| CleanupItem {
+        let orphan = |clean_at_ms, kept| CleanupItem {
             clean_at_ms,
+            kept,
             ..item(
                 Reason::Orphan {
                     provider: Provider::Codex,
@@ -424,18 +427,18 @@ mod tests {
             )
         };
         assert_eq!(
-            ends(&orphan(Some(3 * H)), true, 0).as_deref(),
+            ends(&orphan(Some(3 * H), false), 0).as_deref(),
             Some("Ends in 3 h")
         );
         assert_eq!(
-            ends(&orphan(Some(40 * 60_000)), true, 0).as_deref(),
+            ends(&orphan(Some(40 * 60_000), false), 0).as_deref(),
             Some("Ends in 40 min")
         );
-        assert_eq!(ends(&orphan(None), true, 0).as_deref(), Some("Kept"));
+        assert_eq!(ends(&orphan(None, true), 0).as_deref(), Some("Kept"));
         assert_eq!(
-            ends(&orphan(Some(3 * H)), false, 0).as_deref(),
+            ends(&orphan(None, false), 0).as_deref(),
             Some("Automatic end is off")
         );
-        assert_eq!(ends(&item(Reason::Untracked, 0), true, 0), None);
+        assert_eq!(ends(&item(Reason::Untracked, 0), 0), None);
     }
 }
