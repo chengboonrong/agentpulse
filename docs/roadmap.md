@@ -73,6 +73,20 @@ not been measured.
 - Done: system-wide GPU from IORegistry `PerformanceStatistics` / `"Device Utilization %"`
   (undocumented key, accepted by the owner), shown as "GPU n% whole Mac" and in `--dump`,
   "unavailable" when the key cannot be read. About 0.05 ms per read. Never per agent.
+- Done: orphan clean-up (part of #60, processes only). Every process an agent starts is
+  recorded (lineage in SQLite); when the agent ends, what it left running is an orphan.
+  Settings, Clean-up card: warn after 1, 3, 6 or 12 h (default 3), end after 12, 24, 48 or
+  72 h (default 24, never below warn), and automatic end on by default. A warning always comes
+  at least 1 h before an automatic end. Orphans past "End after" get SIGTERM, then SIGKILL,
+  with the PID start time checked before each signal. Idle or waiting sessions are only
+  warned about. Untracked leftovers (node, node_repl, python, Spline owned by you, parent
+  launchd) are listed and ended only by you. Keep exempts a process for its lifetime. The
+  Clean-up screen (between Usage and Cats) lists them with End (confirm) and Keep, plus a
+  "Recently ended" log. Notifications for warnings, automatic ends and a low-memory
+  suggestion (memory pressure warn/critical or swap at least 2 GiB, at most every 6 h).
+  Bench: collector overhead 1.19% of one core with 19 agent processes and clean-up on
+  (pre-feature baseline: 1.05% with 3).
+  Not done: worktrees, caches, simulators, VMs.
 
 ## Phase 4 — Cats: dashboard cats done
 - Done: original sprites for seven states, state machine with smoothing and hysteresis, one

@@ -1,3 +1,4 @@
+mod cleanup;
 mod collector;
 mod format;
 mod hub;
@@ -13,12 +14,15 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentpulse_core::AgentAdapter;
+use agentpulse_core::{AgentAdapter, ProcessIdentity};
 use agentpulse_cost::PriceBook;
+use agentpulse_process::{Pressure, ProcDetails, Signal};
 use agentpulse_storage::Store;
 use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
 use anyhow::{Context, bail};
+use cleanup::{Host, SystemHost};
 use collector::Collector;
+use settings::Cleanup;
 use tracing_subscriber::filter::LevelFilter;
 
 const USAGE: &str = "usage: agentpulse [--dump | --bench]";
@@ -85,8 +89,23 @@ fn open_collector() -> anyhow::Result<Collector> {
 }
 
 fn gui(options: ui::Options) -> anyhow::Result<()> {
+    // A screenshot run never signals or notifies, and no clock reaches a warning or an
+    // end. It still writes to the database: it records agents' children and sets
+    // ended_at on those whose agent is gone.
+    #[cfg(feature = "screenshot")]
+    let inert = options.screenshot_dir.is_some();
+    #[cfg(not(feature = "screenshot"))]
+    let inert = false;
+    let (host, cleanup): (Box<dyn Host + Send>, _) = if inert {
+        (
+            Box::new(InertHost(SystemHost::default())),
+            Some(INERT_CLEANUP),
+        )
+    } else {
+        (Box::new(SystemHost::default()), None)
+    };
     let (tx, rx) = async_channel::bounded(1);
-    let (detail_tx, detail_rx) = std::sync::mpsc::channel();
+    let (command_tx, command_rx) = std::sync::mpsc::channel();
     let dir = data_dir()?;
     let settings = settings::Settings::load(&dir);
     let widgets = widget_export::WidgetExporter::detect(settings.clone());
@@ -94,11 +113,14 @@ fn gui(options: ui::Options) -> anyhow::Result<()> {
     collector::spawn(
         open_collector()?,
         tx,
-        detail_rx,
+        command_rx,
+        settings.clone(),
         widgets,
         Some(phones.clone()),
+        host,
+        cleanup,
     )?;
-    ui::run(rx, detail_tx, options, settings, phones);
+    ui::run(rx, command_tx, options, settings, phones);
     Ok(())
 }
 
@@ -131,16 +153,45 @@ fn own_usage() -> (Duration, u64) {
     (tv(ru.ru_utime) + tv(ru.ru_stime), ru.ru_maxrss as u64)
 }
 
+/// Clean-up settings under which no clock starts: no process is warned about or ended.
+const INERT_CLEANUP: Cleanup = Cleanup {
+    warn_after_hours: u32::MAX,
+    clean_after_hours: u32::MAX,
+    auto_clean: false,
+};
+
+/// Observes the system like the app, but never signals or notifies.
+struct InertHost(SystemHost);
+
+impl Host for InertHost {
+    fn details(&self, p: ProcessIdentity) -> Option<ProcDetails> {
+        self.0.details(p)
+    }
+    fn signal(&mut self, _: ProcessIdentity, _: Signal) -> bool {
+        false
+    }
+    fn notify(&mut self, _: &str, _: &str) {}
+    fn memory(&self) -> (Option<Pressure>, Option<u64>) {
+        self.0.memory()
+    }
+    fn my_uid(&self) -> u32 {
+        self.0.my_uid()
+    }
+}
+
 fn bench() -> anyhow::Result<()> {
     let mut c = open_collector()?;
     while c.tick().indexing {}
     const TICKS: u32 = 20;
+    // Clean-up runs as in the app, but no clock starts and nothing is signalled or notified.
+    let cfg = INERT_CLEANUP;
+    let mut host = InertHost(SystemHost::default());
     let (cpu_before, _) = own_usage();
     let start = Instant::now();
     let mut ticks = Vec::new();
     for _ in 0..TICKS {
         let t = Instant::now();
-        c.tick();
+        c.tick_with(Some((&cfg, &mut host)));
         ticks.push(t.elapsed());
         thread::sleep(Duration::from_secs(1));
     }

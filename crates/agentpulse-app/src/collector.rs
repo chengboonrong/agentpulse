@@ -18,7 +18,9 @@ use agentpulse_process::{ProcTable, Sampler, attribute, verify};
 use agentpulse_storage::{DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
+use crate::cleanup::{CleanupView, Host, SWEEP_INTERVAL, Tracker};
 use crate::phones::PhoneLink;
+use crate::settings::{Cleanup, Settings};
 use crate::widget_export::{self, WidgetExporter};
 
 const RATE_WINDOW_MS: i64 = 30_000;
@@ -65,6 +67,16 @@ pub struct Snapshot {
     /// The session the window asked for with [`Collector::show_detail`].
     #[serde(skip)]
     pub detail: Option<Arc<SessionDetail>>,
+    /// The last clean-up sweep; empty when the tick ran without clean-up.
+    pub cleanup: CleanupView,
+}
+
+/// What the window asks of the collector thread.
+pub enum Command {
+    /// Which session's requests the snapshots carry; None for none.
+    Detail(Option<Key>),
+    End(ProcessIdentity),
+    Keep(ProcessIdentity),
 }
 
 /// What the Usage screen draws.
@@ -172,6 +184,15 @@ pub struct Collector {
     limits: BTreeMap<Provider, RateLimits>,
     detail_key: Option<Key>,
     detail: Option<Arc<SessionDetail>>,
+    tracker: Tracker,
+    last_sweep: Option<Instant>,
+    /// The last sweep's view, copied into every snapshot taken with clean-up.
+    cleanup: CleanupView,
+    sweep_error: Option<String>,
+    /// From the last End or Keep; kept until a regular sweep after it, so the
+    /// sweep it forces does not hide it.
+    command_error: Option<String>,
+    observe_error: Option<String>,
     pub ingested: IngestStats,
 }
 
@@ -186,6 +207,7 @@ impl Collector {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             offsets: store.offsets()?,
+            tracker: Tracker::load(&store)?,
             sources: adapters
                 .into_iter()
                 .map(|adapter| Source {
@@ -216,6 +238,11 @@ impl Collector {
             limits: BTreeMap::new(),
             detail_key: None,
             detail: None,
+            last_sweep: None,
+            cleanup: CleanupView::default(),
+            sweep_error: None,
+            command_error: None,
+            observe_error: None,
             ingested: IngestStats::default(),
         })
     }
@@ -229,7 +256,39 @@ impl Collector {
         self.detail_key = key;
     }
 
+    /// Applies one command from the window. After End or Keep the next tick
+    /// sweeps, so the view shows the change at once.
+    pub fn command(&mut self, c: Command, host: &mut dyn Host) {
+        let done = match c {
+            Command::Detail(key) => return self.show_detail(key),
+            Command::End(p) => {
+                let fresh;
+                let table = match &self.table {
+                    Some((_, t)) => t,
+                    None => {
+                        fresh = Sampler::new().sample();
+                        &fresh
+                    }
+                };
+                self.tracker.end(&mut self.store, p, table, now_ms(), host)
+            }
+            Command::Keep(p) => self.tracker.keep(&mut self.store, p),
+        };
+        self.last_sweep = None;
+        self.command_error = done.err().map(|e| {
+            tracing::error!(error = %format!("{e:#}"), "clean-up command failed");
+            format!("Clean-up: {e:#}")
+        });
+    }
+
+    /// A tick without clean-up: nothing is tracked, swept, signalled or notified.
     pub fn tick(&mut self) -> Snapshot {
+        self.tick_with(None)
+    }
+
+    /// With `cleanup`, records the agents' children after each process sample
+    /// and sweeps every [`SWEEP_INTERVAL`].
+    pub fn tick_with(&mut self, mut cleanup: Option<(&Cleanup, &mut dyn Host)>) -> Snapshot {
         let now = now_ms();
         let midnight = local_midnight_ms(now);
         let mut changed = false;
@@ -308,6 +367,7 @@ impl Collector {
             };
         }
 
+        let mut sampled = false;
         if self.sources.iter().all(|s| s.live.is_empty()) {
             self.table = None;
         } else if self
@@ -320,6 +380,7 @@ impl Collector {
                 self.sampler = Sampler::new();
             }
             self.table = Some((Instant::now(), self.sampler.sample()));
+            sampled = true;
         }
         let table = self.table.as_ref().map(|(_, t)| t);
 
@@ -329,6 +390,21 @@ impl Collector {
             .flat_map(|s| s.live.iter().map(|l| (s.adapter.provider(), l)))
             .filter(|(_, l)| table.is_some_and(|t| verify(t, l).is_some()))
             .collect();
+        if let (Some(t), true, Some((_, host))) = (table, sampled, cleanup.as_mut()) {
+            let roots: Vec<(ProcessIdentity, Provider, String)> = verified
+                .iter()
+                .filter(|(_, l)| !l.shared_process)
+                .filter_map(|(p, l)| Some((verify(t, l)?, *p, l.session_id.clone())))
+                .collect();
+            self.observe_error = self
+                .tracker
+                .observe(&mut self.store, t, &roots, &**host)
+                .err()
+                .map(|e| {
+                    tracing::error!(error = %format!("{e:#}"), "cannot track agent processes");
+                    format!("Clean-up: {e:#}")
+                });
+        }
         let live_ids: BTreeSet<Key> = verified
             .iter()
             .map(|(p, l)| (*p, l.session_id.clone()))
@@ -463,6 +539,46 @@ impl Collector {
         snap.usage = self.usage_charts(now);
         snap.limits = self.limits.clone();
         snap.detail = self.detail.clone();
+        if let Some((cfg, host)) = cleanup {
+            if self
+                .last_sweep
+                .is_none_or(|t| t.elapsed() >= SWEEP_INTERVAL)
+            {
+                // A sweep forced by a command keeps that command's error.
+                let forced = self.last_sweep.is_none();
+                if !forced {
+                    self.command_error = None;
+                }
+                self.last_sweep = Some(Instant::now());
+                // Without a live agent there is no recent sample to reuse. A forced
+                // sweep needs one taken after the command, not up to 2 s before it.
+                let fresh;
+                let t = match table {
+                    Some(t) if sampled || !forced => t,
+                    _ => {
+                        fresh = Sampler::new().sample();
+                        &fresh
+                    }
+                };
+                match self
+                    .tracker
+                    .sweep(&mut self.store, t, &snap.sessions, cfg, now, host)
+                {
+                    Ok(v) => {
+                        // None: a failed sample; the last view stays.
+                        if let Some(v) = v {
+                            self.cleanup = v;
+                        }
+                        self.sweep_error = None;
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %format!("{e:#}"), "clean-up sweep failed");
+                        self.sweep_error = Some(format!("Clean-up: {e:#}"));
+                    }
+                }
+            }
+            snap.cleanup = self.cleanup.clone();
+        }
         snap.errors = self
             .config_errors
             .iter()
@@ -477,6 +593,15 @@ impl Collector {
             .chain(self.history_error.as_ref().map(|e| e.1.clone()))
             .chain(self.detail_error.clone())
             .collect();
+        // One store failure often fails several clean-up steps alike: list it once.
+        for e in [&self.sweep_error, &self.command_error, &self.observe_error]
+            .into_iter()
+            .flatten()
+        {
+            if !snap.errors.contains(e) {
+                snap.errors.push(e.clone());
+            }
+        }
         snap
     }
 
@@ -751,6 +876,7 @@ pub fn build_snapshot(
         usage: None,
         limits: BTreeMap::new(),
         detail: None,
+        cleanup: CleanupView::default(),
         sessions,
     }
 }
@@ -813,15 +939,22 @@ fn days_in<Tz: TimeZone>(now_ms: i64, n: usize, tz: &Tz) -> Vec<(String, i64, i6
 
 /// Runs the collector on its own thread until the receiver is dropped,
 /// publishing each snapshot to the widgets when `widgets` is set, and the same
-/// widget payload to paired phones through `phones`. If the loop
+/// widget payload to paired phones through `phones`. Clean-up follows
+/// `settings` as they are at each tick. If the loop
 /// panics, the widgets are marked stopped and the thread ends, which closes
 /// the channel.
+/// `host` is what the sweep observes and acts through; `cleanup`, when given,
+/// replaces the stored clean-up settings.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut collector: Collector,
     sender: async_channel::Sender<Snapshot>,
-    details: Receiver<Option<Key>>,
+    commands: Receiver<Command>,
+    settings: Settings,
     mut widgets: Option<WidgetExporter>,
     phones: Option<PhoneLink>,
+    mut host: Box<dyn Host + Send>,
+    cleanup: Option<Cleanup>,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     thread::Builder::new()
         .name("agentpulse-collector".into())
@@ -829,7 +962,8 @@ pub fn spawn(
             // The collector is dropped right after a panic, so its state is never reused.
             let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 loop {
-                    let snap = collector.tick();
+                    let cfg = cleanup.unwrap_or_else(|| settings.cleanup());
+                    let snap = collector.tick_with(Some((&cfg, host.as_mut())));
                     let indexing = snap.indexing;
                     let live = snap.sessions.iter().any(|s| s.status.is_live());
                     if let Some(w) = &mut widgets {
@@ -846,10 +980,22 @@ pub fn spawn(
                     } else {
                         Duration::from_secs(if live { 1 } else { 5 })
                     };
-                    // A request for a session's details ends the wait at once.
-                    match details.recv_timeout(wait) {
-                        // Only the newest of several queued requests matters.
-                        Ok(key) => collector.show_detail(details.try_iter().last().unwrap_or(key)),
+                    // A command ends the wait at once.
+                    match commands.recv_timeout(wait) {
+                        Ok(first) => {
+                            // Only the newest of several queued Detail requests matters;
+                            // every End and Keep is applied.
+                            let mut detail = None;
+                            for c in std::iter::once(first).chain(commands.try_iter()) {
+                                match c {
+                                    Command::Detail(key) => detail = Some(key),
+                                    c => collector.command(c, host.as_mut()),
+                                }
+                            }
+                            if let Some(key) = detail {
+                                collector.show_detail(key);
+                            }
+                        }
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => thread::sleep(wait),
                     }
@@ -877,6 +1023,7 @@ mod tests {
     use agentpulse_process::ProcInfo;
 
     use super::*;
+    use crate::cleanup;
 
     const P: Provider = Provider::ClaudeCode;
     const NOW: i64 = 1_800_000_000_000;
@@ -1680,5 +1827,56 @@ mod tests {
         let s = snapshot(&rows, &live, Some(&t));
         assert_eq!(s.agents_cpu_percent, None);
         assert_eq!(s.agents_rss_bytes, Some(2_000));
+    }
+
+    #[test]
+    fn sweep_runs_without_live_agents_and_fills_the_snapshot() {
+        let (mut c, _fake) = collector();
+        let mut host = cleanup::tests::FakeHost {
+            memory: (Some(agentpulse_process::Pressure::Warn), None),
+            ..Default::default()
+        };
+        let snap = c.tick_with(Some((&Cleanup::default(), &mut host)));
+        // Only a sweep sets memory_low.
+        assert!(snap.cleanup.memory_low);
+        assert_ne!(snap.cleanup, CleanupView::default());
+        assert!(
+            snap.cleanup
+                .items
+                .iter()
+                .all(|i| i.reason == cleanup::Reason::Untracked)
+        );
+        assert!(snap.errors.is_empty());
+        // Without clean-up (as --dump runs), nothing is swept.
+        assert_eq!(c.tick().cleanup, CleanupView::default());
+    }
+
+    #[test]
+    fn end_command_shows_in_the_next_tick() {
+        let (mut c, _fake) = collector();
+        let mut host = cleanup::tests::FakeHost::default();
+        let p = ProcessIdentity {
+            pid: 999_999,
+            start_time_s: 1,
+        };
+        let d = agentpulse_process::ProcDetails {
+            name: "node".into(),
+            uid: 0,
+        };
+        host.details.insert(p, d);
+        host.alive.insert(p);
+        // The first tick sweeps, so the next regular sweep is a minute away.
+        let cfg = Cleanup::default();
+        assert!(c.tick_with(Some((&cfg, &mut host))).cleanup.log.is_empty());
+        c.command(Command::Keep(p), &mut host);
+        c.command(Command::End(p), &mut host);
+        assert_eq!(
+            host.signals,
+            vec![(999_999, agentpulse_process::Signal::Term)]
+        );
+        let snap = c.tick_with(Some((&cfg, &mut host)));
+        assert_eq!(snap.cleanup.log.len(), 1);
+        assert_eq!(snap.cleanup.log[0].name, "node");
+        assert!(snap.errors.is_empty());
     }
 }

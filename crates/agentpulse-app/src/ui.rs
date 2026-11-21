@@ -11,7 +11,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use agentpulse_animation::{CatAnimator, CatState, Ink, Look, Sprite, frames};
-use agentpulse_core::{AgentSession, Provider, SessionStatus};
+use agentpulse_core::{AgentSession, ProcessIdentity, Provider, SessionStatus};
 use agentpulse_platform_macos::{MainThreadMarker, MenuAction, StatusItem};
 #[cfg(feature = "screenshot")]
 use anyhow::Context as _;
@@ -23,7 +23,7 @@ use gpui::{
     transparent_black,
 };
 
-use crate::collector::{Key, Snapshot};
+use crate::collector::{Command, Key, Snapshot};
 use crate::format::{self, DASH};
 use crate::hub::Hub;
 use crate::phones::PhoneLink;
@@ -31,6 +31,7 @@ use crate::settings::Settings;
 use crate::updates;
 
 mod cats;
+mod cleanup;
 mod settings;
 mod text_field;
 
@@ -83,8 +84,8 @@ impl Options {
 struct Shared {
     hub: Entity<Hub>,
     appearance: Option<bool>,
-    /// Asks the collector for one session's requests (None: no session).
-    details: Sender<Option<Key>>,
+    /// Sends the collector commands, such as which session's requests to carry.
+    details: Sender<Command>,
     settings: Settings,
 }
 
@@ -92,7 +93,7 @@ impl Global for Shared {}
 
 pub fn run(
     rx: async_channel::Receiver<Snapshot>,
-    details: Sender<Option<Key>>,
+    details: Sender<Command>,
     options: Options,
     settings: Settings,
     phones: PhoneLink,
@@ -427,6 +428,7 @@ enum Screen {
     Overview,
     Sessions,
     Usage,
+    Cleanup,
     Cats,
     Settings,
 }
@@ -469,6 +471,8 @@ struct AppView {
     /// The Forget Key button, which takes focus once a typed key is saved.
     forget_focus: FocusHandle,
     focus_forget: bool,
+    /// The Clean-up row whose End was clicked once, and when.
+    armed: Option<(ProcessIdentity, Instant)>,
     last_tick: Instant,
     active: bool,
     visible: bool,
@@ -547,6 +551,7 @@ impl AppView {
             key_field,
             forget_focus: cx.focus_handle().tab_stop(true),
             focus_forget: false,
+            armed: None,
             last_tick: Instant::now(),
             active: window.is_window_active(),
             visible: window.visibility().is_visible(),
@@ -698,7 +703,10 @@ impl AppView {
     /// Opens a session's detail, or closes it with None.
     fn show_detail(&mut self, key: Option<Key>, cx: &mut Context<Self>) {
         if key != self.detail {
-            cx.global::<Shared>().details.send(key.clone()).ok();
+            cx.global::<Shared>()
+                .details
+                .send(Command::Detail(key.clone()))
+                .ok();
             self.detail = key;
         }
         // Each page opens at its top.
@@ -812,12 +820,34 @@ async fn screenshot(
                 hub.phone_fixture = Some(fixture);
                 hub.phones_changed(cx);
             });
-            // The card is the page's fourth child, after the heading and two cards.
-            this.page_scroll.scroll_to_item(3);
+            // The card is the page's fifth child, after the heading and three cards.
+            this.page_scroll.scroll_to_item(4);
             cx.notify();
         })?;
         cx.update(|window, cx| capture(window, cx, &dir.join(file)))??;
     }
+    this.update(cx, |this, cx| {
+        this.screen = Screen::Cleanup;
+        this.page_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("cleanup.png")))??;
+    // From a fixture, with the first row's End clicked once.
+    this.update(cx, |this, cx| {
+        let armed = this.hub.update(cx, |hub, _| {
+            let s = hub.snapshot.as_mut()?;
+            s.cleanup = cleanup::fixture(s.taken_at_ms);
+            s.cleanup.items[0].process
+        });
+        this.armed = armed.map(|p| (p, Instant::now()));
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("cleanup-fixture.png")))??;
+    this.update(cx, |this, cx| {
+        this.page_scroll.scroll_to_bottom();
+        cx.notify();
+    })?;
+    cx.update(|window, cx| capture(window, cx, &dir.join("cleanup-fixture-end.png")))??;
     tracing::info!(dir = %dir.display(), "saved screenshots");
     Ok(())
 }
@@ -1117,6 +1147,7 @@ impl Render for AppView {
             self.nav("Overview", Screen::Overview, t, cx),
             self.nav("Sessions", Screen::Sessions, t, cx),
             self.nav("Usage", Screen::Usage, t, cx),
+            self.nav("Clean-up", Screen::Cleanup, t, cx),
             self.nav("Cats", Screen::Cats, t, cx),
             self.nav("Settings", Screen::Settings, t, cx),
         ];
@@ -1179,6 +1210,9 @@ impl Render for AppView {
             (Screen::Usage, Some(s)) => {
                 charts::usage(s, notes(s, hub.stopped, t), t, &self.page_scroll).into_any_element()
             }
+            (Screen::Cleanup, Some(s)) => self
+                .cleanup_screen(s, notes(s, hub.stopped, t), t, view)
+                .into_any_element(),
         };
         div()
             .size_full()

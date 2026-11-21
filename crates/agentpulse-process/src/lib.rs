@@ -342,9 +342,9 @@ pub fn verify(table: &ProcTable, live: &LiveSession) -> Option<ProcessIdentity> 
     })
 }
 
-/// Resource usage per root, keyed by root PID. Each process counts toward
-/// exactly one root: its nearest ancestor (or itself) that is a root.
-pub fn attribute(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, ResourceUsage> {
+/// Each process under a valid root (start time matches), mapped to its
+/// nearest root PID. Roots map to themselves.
+pub fn roots_of(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, u32> {
     let valid: HashSet<u32> = roots
         .iter()
         .filter(|r| {
@@ -355,18 +355,7 @@ pub fn attribute(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, R
         })
         .map(|r| r.pid)
         .collect();
-    let mut out: HashMap<u32, ResourceUsage> = valid
-        .iter()
-        .map(|&pid| {
-            let usage = ResourceUsage {
-                cpu_percent: table.cpu_valid.then_some(0.0),
-                rss_bytes: 0,
-                process_count: 0,
-            };
-            (pid, usage)
-        })
-        .collect();
-
+    let mut out = HashMap::new();
     for (&pid, info) in &table.procs {
         let mut seen = HashSet::new();
         let (mut cur, mut p) = (pid, info);
@@ -384,7 +373,31 @@ pub fn attribute(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, R
             }
             (cur, p) = (parent, next);
         };
-        if let Some(u) = root.and_then(|r| out.get_mut(&r)) {
+        if let Some(r) = root {
+            out.insert(pid, r);
+        }
+    }
+    out
+}
+
+/// Resource usage per root, keyed by root PID. Each process counts toward
+/// exactly one root: its nearest ancestor (or itself) that is a root.
+pub fn attribute(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, ResourceUsage> {
+    let owner = roots_of(table, roots);
+    let mut out: HashMap<u32, ResourceUsage> = owner
+        .values()
+        .map(|&pid| {
+            let usage = ResourceUsage {
+                cpu_percent: table.cpu_valid.then_some(0.0),
+                rss_bytes: 0,
+                process_count: 0,
+            };
+            (pid, usage)
+        })
+        .collect();
+    for (pid, root) in &owner {
+        let info = &table.procs[pid];
+        if let Some(u) = out.get_mut(root) {
             u.rss_bytes += info.rss_bytes;
             u.process_count += 1;
             if let Some(c) = &mut u.cpu_percent {
@@ -393,6 +406,106 @@ pub fn attribute(table: &ProcTable, roots: &[ProcessIdentity]) -> HashMap<u32, R
         }
     }
     out
+}
+
+/// What the kernel reports about a process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcDetails {
+    /// The executable name (`p_comm`).
+    pub name: String,
+    pub uid: u32,
+}
+
+/// Name and owner of `p`, or None when it has exited or its PID now belongs
+/// to another process.
+pub fn details(p: ProcessIdentity) -> Option<ProcDetails> {
+    let info = bsd(p.pid)?;
+    (info.pbi_start_tvsec == p.start_time_s).then(|| ProcDetails {
+        name: String::from_utf8_lossy(
+            &info
+                .pbi_comm
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect::<Vec<u8>>(),
+        )
+        .into_owned(),
+        uid: info.pbi_uid,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    Term,
+    Kill,
+}
+
+/// Sends `s` to `p` after checking its start time. `Ok(false)` when the
+/// process is gone or its PID was reused; nothing is sent then.
+pub fn signal(p: ProcessIdentity, s: Signal) -> std::io::Result<bool> {
+    // ponytail: the check and the kill are not atomic, so a PID reused in
+    // between is still possible. macOS has no pidfd to close that gap.
+    // A pid of 0 or above i32::MAX would make kill target a process group.
+    let Some(pid) = libc::pid_t::try_from(p.pid).ok().filter(|&n| n > 0) else {
+        return Ok(false);
+    };
+    if bsd(p.pid).is_none_or(|i| i.pbi_start_tvsec != p.start_time_s) {
+        return Ok(false);
+    }
+    let sig = match s {
+        Signal::Term => libc::SIGTERM,
+        Signal::Kill => libc::SIGKILL,
+    };
+    // SAFETY: kill has no memory-safety preconditions.
+    if unsafe { libc::kill(pid, sig) } == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false)
+    } else {
+        Err(err)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pressure {
+    Normal,
+    Warn,
+    Critical,
+}
+
+/// Reads a fixed-size sysctl value by name.
+fn sysctl<T: Copy>(name: &str) -> Option<T> {
+    let name = std::ffi::CString::new(name).ok()?;
+    // SAFETY: callers use plain-data types; the kernel writes at most `len` bytes.
+    let mut v: T = unsafe { std::mem::zeroed() };
+    let mut len = size_of::<T>();
+    let rc = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            (&mut v as *mut T).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (rc == 0 && len == size_of::<T>()).then_some(v)
+}
+
+/// The system memory pressure level.
+pub fn memory_pressure() -> Option<Pressure> {
+    match sysctl::<i32>("kern.memorystatus_vm_pressure_level")? {
+        1 => Some(Pressure::Normal),
+        2 => Some(Pressure::Warn),
+        4 => Some(Pressure::Critical),
+        _ => None,
+    }
+}
+
+/// Swap in use, in bytes.
+pub fn swap_used_bytes() -> Option<u64> {
+    sysctl::<libc::xsw_usage>("vm.swapusage").map(|x| x.xsu_used)
 }
 
 #[cfg(test)]
@@ -654,5 +767,62 @@ mod tests {
             let cpu = cpu_of(&s.sample(), &c);
             assert!(cpu < 1.0, "sleep read {cpu}% in window {window}");
         }
+    }
+
+    #[test]
+    fn roots_of_maps_each_descendant_to_its_nearest_root() {
+        // 10 root, 11 child, 12 grandchild; 20 is a nested root under 11, 21 its child; 30 unrelated.
+        let t = table(
+            &[
+                (10, p(Some(1), 100, 0., 0)),
+                (11, p(Some(10), 101, 0., 0)),
+                (12, p(Some(11), 102, 0., 0)),
+                (20, p(Some(11), 103, 0., 0)),
+                (21, p(Some(20), 104, 0., 0)),
+                (30, p(Some(1), 105, 0., 0)),
+            ],
+            true,
+        );
+        let m = roots_of(&t, &[id(10, 100), id(20, 103)]);
+        assert_eq!(m.get(&11), Some(&10));
+        assert_eq!(m.get(&12), Some(&10));
+        assert_eq!(m.get(&20), Some(&20));
+        assert_eq!(m.get(&21), Some(&20));
+        assert_eq!(m.get(&30), None);
+        // A root whose start time no longer matches is not a root.
+        assert!(roots_of(&t, &[id(10, 999)]).is_empty());
+    }
+
+    #[test]
+    fn details_and_signal_check_the_start_time() {
+        let mut child = Child(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
+        let start = bsd(pid).unwrap().pbi_start_tvsec;
+        assert_eq!(details(id(pid, start)).unwrap().name, "sleep");
+        assert!(details(id(pid, start + 5)).is_none());
+        assert!(
+            !signal(id(pid, start + 5), Signal::Term).unwrap(),
+            "reused PID is never signalled"
+        );
+        assert!(signal(id(pid, start), Signal::Term).unwrap());
+        child.0.wait().unwrap();
+        assert!(!signal(id(pid, start), Signal::Kill).unwrap());
+    }
+
+    #[test]
+    fn signal_never_targets_a_process_group() {
+        assert!(!signal(id(0, 0), Signal::Term).unwrap());
+        assert!(!signal(id(u32::MAX, 0), Signal::Term).unwrap());
+    }
+
+    #[test]
+    fn memory_readings_are_available() {
+        assert!(memory_pressure().is_some());
+        assert!(swap_used_bytes().is_some());
     }
 }

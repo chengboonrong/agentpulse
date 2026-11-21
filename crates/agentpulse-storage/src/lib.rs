@@ -6,7 +6,8 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 use agentpulse_core::{
-    ACTIVE_GAP_MS, PollBatch, Provider, RecordedCost, TokenUsage, UsageEvent, fold_active,
+    ACTIVE_GAP_MS, PollBatch, ProcessIdentity, Provider, RecordedCost, TokenUsage, UsageEvent,
+    fold_active,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -45,7 +46,46 @@ DELETE FROM ingest_files;
     // Per-provider time ranges (daily usage, lanes, first event) without
     // scanning the provider's whole history.
     "CREATE INDEX IF NOT EXISTS usage_events_provider_ts ON usage_events (provider, ts);",
+    // Processes each agent started, so orphans keep their warn/clean clock
+    // across restarts, and a short log of what was ended.
+    "
+CREATE TABLE tracked_processes (
+  pid INTEGER NOT NULL, start_time_s INTEGER NOT NULL,
+  root_pid INTEGER NOT NULL, root_start_s INTEGER NOT NULL,
+  provider TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT NOT NULL,
+  ended_at_ms INTEGER, warned_at_ms INTEGER, term_sent_at_ms INTEGER,
+  kept INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pid, start_time_s));
+CREATE TABLE cleanup_log (
+  id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, name TEXT NOT NULL,
+  provider TEXT, session_id TEXT, rss_bytes INTEGER NOT NULL, automatic INTEGER NOT NULL);
+",
 ];
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackedProcess {
+    pub process: ProcessIdentity,
+    pub root: ProcessIdentity,
+    pub provider: Provider,
+    pub session_id: String,
+    pub name: String,
+    pub ended_at_ms: Option<i64>,
+    pub warned_at_ms: Option<i64>,
+    pub term_sent_at_ms: Option<i64>,
+    pub kept: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CleanupLogEntry {
+    pub at_ms: i64,
+    pub name: String,
+    pub provider: Option<Provider>,
+    pub session_id: Option<String>,
+    pub rss_bytes: u64,
+    pub automatic: bool,
+}
+
+const CLEANUP_LOG_KEEP: i64 = 100;
 
 const DAILY_USAGE_SQL: &str = "SELECT date(ts / 1000, 'unixepoch', 'localtime') AS day,
         COALESCE(SUM(cost_usd), 0.0), COUNT(cost_usd), COUNT(*) - COUNT(cost_usd),
@@ -180,6 +220,153 @@ impl Store {
         let mut conn = Connection::open_in_memory()?;
         migrate(&mut conn, MIGRATIONS)?;
         Ok(Self { conn })
+    }
+
+    pub fn tracked_processes(&self) -> Result<Vec<TrackedProcess>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT pid, start_time_s, root_pid, root_start_s, provider, session_id, name,
+                    ended_at_ms, warned_at_ms, term_sent_at_ms, kept
+             FROM tracked_processes ORDER BY pid, start_time_s",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                ProcessIdentity {
+                    pid: r.get::<_, i64>(0)? as u32,
+                    start_time_s: r.get::<_, i64>(1)? as u64,
+                },
+                ProcessIdentity {
+                    pid: r.get::<_, i64>(2)? as u32,
+                    start_time_s: r.get::<_, i64>(3)? as u64,
+                },
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<i64>>(7)?,
+                r.get::<_, Option<i64>>(8)?,
+                r.get::<_, Option<i64>>(9)?,
+                r.get::<_, i64>(10)? != 0,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (
+                process,
+                root,
+                provider,
+                session_id,
+                name,
+                ended_at_ms,
+                warned_at_ms,
+                term_sent_at_ms,
+                kept,
+            ) = row?;
+            let Some(provider) = Provider::parse(&provider) else {
+                eprintln!(
+                    "agentpulse: skipping tracked process {} with unknown provider {provider:?}",
+                    process.pid
+                );
+                continue;
+            };
+            out.push(TrackedProcess {
+                process,
+                root,
+                provider,
+                session_id,
+                name,
+                ended_at_ms,
+                warned_at_ms,
+                term_sent_at_ms,
+                kept,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn save_tracked(&mut self, rows: &[TrackedProcess]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for t in rows {
+            tx.execute(
+                "INSERT INTO tracked_processes (pid, start_time_s, root_pid, root_start_s,
+                    provider, session_id, name, ended_at_ms, warned_at_ms, term_sent_at_ms, kept)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT (pid, start_time_s) DO UPDATE SET
+                    root_pid = excluded.root_pid, root_start_s = excluded.root_start_s,
+                    provider = excluded.provider, session_id = excluded.session_id,
+                    name = excluded.name, ended_at_ms = excluded.ended_at_ms,
+                    warned_at_ms = excluded.warned_at_ms,
+                    term_sent_at_ms = excluded.term_sent_at_ms, kept = excluded.kept",
+                params![
+                    t.process.pid as i64,
+                    t.process.start_time_s as i64,
+                    t.root.pid as i64,
+                    t.root.start_time_s as i64,
+                    t.provider.as_str(),
+                    t.session_id,
+                    t.name,
+                    t.ended_at_ms,
+                    t.warned_at_ms,
+                    t.term_sent_at_ms,
+                    t.kept as i64,
+                ],
+            )?;
+        }
+        Ok(tx.commit()?)
+    }
+
+    pub fn delete_tracked(&mut self, ids: &[ProcessIdentity]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for id in ids {
+            tx.execute(
+                "DELETE FROM tracked_processes WHERE pid = ?1 AND start_time_s = ?2",
+                params![id.pid as i64, id.start_time_s as i64],
+            )?;
+        }
+        Ok(tx.commit()?)
+    }
+
+    /// Records one clean-up and keeps only the newest hundred.
+    pub fn log_cleanup(&mut self, e: &CleanupLogEntry) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO cleanup_log (at_ms, name, provider, session_id, rss_bytes, automatic)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                e.at_ms,
+                e.name,
+                e.provider.map(Provider::as_str),
+                e.session_id,
+                e.rss_bytes as i64,
+                e.automatic as i64
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM cleanup_log WHERE id NOT IN
+               (SELECT id FROM cleanup_log ORDER BY at_ms DESC, id DESC LIMIT ?1)",
+            params![CLEANUP_LOG_KEEP],
+        )?;
+        Ok(tx.commit()?)
+    }
+
+    /// Newest first.
+    pub fn cleanup_log(&self, limit: usize) -> Result<Vec<CleanupLogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT at_ms, name, provider, session_id, rss_bytes, automatic
+             FROM cleanup_log ORDER BY at_ms DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok(CleanupLogEntry {
+                at_ms: r.get(0)?,
+                name: r.get(1)?,
+                provider: r
+                    .get::<_, Option<String>>(2)?
+                    .as_deref()
+                    .and_then(Provider::parse),
+                session_id: r.get(3)?,
+                rss_bytes: r.get::<_, i64>(4)? as u64,
+                automatic: r.get::<_, i64>(5)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn offsets(&self) -> Result<HashMap<String, u64>> {
@@ -495,6 +682,75 @@ mod tests {
     use agentpulse_core::{FileCursor, SessionDelta};
 
     const P: Provider = Provider::ClaudeCode;
+
+    #[test]
+    fn tracked_processes_survive_reopening() {
+        let dir = std::env::temp_dir().join(format!("ap-tracked-{}", std::process::id()));
+        let path = dir.join("t.db");
+        let row = TrackedProcess {
+            process: ProcessIdentity {
+                pid: 42,
+                start_time_s: 7,
+            },
+            root: ProcessIdentity {
+                pid: 40,
+                start_time_s: 5,
+            },
+            provider: Provider::Codex,
+            session_id: "s".into(),
+            name: "node".into(),
+            ended_at_ms: Some(9),
+            warned_at_ms: None,
+            term_sent_at_ms: None,
+            kept: true,
+        };
+        Store::open(&path)
+            .unwrap()
+            .save_tracked(std::slice::from_ref(&row))
+            .unwrap();
+        assert_eq!(
+            Store::open(&path).unwrap().tracked_processes().unwrap(),
+            vec![row.clone()]
+        );
+        let mut s = Store::open(&path).unwrap();
+        s.delete_tracked(&[row.process]).unwrap();
+        assert!(s.tracked_processes().unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cleanup_log_keeps_the_newest_hundred() {
+        let mut s = Store::open_in_memory().unwrap();
+        for i in 0..105 {
+            s.log_cleanup(&CleanupLogEntry {
+                at_ms: i,
+                name: "python3".into(),
+                provider: None,
+                session_id: None,
+                rss_bytes: 1,
+                automatic: true,
+            })
+            .unwrap();
+        }
+        let log = s.cleanup_log(1000).unwrap();
+        assert_eq!(log.len(), 100);
+        assert_eq!((log[0].at_ms, log[99].at_ms), (104, 5));
+    }
+
+    #[test]
+    fn migration_four_keeps_existing_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, &MIGRATIONS[..3]).unwrap();
+        let mut old = Store { conn };
+        old.apply(
+            &batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]),
+            &flat,
+        )
+        .unwrap();
+        migrate(&mut old.conn, MIGRATIONS).unwrap();
+        assert_eq!(old.sessions_since(P, 0).unwrap().len(), 1);
+        assert!(old.tracked_processes().unwrap().is_empty());
+    }
 
     fn tokens(input: u64, output: u64) -> TokenUsage {
         TokenUsage {

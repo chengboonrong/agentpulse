@@ -215,6 +215,7 @@ pub fn placeholder() -> Payload {
         usage: None,
         limits: Default::default(),
         detail: None,
+        cleanup: Default::default(),
     };
     let mut p = payload(&empty, false, &Looks::default());
     p.today.tokens = DASH.into();
@@ -548,6 +549,7 @@ mod tests {
             usage: None,
             limits: Default::default(),
             detail: None,
+            cleanup: Default::default(),
         }
     }
 

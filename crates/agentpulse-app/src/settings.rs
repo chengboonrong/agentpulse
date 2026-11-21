@@ -1,11 +1,13 @@
 //! `settings.json` in the data directory: each agent's cat coat and eye colour,
-//! the animation, the update check, and the phone link.
+//! the animation, the update check, the phone link, and the clean-up of idle
+//! and orphaned processes.
 //!
 //! ```json
 //! {"cats": {"claude-code": {"coat": "calico", "eye": "blue"}, "codex": {"coat": "tuxedo", "eye": null}},
 //!  "animation": {"enabled": true, "speed": 1.0},
 //!  "updates": {"auto": true, "last_checked_ms": 0, "dismissed": "0.0.5"},
-//!  "phones": {"relay": "https://relay.example", "direct": true}}
+//!  "phones": {"relay": "https://relay.example", "direct": true},
+//!  "cleanup": {"warn_after_hours": 3, "clean_after_hours": 24, "auto_clean": true}}
 //! ```
 //!
 //! `eye: null` keeps the coat's own eyes. A missing file, section, entry or
@@ -13,7 +15,9 @@
 //! used for: a section that is not an object; a cat entry that is not
 //! `{"coat": <string>, "eye": <string or null>}`, names an unknown agent or an
 //! unknown coat (that agent's default look); an unknown eye (the coat's own);
-//! a field of the wrong type (that field); a speed outside 0.25 to 3 is clamped.
+//! a field of the wrong type (that field); a speed outside 0.25 to 3 is clamped;
+//! a clean-up hours value that is 0 or not a whole number (that field); a
+//! `clean_after_hours` below `warn_after_hours` is raised to it.
 //! A file that is read whole but is not a JSON object is moved to
 //! `settings.json.bad-<unix ms>`, never over an earlier one, and the defaults
 //! are used. A file that cannot be read is left alone: the defaults are used
@@ -21,10 +25,10 @@
 //!
 //! Every change first takes up what is on disk (another instance may have
 //! written it), then writes back only what it changed: one agent's entry in
-//! `cats`, or the whole `animation`, `updates` or `phones` section. Unknown
+//! `cats`, or the whole `animation`, `updates`, `phones` or `cleanup` section. Unknown
 //! top-level keys and the other entries in `cats`, including agents this version
-//! does not know, are kept; unknown fields inside `animation`, `updates` or
-//! `phones` are dropped when that section is saved. A blank relay is null.
+//! does not know, are kept; unknown fields inside `animation`, `updates`,
+//! `phones` or `cleanup` are dropped when that section is saved. A blank relay is null.
 
 use std::fs;
 use std::io::Write;
@@ -144,12 +148,45 @@ impl Default for Phones {
     }
 }
 
+/// When idle or orphaned processes are warned about and ended.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Cleanup {
+    pub warn_after_hours: u32,
+    /// Never below `warn_after_hours`.
+    pub clean_after_hours: u32,
+    pub auto_clean: bool,
+}
+
+impl Default for Cleanup {
+    fn default() -> Self {
+        Cleanup {
+            warn_after_hours: 3,
+            clean_after_hours: 24,
+            auto_clean: true,
+        }
+    }
+}
+
+impl Cleanup {
+    fn raised(self) -> Self {
+        Cleanup {
+            clean_after_hours: self.clean_after_hours.max(self.warn_after_hours),
+            ..self
+        }
+    }
+}
+
+/// The hours Settings offers for the warning and for the clean-up.
+pub const WARN_CHOICES: [u32; 4] = [1, 3, 6, 12];
+pub const CLEAN_CHOICES: [u32; 4] = [12, 24, 48, 72];
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct State {
     looks: Looks,
     animation: Animation,
     updates: Updates,
     phones: Phones,
+    cleanup: Cleanup,
 }
 
 /// What one change touches; only that part of the file is rewritten.
@@ -159,6 +196,7 @@ enum Part {
     Animation,
     Updates,
     Phones,
+    Cleanup,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -197,8 +235,16 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
         v.as_object()
     };
     let (cats, animation, updates) = (section("cats"), section("animation"), section("updates"));
-    let phones = section("phones");
+    let (phones, cleanup) = (section("phones"), section("cleanup"));
     let (a, u, p) = (Animation::default(), Updates::default(), Phones::default());
+    let c = Cleanup::default();
+    let hours = |name: &str| {
+        field(cleanup, "cleanup", name, |v| {
+            v.as_u64()
+                .filter(|&h| h > 0)
+                .and_then(|h| u32::try_from(h).ok())
+        })
+    };
     let speed = field(animation, "animation", "speed", Value::as_f64).map_or(a.speed, |v| v as f32);
     let speed = if speed.is_finite() {
         speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1)
@@ -224,6 +270,13 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
                 .and_then(blank_is_none),
             direct: field(phones, "phones", "direct", Value::as_bool).unwrap_or(p.direct),
         },
+        cleanup: Cleanup {
+            warn_after_hours: hours("warn_after_hours").unwrap_or(c.warn_after_hours),
+            clean_after_hours: hours("clean_after_hours").unwrap_or(c.clean_after_hours),
+            auto_clean: field(cleanup, "cleanup", "auto_clean", Value::as_bool)
+                .unwrap_or(c.auto_clean),
+        }
+        .raised(),
     };
     Some((map, state))
 }
@@ -315,6 +368,10 @@ fn sections(state: &State) -> Map<String, Value> {
             "phones".into(),
             serde_json::to_value(&state.phones).expect("plain values"),
         ),
+        (
+            "cleanup".into(),
+            serde_json::to_value(state.cleanup).expect("plain values"),
+        ),
     ])
 }
 
@@ -361,6 +418,10 @@ impl Settings {
         self.read().phones.clone()
     }
 
+    pub fn cleanup(&self) -> Cleanup {
+        self.read().cleanup
+    }
+
     pub fn set(&self, p: Provider, look: Look) {
         self.change(Part::Cat(p), |s| s.looks.set(p, look));
     }
@@ -379,6 +440,10 @@ impl Settings {
             ..p
         };
         self.change(Part::Phones, |s| s.phones = p);
+    }
+
+    pub fn set_cleanup(&self, c: Cleanup) {
+        self.change(Part::Cleanup, |s| s.cleanup = c.raised());
     }
 
     /// Applies at once and saves the part it changed; a failed save is warned
@@ -430,11 +495,12 @@ impl Settings {
                 cats.insert(p.as_str().into(), Choice::of(state.looks.get(p)));
                 file.insert("cats".into(), Value::Object(cats));
             }
-            Part::Animation | Part::Updates | Part::Phones => {
+            Part::Animation | Part::Updates | Part::Phones | Part::Cleanup => {
                 let name = match part {
                     Part::Animation => "animation",
                     Part::Updates => "updates",
-                    _ => "phones",
+                    Part::Phones => "phones",
+                    _ => "cleanup",
                 };
                 file.insert(name.into(), sections(state)[name].clone());
             }
@@ -636,7 +702,14 @@ mod tests {
         s.set_animation(animation);
         s.set_updates(updates.clone());
         s.set_phones(phones.clone());
+        let cleanup = Cleanup {
+            warn_after_hours: 6,
+            clean_after_hours: 48,
+            auto_clean: false,
+        };
+        s.set_cleanup(cleanup);
         let again = Settings::load(&dir);
+        assert_eq!(again.cleanup(), cleanup);
         assert_eq!(again.animation(), animation);
         assert_eq!(again.updates(), updates);
         assert_eq!(again.phones(), phones);
@@ -814,6 +887,49 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_defaults_and_round_trip() {
+        assert_eq!(
+            state("{}").cleanup,
+            Cleanup {
+                warn_after_hours: 3,
+                clean_after_hours: 24,
+                auto_clean: true
+            }
+        );
+        let dir = temp_dir("cleanup-round-trip");
+        let s = Settings::load(&dir);
+        let c = Cleanup {
+            warn_after_hours: 6,
+            clean_after_hours: 48,
+            auto_clean: false,
+        };
+        s.set_cleanup(c);
+        assert_eq!(Settings::load(&dir).cleanup(), c);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clean_after_never_below_warn_after() {
+        let c = state(r#"{"cleanup": {"warn_after_hours": 12, "clean_after_hours": 2}}"#).cleanup;
+        assert_eq!((c.warn_after_hours, c.clean_after_hours), (12, 12));
+        let c = state(
+            r#"{"cleanup": {"warn_after_hours": 0, "clean_after_hours": "x", "auto_clean": 1}}"#,
+        )
+        .cleanup;
+        assert_eq!(c, Cleanup::default());
+        let dir = temp_dir("cleanup-raise");
+        let s = Settings::load(&dir);
+        s.set_cleanup(Cleanup {
+            warn_after_hours: 12,
+            clean_after_hours: 2,
+            auto_clean: true,
+        });
+        assert_eq!(s.cleanup().clean_after_hours, 12);
+        assert_eq!(Settings::load(&dir).cleanup().clean_after_hours, 12);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_save_keeps_other_instances_sections_and_unknown_keys() {
         let dir = temp_dir("settings-shared");
         let (a, b) = (Settings::load(&dir), Settings::load(&dir));
@@ -831,8 +947,14 @@ mod tests {
             last_checked_ms: 5,
             ..Updates::default()
         });
+        b.set_cleanup(Cleanup {
+            warn_after_hours: 1,
+            ..Cleanup::default()
+        });
+        a.set_phones(Phones::default());
         let v: Value =
             serde_json::from_str(&fs::read_to_string(dir.join(FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(v["cleanup"]["warn_after_hours"], 1);
         assert_eq!(v["future"]["x"], 1);
         assert_eq!(v["updates"]["last_checked_ms"], 5);
         assert_eq!(Settings::load(&dir).looks().get(Provider::Codex), calico);
