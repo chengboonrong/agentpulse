@@ -191,8 +191,10 @@ pub struct Collector {
     last_sweep: Option<Instant>,
     /// The last sweep's view, copied into every snapshot taken with clean-up.
     cleanup: CleanupView,
-    /// From the last sweep, End or Keep.
-    cleanup_error: Option<String>,
+    sweep_error: Option<String>,
+    /// From the last End or Keep; kept until a regular sweep after it, so the
+    /// sweep it forces does not hide it.
+    command_error: Option<String>,
     observe_error: Option<String>,
     pub ingested: IngestStats,
 }
@@ -241,7 +243,8 @@ impl Collector {
             detail: None,
             last_sweep: None,
             cleanup: CleanupView::default(),
-            cleanup_error: None,
+            sweep_error: None,
+            command_error: None,
             observe_error: None,
             ingested: IngestStats::default(),
         })
@@ -256,7 +259,8 @@ impl Collector {
         self.detail_key = key;
     }
 
-    /// Applies one command from the window. End and Keep errors show in the next snapshots.
+    /// Applies one command from the window. After End or Keep the next tick
+    /// sweeps, so the view shows the change at once.
     pub fn command(&mut self, c: Command, host: &mut dyn Host) {
         let done = match c {
             Command::Detail(key) => return self.show_detail(key),
@@ -273,10 +277,11 @@ impl Collector {
             }
             Command::Keep(p) => self.tracker.keep(&mut self.store, p),
         };
-        if let Err(e) = done {
+        self.last_sweep = None;
+        self.command_error = done.err().map(|e| {
             tracing::error!(error = %format!("{e:#}"), "clean-up command failed");
-            self.cleanup_error = Some(format!("Clean-up: {e:#}"));
-        }
+            format!("Clean-up: {e:#}")
+        });
     }
 
     /// A tick without clean-up: nothing is tracked, swept, signalled or notified.
@@ -542,6 +547,10 @@ impl Collector {
                 .last_sweep
                 .is_none_or(|t| t.elapsed() >= SWEEP_INTERVAL)
             {
+                // A sweep forced by a command keeps that command's error.
+                if self.last_sweep.is_some() {
+                    self.command_error = None;
+                }
                 self.last_sweep = Some(Instant::now());
                 // Without a live agent there is no recent sample to reuse.
                 let fresh;
@@ -558,11 +567,11 @@ impl Collector {
                 {
                     Ok(v) => {
                         self.cleanup = v;
-                        self.cleanup_error = None;
+                        self.sweep_error = None;
                     }
                     Err(e) => {
                         tracing::error!(error = %format!("{e:#}"), "clean-up sweep failed");
-                        self.cleanup_error = Some(format!("Clean-up: {e:#}"));
+                        self.sweep_error = Some(format!("Clean-up: {e:#}"));
                     }
                 }
             }
@@ -581,13 +590,16 @@ impl Collector {
             .chain(self.query_error.clone())
             .chain(self.history_error.as_ref().map(|e| e.1.clone()))
             .chain(self.detail_error.clone())
-            .chain(self.cleanup_error.clone())
-            .chain(
-                self.observe_error
-                    .clone()
-                    .filter(|e| self.cleanup_error.as_ref() != Some(e)),
-            )
             .collect();
+        // One store failure often fails several clean-up steps alike: list it once.
+        for e in [&self.sweep_error, &self.command_error, &self.observe_error]
+            .into_iter()
+            .flatten()
+        {
+            if !snap.errors.contains(e) {
+                snap.errors.push(e.clone());
+            }
+        }
         snap
     }
 
@@ -1814,8 +1826,14 @@ mod tests {
     #[test]
     fn sweep_runs_without_live_agents_and_fills_the_snapshot() {
         let (mut c, _fake) = collector();
-        let mut host = cleanup::tests::FakeHost::default();
+        let mut host = cleanup::tests::FakeHost {
+            memory: (Some(agentpulse_process::Pressure::Warn), None),
+            ..Default::default()
+        };
         let snap = c.tick_with(Some((&Cleanup::default(), &mut host)));
+        // Only a sweep sets memory_low.
+        assert!(snap.cleanup.memory_low);
+        assert_ne!(snap.cleanup, CleanupView::default());
         assert!(
             snap.cleanup
                 .items
@@ -1828,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn end_command_signals_and_shows_in_the_next_sweep() {
+    fn end_command_shows_in_the_next_tick() {
         let (mut c, _fake) = collector();
         let mut host = cleanup::tests::FakeHost::default();
         let p = ProcessIdentity {
@@ -1841,13 +1859,16 @@ mod tests {
         };
         host.details.insert(p, d);
         host.alive.insert(p);
+        // The first tick sweeps, so the next regular sweep is a minute away.
+        let cfg = Cleanup::default();
+        assert!(c.tick_with(Some((&cfg, &mut host))).cleanup.log.is_empty());
         c.command(Command::Keep(p), &mut host);
         c.command(Command::End(p), &mut host);
         assert_eq!(
             host.signals,
             vec![(999_999, agentpulse_process::Signal::Term)]
         );
-        let snap = c.tick_with(Some((&Cleanup::default(), &mut host)));
+        let snap = c.tick_with(Some((&cfg, &mut host)));
         assert_eq!(snap.cleanup.log.len(), 1);
         assert_eq!(snap.cleanup.log[0].name, "node");
         assert!(snap.errors.is_empty());

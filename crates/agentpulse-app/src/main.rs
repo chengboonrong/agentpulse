@@ -14,12 +14,13 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentpulse_core::AgentAdapter;
+use agentpulse_core::{AgentAdapter, ProcessIdentity};
 use agentpulse_cost::PriceBook;
+use agentpulse_process::{Pressure, ProcDetails, Signal};
 use agentpulse_storage::Store;
 use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
 use anyhow::{Context, bail};
-use cleanup::SystemHost;
+use cleanup::{Host, SystemHost};
 use collector::Collector;
 use settings::Cleanup;
 use tracing_subscriber::filter::LevelFilter;
@@ -135,16 +136,36 @@ fn own_usage() -> (Duration, u64) {
     (tv(ru.ru_utime) + tv(ru.ru_stime), ru.ru_maxrss as u64)
 }
 
+/// Reads the system like the app, but never signals or notifies.
+struct BenchHost(SystemHost);
+
+impl Host for BenchHost {
+    fn details(&self, p: ProcessIdentity) -> Option<ProcDetails> {
+        self.0.details(p)
+    }
+    fn signal(&mut self, _: ProcessIdentity, _: Signal) -> bool {
+        false
+    }
+    fn notify(&mut self, _: &str, _: &str) {}
+    fn memory(&self) -> (Option<Pressure>, Option<u64>) {
+        self.0.memory()
+    }
+    fn my_uid(&self) -> u32 {
+        self.0.my_uid()
+    }
+}
+
 fn bench() -> anyhow::Result<()> {
     let mut c = open_collector()?;
     while c.tick().indexing {}
     const TICKS: u32 = 20;
-    // Clean-up runs as in the app, but with auto clean off nothing is ended.
+    // Clean-up runs as in the app, but no clock starts and nothing is signalled or notified.
     let cfg = Cleanup {
+        warn_after_hours: u32::MAX,
+        clean_after_hours: u32::MAX,
         auto_clean: false,
-        ..Cleanup::default()
     };
-    let mut host = SystemHost::default();
+    let mut host = BenchHost(SystemHost::default());
     let (cpu_before, _) = own_usage();
     let start = Instant::now();
     let mut ticks = Vec::new();
