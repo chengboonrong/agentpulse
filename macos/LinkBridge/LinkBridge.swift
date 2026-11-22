@@ -391,7 +391,7 @@ private func phoneKey(_ req: Json) throws -> Curve25519.KeyAgreement.PublicKey {
 }
 
 private func direction(_ req: Json) throws -> Direction {
-    guard let d = Direction(rawValue: try string(req, "direction")) else { throw BridgeError("direction must be down or up") }
+    guard let d = Direction(rawValue: try string(req, "direction")) else { throw BridgeError("direction must be down, up or alert") }
     return d
 }
 

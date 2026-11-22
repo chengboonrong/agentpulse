@@ -50,6 +50,7 @@ interface Reply {
 interface PushTokens {
   activity?: string;
   start?: string;
+  alert?: string;
   environment: "production" | "development";
 }
 interface Meta {
@@ -283,10 +284,10 @@ export class Pairing extends DurableObject {
         return { status: 200, body: { messages } };
       }
       case "PUT push-tokens": {
-        const { activity, start, environment } = b;
+        const { activity, start, alert, environment } = b;
         if (environment !== "production" && environment !== "development") return err(400, "environment must be production or development");
-        if ((activity !== undefined && !isHex(activity)) || (start !== undefined && !isHex(start))) return err(400, "push tokens must be 64 to 200 hex characters");
-        meta.push = { activity, start, environment };
+        if ((activity !== undefined && !isHex(activity)) || (start !== undefined && !isHex(start)) || (alert !== undefined && !isHex(alert))) return err(400, "push tokens must be 64 to 200 hex characters");
+        meta.push = { activity, start, alert, environment };
         await s.put("meta", meta);
         return NO_CONTENT;
       }
@@ -299,11 +300,11 @@ export class Pairing extends DurableObject {
     const { APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC } = this.env;
     if (!APNS_KEY_P8 || !APNS_KEY_ID || !APNS_TEAM_ID || !APNS_TOPIC) return err(501, "push is not configured on this relay");
     const { event, urgent } = b;
-    if (event !== "update" && event !== "start" && event !== "end") return err(400, "event must be update, start or end");
+    if (event !== "update" && event !== "start" && event !== "end" && event !== "alert") return err(400, "event must be update, start, end or alert");
     if (typeof urgent !== "boolean") return err(400, "urgent must be a boolean");
     const msg = message(b.message, MAX_SMALL);
     if (typeof msg !== "string") return msg;
-    const kind = event === "start" ? "start" : "activity";
+    const kind = event === "alert" ? "alert" : event === "start" ? "start" : "activity";
     const token = meta.push?.[kind];
     if (!meta.push || !token) return err(409, `no ${kind} push token`);
 
@@ -314,7 +315,9 @@ export class Pairing extends DurableObject {
     await s.put("pushes", [...pushes, { at: Date.now(), urgent }]);
 
     const now = Math.floor(Date.now() / 1000);
-    const aps: Json = { timestamp: now, event, "content-state": { m: msg } };
+    const aps: Json = event === "alert"
+      ? { alert: { title: "AgentPulse", body: "An agent needs your attention" }, "mutable-content": 1, sound: "default" }
+      : { timestamp: now, event, "content-state": { m: msg } };
     if (event === "start") {
       aps["attributes-type"] = "AgentPulseActivity";
       aps.attributes = { pairing: meta.id };
@@ -338,27 +341,29 @@ export class Pairing extends DurableObject {
         method: "POST",
         headers: {
           authorization: `bearer ${jwt}`,
-          "apns-push-type": "liveactivity",
-          "apns-topic": `${APNS_TOPIC}.push-type.liveactivity`,
+          "apns-push-type": event === "alert" ? "alert" : "liveactivity",
+          "apns-topic": event === "alert" ? APNS_TOPIC : `${APNS_TOPIC}.push-type.liveactivity`,
           "apns-priority": urgent ? "10" : "5",
+          ...(event === "alert" ? { "apns-expiration": String(Math.floor(Date.now() / 1000) + 300) } : {}),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ aps }),
+        body: JSON.stringify(event === "alert" ? { aps, m: msg } : { aps }),
       });
     } catch {
       return err(502, "APNs unreachable");
     }
     const body = await res.json<{ reason?: string }>().catch(() => undefined);
     if (res.status === 403 && (body?.reason === "ExpiredProviderToken" || body?.reason === "InvalidProviderToken")) jwtCache = undefined;
-    if (res.status === 410) {
+    if (res.status === 410 || (res.status === 400 && (body?.reason === "BadDeviceToken" || body?.reason === "DeviceTokenNotForTopic"))) {
       // Re-read: the pairing may have been deleted, or the token replaced, while APNs answered.
       const current = await s.get<Meta>("meta");
       if (current?.push?.[kind] === token) {
         delete current.push[kind];
         await s.put("meta", current);
       }
+      return { status: 410, body };
     }
-    // APNs' own status, with its {reason} body when it sends one.
+    if (!res.ok) return { status: 502, body: { error: "APNs rejected push", reason: body?.reason } };
     return { status: res.status, body };
   }
 
