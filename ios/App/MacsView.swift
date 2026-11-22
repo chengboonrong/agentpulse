@@ -53,7 +53,8 @@ struct MacsView: View {
                 ContentUnavailableView {
                     Label("No Macs", systemImage: "laptopcomputer")
                 } description: {
-                    Text("On your Mac, open AgentPulse Settings, then Phones, and choose Pair a Phone.")
+                    Text("1. Install AgentPulse on your Mac from agentpulse.snitco.com.\n2. Open it, choose Phones in the sidebar, and click Pair a Phone.\n3. Tap Pair a Mac below and scan the code.")
+                        .multilineTextAlignment(.leading)
                 } actions: {
                     Button("Pair a Mac") { model.pairRequest = PairRequest() }
                         .buttonStyle(.borderedProminent)
