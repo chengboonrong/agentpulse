@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,8 +84,8 @@ fun PairScreen(model: AppModel, request: PairRequest) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pair a Mac") },
-                navigationIcon = { TextButton(onClick = cancel) { Text("Cancel") } },
+                title = { Text(stringResource(R.string.pair_mac)) },
+                navigationIcon = { TextButton(onClick = cancel) { Text(stringResource(R.string.cancel)) } },
             )
         },
     ) { padding ->
@@ -140,10 +141,10 @@ private fun Scan(error: String?, take: (String) -> Unit) {
     if (pasting) {
         Paste(
             error, take,
-            if (camera && granted) "On your Mac, copy the link under the pairing code and paste it here."
-            else "The camera isn't available. On your Mac, copy the link under the pairing code and paste it here.",
+            if (camera && granted) stringResource(R.string.paste_hint)
+            else stringResource(R.string.no_camera_hint),
         )
-        if (camera) TextButton(onClick = ::scan) { Text("Scan the code instead") }
+        if (camera) TextButton(onClick = ::scan) { Text(stringResource(R.string.scan_instead)) }
         return
     }
     Box(
@@ -159,11 +160,11 @@ private fun Scan(error: String?, take: (String) -> Unit) {
         if (granted) Scanner(take, Modifier.fillMaxSize())
     }
     Text(
-        error ?: "Point the camera at the code on your Mac.",
+        error ?: stringResource(R.string.scan_hint),
         color = if (error != null) MaterialTheme.colorScheme.error else Color.Unspecified,
         textAlign = TextAlign.Center,
     )
-    TextButton(onClick = { pasting = true }) { Text("Paste the link instead") }
+    TextButton(onClick = { pasting = true }) { Text(stringResource(R.string.paste_instead)) }
 }
 
 @Composable
@@ -173,8 +174,8 @@ private fun Paste(error: String?, take: (String) -> Unit, hint: String) {
     OutlinedTextField(
         pasted, { pasted = it },
         Modifier.fillMaxWidth(),
-        label = { Text("Pairing link") },
-        placeholder = { Text("agentpulse://pair?…") },
+        label = { Text(stringResource(R.string.pairing_link)) },
+        placeholder = { Text(stringResource(R.string.pairing_url)) },
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
         minLines = 3,
@@ -187,15 +188,15 @@ private fun Paste(error: String?, take: (String) -> Unit, hint: String) {
     OutlinedButton(onClick = {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
         clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.let { pasted = it.toString() }
-    }) { Text("Paste") }
+    }) { Text(stringResource(R.string.paste)) }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    Button(onClick = { take(pasted) }, enabled = pasted.isNotBlank()) { Text("Continue") }
+    Button(onClick = { take(pasted) }, enabled = pasted.isNotBlank()) { Text(stringResource(R.string.continue_button)) }
 }
 
 @Composable
 private fun Confirm(link: PairingLink, error: String?, working: Boolean, pair: () -> Unit) {
     Text(
-        "Pair with ${link.macName}?", style = MaterialTheme.typography.headlineSmall,
+        stringResource(R.string.pair_with, link.macName), style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
     )
     Row(
@@ -204,31 +205,32 @@ private fun Confirm(link: PairingLink, error: String?, working: Boolean, pair: (
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
             .padding(16.dp),
     ) {
-        Text("Relay", Modifier.weight(1f))
+        Text(stringResource(R.string.relay), Modifier.weight(1f))
         Text(runCatching { URI(link.relay).host }.getOrNull() ?: link.relay, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Text(
-        "Pair only with a Mac you own. It will send its agents' status to this ${deviceKind()}, end-to-end encrypted.",
+        stringResource(if (isTablet()) R.string.pair_tablet_hint else R.string.pair_phone_hint),
         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
     )
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    Button(onClick = pair, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text("Pair") }
+    Button(onClick = pair, enabled = !working, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.pair)) }
 }
 
 @Composable
 private fun Code(model: AppModel, code: String, pairing: Pairing) {
+    val declined = stringResource(R.string.declined)
     var error by remember { mutableStateOf<String?>(null) }
-    Text("Check that your Mac shows", style = MaterialTheme.typography.titleMedium)
+    Text(stringResource(R.string.check_code), style = MaterialTheme.typography.titleMedium)
     Text(
-        "${code.take(3)} ${code.takeLast(3)}",
+        stringResource(R.string.pairing_code, code.take(3), code.takeLast(3)),
         Modifier.semantics { contentDescription = code.toList().joinToString(" ") },
         fontSize = 56.sp, fontWeight = FontWeight.Bold,
     )
-    Text("Then confirm on your Mac.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(stringResource(R.string.confirm_mac), color = MaterialTheme.colorScheme.onSurfaceVariant)
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) } ?: run {
         CircularProgressIndicator()
-        Text("Waiting for ${pairing.macName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.waiting_for, pairing.macName), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     // `GET down` every 2 s, while in the foreground, until the Mac confirms and its first state arrives.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -241,7 +243,7 @@ private fun Code(model: AppModel, code: String, pairing: Pairing) {
                     val p = io { model.client.fetchDown(pairing) }
                     if (p.lastState != null) return@repeatOnLifecycle model.added(p)
                 } catch (e: PhoneException) {
-                    if (e.reason == PhoneException.Reason.REMOVED) error = "Your Mac declined or removed the pairing."
+                    if (e.reason == PhoneException.Reason.REMOVED) error = declined
                 } catch (_: Exception) {
                     // Offline for a moment; keep waiting.
                 }

@@ -43,6 +43,7 @@ import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationIt
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +59,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -167,10 +169,10 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Macs") },
+                title = { Text(stringResource(R.string.macs)) },
                 actions = {
                     if (model.pairings.isNotEmpty()) {
-                        TextButton(onClick = { model.pairRequest = PairRequest() }) { Text("Pair a Mac") }
+                        TextButton(onClick = { model.pairRequest = PairRequest() }) { Text(stringResource(R.string.pair_mac)) }
                     }
                 },
             )
@@ -178,13 +180,13 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
     ) { padding ->
         val error = model.loadError
         when {
-            error != null -> Message(padding, "Can't Read Your Macs", error)
+            error != null -> Message(padding, stringResource(R.string.cant_read), error)
             model.pairings.isEmpty() -> Message(
-                padding, "No Macs",
-                "1. Install AgentPulse on your Mac from agentpulse.snitco.com.\n2. Open it, choose Phones in the sidebar, and click Pair a Phone.\n3. Tap Pair a Mac below and scan the code.",
+                padding, stringResource(R.string.no_macs),
+                stringResource(R.string.setup),
                 textAlign = TextAlign.Start,
             ) {
-                Button(onClick = { model.pairRequest = PairRequest() }) { Text("Pair a Mac") }
+                Button(onClick = { model.pairRequest = PairRequest() }) { Text(stringResource(R.string.pair_mac)) }
             }
             else -> LazyColumn(contentPadding = padding) {
                 items(model.pairings, key = { it.id }) { p ->
@@ -211,18 +213,17 @@ private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, selected
         Text(pairing.macName, style = MaterialTheme.typography.titleMedium)
         if (payload != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(payload.agents.headline, style = MaterialTheme.typography.bodyMedium)
-                if (payload.agents.waiting > 0) Chip("${payload.agents.waiting} need you", Palette.need)
+                Text(payload.agents.headline(LocalResources.current), style = MaterialTheme.typography.bodyMedium)
+                if (payload.agents.waiting > 0) Chip(stringResource(R.string.need_count, payload.agents.waiting), Palette.need)
             }
         }
         val at = pairing.lastStateAtMs
-        val via = if (direct) " · Direct" else ""
         Text(
             when {
                 problem != null -> problem
-                at != null && now - at < 60_000 -> "Updated just now$via"
-                at != null -> "Updated " + DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS) + via
-                else -> "Waiting for your Mac"
+                at != null && now - at < 60_000 -> stringResource(if (direct) R.string.updated_now_direct else R.string.updated_now)
+                at != null -> stringResource(if (direct) R.string.updated_direct else R.string.updated, DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS))
+                else -> stringResource(R.string.waiting_mac)
             },
             style = MaterialTheme.typography.bodySmall,
             color = if (problem != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -236,21 +237,22 @@ private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, selected
 private fun MacPane(model: AppModel, id: String, selected: String?, back: (() -> Unit)?, onPick: (String) -> Unit) {
     val pairing = model.pairing(id)
     var confirming by remember { mutableStateOf(false) }
-    Scaffold(topBar = { Bar(pairing?.macName ?: "Removed", back) }) { padding ->
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    Scaffold(topBar = { Bar(pairing?.macName ?: stringResource(R.string.removed), back) }) { padding ->
         if (pairing == null) {
-            Message(padding, "Removed", "")
+            Message(padding, stringResource(R.string.removed), "")
             return@Scaffold
         }
         val payload = WidgetPayload.decode(pairing.lastState)
-        val context = LocalContext.current
         LazyColumn(contentPadding = padding) {
             model.problems[id]?.let { problem ->
                 item { Text(problem, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
             }
             if (payload == null) {
-                item { Text("Waiting for your Mac to send its first update.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                item { Text(stringResource(R.string.first_update), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                header(payload.agents.headline)
+                header(payload.agents.headline(resources))
                 item {
                     CatView(
                         payload.cat,
@@ -262,40 +264,39 @@ private fun MacPane(model: AppModel, id: String, selected: String?, back: (() ->
                             .padding(8.dp),
                     )
                 }
-                item { Field("Needs you", payload.agents.waiting.toString()) }
-                item { Field("Working", payload.agents.active.toString()) }
-                item { Field("Idle", payload.agents.idle.toString()) }
-                footer("As of ${DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))} · " +
-                    if (id in model.direct) "Connected directly" else "Through the relay")
-                header("Sessions")
+                item { Field(stringResource(R.string.needs_you), payload.agents.waiting.toString()) }
+                item { Field(stringResource(R.string.working_title), payload.agents.active.toString()) }
+                item { Field(stringResource(R.string.idle_title), payload.agents.idle.toString()) }
+                footer(resources.getString(if (id in model.direct) R.string.as_of_direct else R.string.as_of_relay, DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))))
+                header(resources.getString(R.string.sessions))
                 if (payload.sessions.isEmpty()) {
-                    item { Text("No live sessions", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    item { Text(stringResource(R.string.no_sessions), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 items(payload.sessions) { s -> SessionRow(s, s.key == selected) { onPick(s.key) } }
-                header("Today")
-                item { Field("Tokens", payload.today.tokens) }
-                item { Field("Cost", payload.today.cost) }
-                item { Field("Output rate", payload.outputRate) }
-                if (payload.today.costNote.isNotEmpty()) footer(payload.today.costNote)
+                header(resources.getString(R.string.today))
+                item { Field(stringResource(R.string.tokens), payload.today.tokens) }
+                item { Field(stringResource(R.string.cost), payload.today.cost) }
+                item { Field(stringResource(R.string.output_rate), payload.localizedOutputRate(resources)) }
+                if (payload.today.costNote.isNotEmpty()) footer(payload.today.localizedCostNote(resources))
             }
             item {
                 TextButton(onClick = { confirming = true }, Modifier.padding(8.dp)) {
-                    Text("Remove", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.remove), color = MaterialTheme.colorScheme.error)
                 }
             }
         }
         if (confirming) {
             AlertDialog(
                 onDismissRequest = { confirming = false },
-                title = { Text("Remove ${pairing.macName}?") },
-                text = { Text("This ${deviceKind()} stops showing this Mac, and the Mac stops sending to it.") },
+                title = { Text(stringResource(R.string.remove_mac, pairing.macName)) },
+                text = { Text(stringResource(if (isTablet()) R.string.remove_tablet else R.string.remove_phone)) },
                 confirmButton = {
                     TextButton(onClick = {
                         confirming = false
                         model.remove(pairing)
-                    }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                    }) { Text(stringResource(R.string.remove), color = MaterialTheme.colorScheme.error) }
                 },
-                dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.cancel)) } },
             )
         }
     }
@@ -303,7 +304,7 @@ private fun MacPane(model: AppModel, id: String, selected: String?, back: (() ->
 
 @Composable
 private fun SessionRow(s: WidgetPayload.Session, selected: Boolean, onClick: () -> Unit) {
-    val (color, status) = Palette.ribbon(s.status)
+    val (color, status) = Palette.ribbon(s.status, LocalResources.current)
     val now by rememberNow(1000)
     Column(
         Modifier
@@ -322,7 +323,7 @@ private fun SessionRow(s: WidgetPayload.Session, selected: Boolean, onClick: () 
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip(status, color)
             Text(
-                "${s.model} · ${s.tokens} tokens · ${s.cost}", style = MaterialTheme.typography.bodyMedium,
+                stringResource(R.string.session_summary, s.model, s.tokens, s.cost), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -337,24 +338,25 @@ private fun SessionPane(model: AppModel, mac: String, key: String?, back: (() ->
     val s = payload?.sessions?.firstOrNull { it.key == key }
     Scaffold(topBar = { Bar(s?.project ?: "", back) }) { padding ->
         when {
-            key == null -> Message(padding, "No Session Selected", "")
-            s == null -> Message(padding, "Session Ended", "")
+            key == null -> Message(padding, stringResource(R.string.no_selected), "")
+            s == null -> Message(padding, stringResource(R.string.session_ended), "")
             else -> {
-                val (color, status) = Palette.ribbon(s.status)
+                val (color, status) = Palette.ribbon(s.status, LocalResources.current)
                 val now by rememberNow(1000)
                 val context = LocalContext.current
+                val resources = LocalResources.current
                 LazyColumn(contentPadding = padding) {
                     item {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Status", Modifier.weight(1f))
+                            Text(stringResource(R.string.status), Modifier.weight(1f))
                             Chip(status, color)
                         }
                     }
-                    item { Field("Model", s.model) }
-                    s.startedAtMs?.let { item { Field("Running for", elapsed(now - it)) } }
-                    item { Field("Tokens", s.tokens) }
-                    item { Field("Cost", s.cost) }
-                    footer("As of ${DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))}")
+                    item { Field(stringResource(R.string.model), s.model) }
+                    s.startedAtMs?.let { item { Field(stringResource(R.string.running_for), elapsed(now - it)) } }
+                    item { Field(stringResource(R.string.tokens), s.tokens) }
+                    item { Field(stringResource(R.string.cost), s.cost) }
+                    footer(resources.getString(R.string.as_of, DateFormat.getTimeFormat(context).format(Date(payload.generatedAtMs))))
                 }
             }
         }
@@ -369,7 +371,7 @@ private fun Bar(title: String, back: (() -> Unit)?) {
         title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
             if (back != null) {
-                IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back)) }
             }
         },
     )
@@ -426,7 +428,8 @@ private fun Chip(text: String, color: Color) {
 /** The Mac's cat sprite, scaled by whole pixels and centred (macos/Shared's CatView). */
 @Composable
 private fun CatView(cat: WidgetPayload.Cat, modifier: Modifier) {
-    Box(modifier.semantics { contentDescription = "Cat, ${cat.state.replace('_', ' ')}" }) {
+    val description = cat.description(LocalResources.current)
+    Box(modifier.semantics { contentDescription = description }) {
         Canvas(Modifier.fillMaxSize()) {
             val w = cat.width.coerceAtLeast(1).toFloat()
             val h = cat.height.coerceAtLeast(1).toFloat()
@@ -455,10 +458,12 @@ object Palette {
     @Composable
     fun stage() = if (isSystemInDarkTheme()) Color(0xFF30263A) else Color(0xFFF1EAF3)
 
-    fun ribbon(status: String) = when (status) {
-        "Waiting" -> need to "needs you"
-        "Active" -> work to "working"
-        else -> idle to status.lowercase()
+    fun ribbon(status: String, resources: android.content.res.Resources) = when (status) {
+        "Waiting" -> need to resources.getString(R.string.needs_lower)
+        "Active" -> work to resources.getString(R.string.working_lower)
+        "Completed" -> idle to resources.getString(R.string.completed_lower)
+        "Failed" -> idle to resources.getString(R.string.failed_lower)
+        else -> idle to resources.getString(R.string.idle_lower)
     }
 }
 
@@ -478,4 +483,4 @@ fun elapsed(ms: Long): String {
 }
 
 @Composable
-fun deviceKind() = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) "tablet" else "phone"
+fun isTablet() = LocalConfiguration.current.smallestScreenWidthDp >= 600
