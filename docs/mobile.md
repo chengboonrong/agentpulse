@@ -17,6 +17,9 @@ more Macs through a relay that sees only ciphertext.
 - Metadata only: the widget payload (`widget.json` version 1, see
   `crates/agentpulse-app/src/widget_export.rs`). It already holds live sessions only,
   at most five, with the project's folder name and no paths, prompts or code.
+  It also names the Mac app's version (`app_version`) and, when that Mac's update check
+  found one, a newer release (`update`). The phone says when that Mac or the phone app
+  needs an update.
 - End-to-end encrypted. The relay and the push gateway handle ciphertext, random
   pairing ids, token hashes and Apple push tokens. The one plain secret it sees is the
   one-time pairing secret in the phone's hello, which it needs to check and then forgets;
