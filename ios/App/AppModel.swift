@@ -27,6 +27,22 @@ final class AppModel {
     /// The session shown beside the Mac at regular width: `WidgetPayload.Session.key`.
     var session: String?
     var pairRequest: PairRequest?
+    var settingsShown = false
+    var directEnabled = UserDefaults.standard.object(forKey: "directConnection") as? Bool ?? true {
+        didSet {
+            if !offline { UserDefaults.standard.set(directEnabled, forKey: "directConnection") }
+            if directEnabled {
+                browse()
+            } else {
+                browser?.stop()
+                browser = nil
+                endpoints = []
+                for c in connections.values { c.close() }
+                connections = [:]
+                direct = []
+            }
+        }
+    }
     /// Pairing ids connected directly.
     var direct: Set<String> = []
     /// Pairing id to the last error, such as "This Mac removed the pairing."
@@ -128,6 +144,17 @@ final class AppModel {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    /// Updates only this Mac in memory: a `reload()` here could bring back a Mac whose
+    /// removal is still reaching the relay.
+    func rename(_ p: Pairing, to name: String) {
+        do {
+            if let renamed = try client.store.rename(p.id, to: name) { replace(renamed) }
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch {
+            problems[p.id] = error.localizedDescription
+        }
+    }
+
     func reload() {
         do {
             pairings = try client.store.pairings()
@@ -141,19 +168,20 @@ final class AppModel {
 
     /// Bonjour only once a Mac is paired, so the Local Network prompt never comes before.
     private func browse() {
-        guard browser == nil, refresh != nil, !pairings.isEmpty else { return }
+        guard directEnabled, !offline, browser == nil, refresh != nil, !pairings.isEmpty else { return }
         browser = LinkBrowser { [weak self] endpoints in Task { @MainActor in self?.found(endpoints) } }
         browser?.start()
     }
 
     private func tick() async {
         for p in pairings where !direct.contains(p.id) {
-            await connectDirect(p.id)
+            if directEnabled { await connectDirect(p.id) }
             if !direct.contains(p.id) { await fetch(p.id) }
         }
     }
 
     private func found(_ endpoints: [NWEndpoint]) {
+        guard directEnabled, refresh != nil else { return }
         self.endpoints = endpoints
         Task {
             for p in pairings where !direct.contains(p.id) { await connectDirect(p.id) }
@@ -171,13 +199,14 @@ final class AppModel {
 
     /// Tries each AgentPulse service found; a Mac that doesn't know the pairing closes.
     private func connectDirect(_ id: String) async {
-        guard !connecting.contains(id), connections[id] == nil else { return }
+        guard directEnabled, !connecting.contains(id), connections[id] == nil else { return }
         connecting.insert(id)
         defer { connecting.remove(id) }
         for endpoint in endpoints {
+            guard directEnabled, refresh != nil else { return }
             guard let p = pairing(id), let c = try? await client.connect(p, to: endpoint) else { continue }
             // Stopped or removed meanwhile.
-            guard refresh != nil, pairing(id) != nil else { return c.close() }
+            guard directEnabled, refresh != nil, pairing(id) != nil else { return c.close() }
             connections[id] = c
             direct.insert(id)
             problems[id] = nil
