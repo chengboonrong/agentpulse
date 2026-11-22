@@ -4,6 +4,8 @@
 # the team for TestFlight, so no team id appears here.
 name: AgentPulsePhone
 options:
+  developmentLanguage: en
+  knownRegions: [en, zh-Hans, zh-Hant, ja, ms]
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true

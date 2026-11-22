@@ -55,7 +55,7 @@ struct PairView: View {
             Scanner { take($0) }
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .bottom) {
-                    Text(error ?? "Point the camera at the code on your Mac.")
+                    Text(error ?? String(localized: "Point the camera at the code on your Mac."))
                         .font(.callout)
                         .padding()
                         .background(.regularMaterial, in: .rect(cornerRadius: 12))
@@ -98,7 +98,7 @@ struct PairView: View {
             if UserDefaults.standard.bool(forKey: "AgentPulseE2EAutoConfirm") { pair(link) }
             #endif
         } catch {
-            self.error = "That isn't an AgentPulse pairing link."
+            self.error = String(localized: "That isn't an AgentPulse pairing link.")
         }
     }
 
@@ -193,7 +193,7 @@ struct PairView: View {
                 model.path = [p.id]
                 return
             } catch PhoneError.removed {
-                error = "Your Mac declined or removed the pairing."
+                error = String(localized: "Your Mac declined or removed the pairing.")
                 return
             } catch {
                 // Offline for a moment; keep waiting.

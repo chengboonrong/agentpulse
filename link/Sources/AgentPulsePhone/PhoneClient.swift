@@ -17,11 +17,11 @@ public enum PhoneError: Error, Equatable, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .removed: "This Mac removed the pairing."
-        case .taken: "Someone else answered this code."
-        case .expired: "This code expired. Show a new one on your Mac."
-        case .busy: "The relay is busy. Try again in a moment."
-        case .badResponse(let status): "The relay answered HTTP \(status)."
+        case .removed: String(localized: "This Mac removed the pairing.", bundle: .module)
+        case .taken: String(localized: "Someone else answered this code.", bundle: .module)
+        case .expired: String(localized: "This code expired. Show a new one on your Mac.", bundle: .module)
+        case .busy: String(localized: "The relay is busy. Try again in a moment.", bundle: .module)
+        case .badResponse(let status): String(localized: "The relay answered HTTP \(status).", bundle: .module)
         }
     }
 }

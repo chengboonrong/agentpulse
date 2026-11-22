@@ -1,0 +1,74 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSCameraUsageDescription": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse uses the camera to scan the pairing code your Mac shows."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse 使用相机扫描 Mac 上显示的配对码。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse 使用相機掃描 Mac 上顯示的配對碼。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse はカメラで Mac のペアリングコードをスキャンします。"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse menggunakan kamera untuk mengimbas kod berpasangan yang dipaparkan oleh Mac anda."
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse connects directly to your paired Macs on the same network."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse 直接连接到同一网络上已配对的 Mac。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse 直接連線至相同網路上已配對的 Mac。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse は同じネットワーク上のペアリング済み Mac に直接接続します。"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AgentPulse menyambung terus ke Mac berpasangan anda pada rangkaian yang sama."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

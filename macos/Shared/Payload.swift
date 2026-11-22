@@ -140,3 +140,59 @@ extension WidgetPayload {
         return url.flatMap { try? Data(contentsOf: $0) }.flatMap(decode)
     }()
 }
+
+// Wire values stay stable; translate only when presenting them.
+extension WidgetPayload.Today {
+    var localizedCostNote: String {
+        switch costNote {
+        case "no price for today's models": String(localized: "no price for today's models")
+        case "estimate, API list prices": String(localized: "estimate, API list prices")
+        case "Estimated from list prices.": String(localized: "Estimated from list prices.")
+        default: costNote
+        }
+    }
+}
+
+extension WidgetPayload {
+    var localizedOutputRate: String {
+        guard outputRate.hasSuffix(" tok/s") else { return outputRate }
+        let rate = String(outputRate.dropLast(6))
+        return String(localized: "\(rate) tok/s")
+    }
+}
+
+extension WidgetPayload.Cat {
+    var localizedState: String {
+        switch state {
+        case "sleeping": String(localized: "sleeping")
+        case "sitting": String(localized: "sitting")
+        case "looking_around": String(localized: "looking around")
+        case "running": String(localized: "running")
+        case "sprinting": String(localized: "sprinting")
+        case "happy": String(localized: "happy")
+        case "surprised": String(localized: "surprised")
+        default: state.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+}
+
+extension WidgetPayload.Limit {
+    var localizedLabel: String {
+        guard let separator = label.lastIndex(of: " ") else { return label }
+        let provider = String(label[..<separator])
+        let window = String(label[label.index(after: separator)...])
+        switch window {
+        case "weekly": return String(localized: "\(provider) weekly")
+        case "daily": return String(localized: "\(provider) daily")
+        case "plan": return String(localized: "\(provider) plan")
+        default:
+            guard let unit = window.last, let count = Int(window.dropLast()) else { return label }
+            switch unit {
+            case "d": return String(localized: "\(provider) \(count)d")
+            case "h": return String(localized: "\(provider) \(count)h")
+            case "m": return String(localized: "\(provider) \(count)m")
+            default: return label
+            }
+        }
+    }
+}

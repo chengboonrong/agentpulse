@@ -43,7 +43,7 @@ struct AgentPulseWidgetView: View {
     /// No live data: the sleeping cat (when the placeholder resource exists),
     /// the title, and in the medium size the subtitle.
     @ViewBuilder
-    private func sleeping(_ title: Text, _ subtitle: String, _ silhouette: Bool) -> some View {
+    private func sleeping(_ title: Text, _ subtitle: LocalizedStringKey, _ silhouette: Bool) -> some View {
         let cat = WidgetPayload.placeholder?.cat
         if family == .systemMedium {
             HStack(spacing: 14) {
@@ -97,12 +97,10 @@ struct AgentPulseWidgetView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .accessibilityLabel(p.today.cost == "—" ? "Cost today unavailable" : "Cost today \(p.today.cost), estimate")
+                .accessibilityLabel(p.today.cost == "—" ? String(localized: "Cost today unavailable") : String(localized: "Cost today \(p.today.cost), estimate"))
             if let asOf {
                 // Advances on its own between reloads.
                 Text("Updated \(Text(asOf, style: .relative)) ago")
-                    // The widget's words are English; the system locale would mix languages.
-                    .environment(\.locale, Locale(identifier: "en_US"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -136,11 +134,8 @@ struct AgentPulseWidgetView: View {
     }
 
     static func headline(_ a: WidgetPayload.Agents) -> String {
-        switch a.active + a.waiting + a.idle {
-        case 0: "No agents"
-        case 1: "1 agent"
-        case let n: "\(n) agents"
-        }
+        let count = a.active + a.waiting + a.idle
+        return count == 0 ? String(localized: "No agents") : String(localized: "\(count) agents")
     }
 
     /// The ribbon beside the headline: who needs you leads, as in the app's roster.
@@ -176,8 +171,9 @@ struct Palette {
 
     func ribbon(_ status: String) -> (Color, String) {
         switch status {
-        case "Waiting": (need, "needs you")
-        case "Active": (work, "working")
+        case "Waiting": (need, String(localized: "needs you"))
+        case "Active": (work, String(localized: "working"))
+        case "Idle": (idle, String(localized: "idle"))
         default: (idle, status.lowercased())
         }
     }
@@ -228,10 +224,15 @@ private struct Ribbon: View {
 
     var body: some View {
         let (fill, label) = palette.ribbon(status)
-        Text(count.map { $0 > 1 && status == "Waiting" ? "\($0) need you" : "\($0) \(label)" } ?? label)
+        Text(count.map { n in
+            switch status {
+            case "Waiting": n > 1 ? String(localized: "\(n) need you") : String(localized: "\(n) needs you")
+            case "Active": String(localized: "\(n) working")
+            default: String(localized: "\(n) idle")
+            }
+        } ?? label)
             .font(.caption2.weight(.bold))
             .lineLimit(1)
-            .fixedSize()
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .foregroundStyle(silhouette ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.white))
@@ -256,7 +257,7 @@ private struct LimitBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
-                Text(outOfDate ? "\(limit.label) limit out of date" : limit.label)
+                Text(outOfDate ? String(localized: "\(limit.localizedLabel) limit out of date") : limit.localizedLabel)
                     .font(.caption2.weight(.bold))
                     .lineLimit(1)
                 if !outOfDate {
@@ -280,12 +281,11 @@ private struct LimitBar: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .environment(\.locale, Locale(identifier: "en_US"))
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(outOfDate ? "\(limit.label) limit out of date"
-            : "\(limit.label) limit \(limit.percent) percent used")
+        .accessibilityLabel(outOfDate ? String(localized: "\(limit.localizedLabel) limit out of date")
+            : String(localized: "\(limit.localizedLabel) limit \(limit.percent) percent used"))
     }
 }
 
@@ -347,6 +347,6 @@ struct CatView: View {
                 }
             }
         }
-        .accessibilityLabel("Cat, \(cat.state.replacingOccurrences(of: "_", with: " "))")
+        .accessibilityLabel("Cat, \(cat.localizedState)")
     }
 }

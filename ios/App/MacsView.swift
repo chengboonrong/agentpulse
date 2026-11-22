@@ -108,7 +108,11 @@ private struct MacRow: View {
                 {
                     Text("Needs an update")
                 } else if let at = pairing.lastStateAt {
-                    Text("Updated \(at, format: .relative(presentation: .named))\(direct ? " · Direct" : "")")
+                    if direct {
+                        Text("Updated \(at, format: .relative(presentation: .named)) · Direct")
+                    } else {
+                        Text("Updated \(at, format: .relative(presentation: .named))")
+                    }
                 } else {
                     Text("Waiting for your Mac")
                 }
