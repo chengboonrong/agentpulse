@@ -78,9 +78,9 @@ fn nearest(samples: &[(i64, f32)], start: i64, end: i64, at: i64) -> Option<(i64
 
 fn ago_text(ms: i64) -> String {
     if ms < 1_000 {
-        "now".into()
+        rust_i18n::t!("usage.now").to_string()
     } else {
-        format!("{} s ago", ms / 1_000)
+        rust_i18n::t!("usage.seconds_ago", n = ms / 1_000).to_string()
     }
 }
 
@@ -167,7 +167,12 @@ pub(super) fn time_series(
                 )
                 .corner_radii(px(4.)),
             );
-            let text = format!("{v:.1} tok/s · {}", ago_text(end_ms - t));
+            let text = rust_i18n::t!(
+                "usage.rate_tooltip",
+                value = format!("{v:.1}"),
+                time = ago_text(end_ms - t)
+            )
+            .to_string();
             let line = shape(window, &text, c.text);
             let pad = px(4.);
             let w = line.width + pad * 2.;

@@ -55,7 +55,7 @@ fn swatch(color: u32) -> Div {
     div().size(px(10.)).flex_none().rounded_sm().bg(rgb(color))
 }
 
-fn legend(items: Vec<(Div, &'static str)>, t: Theme) -> Div {
+fn legend(items: Vec<(Div, String)>, t: Theme) -> Div {
     div()
         .flex()
         .flex_wrap()
@@ -66,7 +66,7 @@ fn legend(items: Vec<(Div, &'static str)>, t: Theme) -> Div {
                 .items_center()
                 .gap(px(sp::XS))
                 .child(sw)
-                .child(secondary(label, t))
+                .child(secondary(&label, t))
         }))
 }
 
@@ -199,10 +199,18 @@ fn day_columns(
 
 fn day_x_axis(days: &[Day], t: Theme) -> Div {
     let label = |i: usize| {
-        days.get(i)
-            .map_or(String::new(), |d| date_label(d.start_ms, "%b %-d"))
+        days.get(i).map_or(String::new(), |d| {
+            date_label(d.start_ms, &rust_i18n::t!("usage.date_short"))
+        })
     };
-    x_axis(vec![label(0), label(days.len() / 2), "Today".into()], t)
+    x_axis(
+        vec![
+            label(0),
+            label(days.len() / 2),
+            rust_i18n::t!("usage.today").to_string(),
+        ],
+        t,
+    )
 }
 
 // ------------------------------------------------------------------- usage
@@ -221,18 +229,16 @@ pub(super) fn usage(
                 .flex_wrap()
                 .items_baseline()
                 .gap(px(sp::M))
-                .child(heading("Usage"))
+                .child(heading(rust_i18n::t!("usage.usage").to_string()))
                 .child(secondary(
-                    &format!("Last {USAGE_DAYS} days. Costs are estimates at API list prices."),
+                    rust_i18n::t!("usage.period_note", n = USAGE_DAYS).as_ref(),
                     t,
                 )),
         )
         .children(notes_gap(notes))
         .child(today_tokens(s, t).mt(px(sp::L)));
     match &s.usage {
-        None => {
-            page.child(secondary("Usage appears once history is indexed.", t).mt(px(sp::GROUP)))
-        }
+        None => page.child(secondary(rust_i18n::t!("usage.indexed").as_ref(), t).mt(px(sp::GROUP))),
         Some(u) => page
             .child(card(t).mt(px(sp::XL)).child(daily_cost(u, t)))
             .child(card(t).mt(px(sp::L)).child(cache(u, t)))
@@ -244,7 +250,7 @@ pub(super) fn usage(
 /// Today's tokens by kind, all agents: one line under the title.
 fn today_tokens(s: &Snapshot, t: Theme) -> Div {
     let tk = s.today_tokens;
-    let pair = |label: &'static str, value: u64| {
+    let pair = |label: &str, value: u64| {
         div()
             .flex()
             .gap(px(sp::XS))
@@ -262,14 +268,20 @@ fn today_tokens(s: &Snapshot, t: Theme) -> Div {
         .items_baseline()
         .gap_x(px(sp::L))
         .gap_y(px(sp::XS))
-        .child(section_label("Today", t))
-        .child(pair("Input", tk.input))
-        .child(pair("Output", tk.output))
-        .child(pair("Cache write", tk.cache_write_5m + tk.cache_write_1h))
-        .child(pair("Cache read", tk.cache_read))
+        .child(section_label(rust_i18n::t!("usage.today").to_string(), t))
+        .child(pair(rust_i18n::t!("usage.input").as_ref(), tk.input))
+        .child(pair(rust_i18n::t!("usage.output").as_ref(), tk.output))
+        .child(pair(
+            rust_i18n::t!("usage.cache_write").as_ref(),
+            tk.cache_write_5m + tk.cache_write_1h,
+        ))
+        .child(pair(
+            rust_i18n::t!("usage.cache_read").as_ref(),
+            tk.cache_read,
+        ))
         .children((s.today_unpriced_events > 0).then(|| {
             secondary(
-                &format!("{} responses unpriced", s.today_unpriced_events),
+                rust_i18n::t!("usage.responses_unpriced", n = s.today_unpriced_events).as_ref(),
                 t,
             )
         }))
@@ -285,10 +297,15 @@ fn day_cost(d: &Day) -> Option<(f64, u64)> {
 }
 
 fn unpriced_note(n: u64) -> String {
-    format!(
-        "+ {n} unpriced {} (model or tier without a price, not in the figure)",
-        if n == 1 { "request" } else { "requests" }
+    rust_i18n::t!(
+        if n == 1 {
+            "usage.unpriced_one"
+        } else {
+            "usage.unpriced_many"
+        },
+        n = n
     )
+    .to_string()
 }
 
 fn daily_cost(u: &UsageCharts, t: Theme) -> Div {
@@ -312,22 +329,28 @@ fn daily_cost(u: &UsageCharts, t: Theme) -> Div {
             .collect::<Vec<_>>()
             .join(" · ")
     });
-    let mut legend_items: Vec<(Div, &'static str)> = u
+    let mut legend_items: Vec<(Div, String)> = u
         .days
         .first()
         .map(|d| {
             d.agents
                 .iter()
-                .map(|(p, _)| (swatch(agent_color(*p, t)), p.label()))
+                .map(|(p, _)| (swatch(agent_color(*p, t)), p.label().to_string()))
                 .collect()
         })
         .unwrap_or_default();
-    legend_items.push((no_data_swatch(t), "No data stored"));
+    legend_items.push((
+        no_data_swatch(t),
+        rust_i18n::t!("usage.no_data_stored").to_string(),
+    ));
     div()
         .flex()
         .flex_col()
         .gap(px(sp::S))
-        .child(section_label("Daily estimated cost", t))
+        .child(section_label(
+            rust_i18n::t!("usage.daily_cost").to_string(),
+            t,
+        ))
         .child(
             div()
                 .flex()
@@ -335,10 +358,12 @@ fn daily_cost(u: &UsageCharts, t: Theme) -> Div {
                 .gap(px(sp::XL))
                 .child(figure(
                     if any_data { approx(total) } else { DASH.into() },
-                    &format!("{USAGE_DAYS} days, estimate at API list prices"),
+                    rust_i18n::t!("usage.days_estimate", n = USAGE_DAYS).as_ref(),
                     t,
                 ))
-                .children(today_line.map(|l| figure(l, "today", t))),
+                .children(
+                    today_line.map(|l| figure(l, rust_i18n::t!("usage.today_lower").as_ref(), t)),
+                ),
         )
         .child(legend(legend_items, t))
         .child(
@@ -352,21 +377,28 @@ fn daily_cost(u: &UsageCharts, t: Theme) -> Div {
                     t,
                 ))
                 .child(day_columns("cost-day", &u.days, max, t, |d, scale| {
-                    let date = date_label(d.start_ms, "%a %b %-d");
+                    let date = date_label(d.start_ms, &rust_i18n::t!("usage.date_day"));
                     let Some((usd, unpriced)) = day_cost(d) else {
-                        return (vec![], format!("{date} · no data stored"));
+                        return (
+                            vec![],
+                            rust_i18n::t!("usage.date_no_data", date = date).to_string(),
+                        );
                     };
                     let parts: Vec<String> = d
                         .agents
                         .iter()
                         .map(|(p, x)| {
-                            let v = x.as_ref().map_or("no data".into(), |x| approx(x.cost_usd));
+                            let v = x
+                                .as_ref()
+                                .map_or(rust_i18n::t!("usage.no_data").to_string(), |x| {
+                                    approx(x.cost_usd)
+                                });
                             format!("{} {v}", p.label())
                         })
                         .collect();
                     let mut tip = format!("{date} · {} ({})", approx(usd), parts.join(", "));
                     if unpriced > 0 {
-                        tip += &format!(" · + {unpriced} unpriced");
+                        tip += rust_i18n::t!("usage.unpriced_suffix", n = unpriced).as_ref();
                     }
                     // Drawn bottom up: the first agent sits on the axis.
                     let segs = d
@@ -383,7 +415,7 @@ fn daily_cost(u: &UsageCharts, t: Theme) -> Div {
         )
         .child(day_x_axis(&u.days, t))
         .children((unpriced > 0).then(|| secondary(&unpriced_note(unpriced), t)))
-        .child(secondary("Hover a day for its total.", t))
+        .child(secondary(rust_i18n::t!("usage.hover_day").as_ref(), t))
 }
 
 /// Estimate with the ≈ sign, as everywhere else.
@@ -409,57 +441,78 @@ fn cache(u: &UsageCharts, t: Theme) -> Div {
         .flex()
         .flex_col()
         .gap(px(sp::S))
-        .child(section_label("Cache efficiency", t))
+        .child(section_label(
+            rust_i18n::t!("usage.cache_efficiency").to_string(),
+            t,
+        ))
         .child(figure(
             match u
                 .cache_saved_usd
                 .filter(|_| u.days.iter().any(|d| day_cost(d).is_some()))
             {
                 // A net loss when cache writes cost more than reads saved.
-                Some(usd) if usd < 0. => {
-                    format!("Net saved by caching ≈ −{}", format::cost(-usd))
-                }
-                Some(usd) => format!("Net saved by caching {}", approx(usd)),
-                None => format!("Net saved by caching {DASH}"),
+                Some(usd) if usd < 0. => rust_i18n::t!(
+                    "usage.net_saved",
+                    value = format!("≈ −{}", format::cost(-usd))
+                )
+                .to_string(),
+                Some(usd) => rust_i18n::t!("usage.net_saved", value = approx(usd)).to_string(),
+                None => rust_i18n::t!("usage.net_saved", value = DASH).to_string(),
             },
-            &format!(
-                "estimate over {USAGE_DAYS} days: what cache reads saved against input, minus what cache writes cost above input, at standard rates"
-            ),
+            rust_i18n::t!("usage.cache_estimate", n = USAGE_DAYS).as_ref(),
             t,
         ))
         .children((u.cache_saved_unpriced > 0).then(|| {
             secondary(
-                &format!(
-                    "{} cache-using {} without a price (model or tier) are not counted",
-                    u.cache_saved_unpriced,
-                    if u.cache_saved_unpriced == 1 { "request" } else { "requests" }
-                ),
+                rust_i18n::t!(
+                    if u.cache_saved_unpriced == 1 {
+                        "usage.cache_unpriced_one"
+                    } else {
+                        "usage.cache_unpriced_many"
+                    },
+                    n = u.cache_saved_unpriced
+                )
+                .as_ref(),
                 t,
             )
         }))
-        .child(secondary(
-            "Bars: cache reads as a share of input-side tokens (input, cache writes and cache reads), all agents.",
-            t,
-        ))
+        .child(secondary(rust_i18n::t!("usage.cache_bars").as_ref(), t))
         .child(
             div()
                 .mt(px(sp::S))
                 .flex()
                 .gap(px(sp::S))
                 .child(y_axis("100%".into(), BAR_CHART_H, t))
-                .child(day_columns("cache-day", &u.days, Some(1.), t, |d, scale| {
-                    let date = date_label(d.start_ms, "%a %b %-d");
-                    if d.agents.iter().all(|(_, x)| x.is_none()) {
-                        return (vec![], format!("{date} · no data stored"));
-                    }
-                    match cache_share(d) {
-                        Some(share) => (
-                            vec![(t.muted, share as f32 * scale)],
-                            format!("{date} · {:.0}% of input-side tokens read from cache", share * 100.),
-                        ),
-                        None => (vec![], format!("{date} · no requests")),
-                    }
-                })),
+                .child(day_columns(
+                    "cache-day",
+                    &u.days,
+                    Some(1.),
+                    t,
+                    |d, scale| {
+                        let date = date_label(d.start_ms, &rust_i18n::t!("usage.date_day"));
+                        if d.agents.iter().all(|(_, x)| x.is_none()) {
+                            return (
+                                vec![],
+                                rust_i18n::t!("usage.date_no_data", date = date).to_string(),
+                            );
+                        }
+                        match cache_share(d) {
+                            Some(share) => (
+                                vec![(t.muted, share as f32 * scale)],
+                                rust_i18n::t!(
+                                    "usage.cache_share",
+                                    date = date,
+                                    percent = format!("{:.0}", share * 100.)
+                                )
+                                .to_string(),
+                            ),
+                            None => (
+                                vec![],
+                                rust_i18n::t!("usage.date_no_requests", date = date).to_string(),
+                            ),
+                        }
+                    },
+                )),
         )
         .child(day_x_axis(&u.days, t))
 }
@@ -503,13 +556,13 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
         .flex()
         .flex_col()
         .gap(px(sp::S))
-        .child(section_label("Today", t))
-        .child(secondary(
-            "One lane per session with requests today, labelled with its first request's time. Solid where API responses are at most 60 s apart, faint between.",
+        .child(section_label(rust_i18n::t!("usage.today").to_string(), t))
+        .child(secondary(rust_i18n::t!("usage.lanes").as_ref(), t));
+    let Some(first) = u.today.iter().map(|(_, l)| l.runs[0].0).min() else {
+        return section.child(secondary(
+            rust_i18n::t!("usage.no_requests_today").as_ref(),
             t,
         ));
-    let Some(first) = u.today.iter().map(|(_, l)| l.runs[0].0).min() else {
-        return section.child(secondary("No requests today.", t));
     };
     // From the whole local hour before the first request to now.
     let start = local_hour_start(first, &Local);
@@ -598,11 +651,17 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
                         .child(date_label(ms, "%H:%M"))
                 }),
         )
-        .child(div().absolute().right(px(0.)).top(px(2.)).child("now"));
+        .child(
+            div()
+                .absolute()
+                .right(px(0.))
+                .top(px(2.))
+                .child(rust_i18n::t!("usage.now").to_string()),
+        );
     section
         .child(div().flex().flex_col().children(lanes))
         .child(axis)
-        .child(secondary("Local time.", t))
+        .child(secondary(rust_i18n::t!("usage.local_time").as_ref(), t))
 }
 
 // ------------------------------------------------------------- plan limits
@@ -610,12 +669,16 @@ fn timeline(u: &UsageCharts, now: i64, t: Theme) -> Div {
 /// "weekly", "5-hour", "daily": the window as people name it.
 pub(super) fn window_name(minutes: Option<u64>) -> String {
     match minutes {
-        Some(10_080) => "weekly".into(),
-        Some(1_440) => "daily".into(),
-        Some(m) if m > 0 && m % 1_440 == 0 => format!("{}-day", m / 1_440),
-        Some(m) if m > 0 && m % 60 == 0 => format!("{}-hour", m / 60),
-        Some(m) => format!("{m}-minute"),
-        None => "plan".into(),
+        Some(10_080) => rust_i18n::t!("usage.weekly").to_string(),
+        Some(1_440) => rust_i18n::t!("usage.daily").to_string(),
+        Some(m) if m > 0 && m % 1_440 == 0 => {
+            rust_i18n::t!("usage.window_day", n = m / 1_440).to_string()
+        }
+        Some(m) if m > 0 && m % 60 == 0 => {
+            rust_i18n::t!("usage.window_hour", n = m / 60).to_string()
+        }
+        Some(m) => rust_i18n::t!("usage.window_minute", n = m).to_string(),
+        None => rust_i18n::t!("usage.plan").to_string(),
     }
 }
 
@@ -628,11 +691,11 @@ where
         return DASH.into();
     };
     let fmt = if (at_s * 1000 - now_ms).abs() < 6 * 86_400_000 {
-        "%a %H:%M"
+        rust_i18n::t!("usage.reset_week")
     } else {
-        "%b %-d %H:%M"
+        rust_i18n::t!("usage.reset_date")
     };
-    at.with_timezone(tz).format(fmt).to_string()
+    at.with_timezone(tz).format(&fmt).to_string()
 }
 
 /// A limit bar's fill: the agent's colour, warning colours as the window
@@ -656,12 +719,12 @@ fn limit_row(p: Provider, w: &RateWindow, l: &RateLimits, now: i64, t: Theme) ->
     let color = limit_color(p, pct, stale, t);
     let mut detail = vec![];
     if let Some(r) = w.resets_at_s {
-        detail.push(format!("resets {}", reset_label(r, now, &Local)));
+        detail.push(rust_i18n::t!("usage.resets", time = reset_label(r, now, &Local)).to_string());
     }
     if let Some(p) = plan {
-        detail.push(format!("plan {p}"));
+        detail.push(rust_i18n::t!("usage.plan_name", name = p).to_string());
     }
-    detail.push(format!("as of {}", format::start_time(as_of, now)));
+    detail.push(rust_i18n::t!("usage.as_of", time = format::start_time(as_of, now)).to_string());
     div()
         .flex()
         .flex_col()
@@ -676,7 +739,10 @@ fn limit_row(p: Provider, w: &RateWindow, l: &RateLimits, now: i64, t: Theme) ->
                         .font_weight(FontWeight::BOLD)
                         .child(format!("{:.0}%", w.used_percent)),
                 )
-                .child(format!("of {} limit used", window_name(w.window_minutes))),
+                .child(
+                    rust_i18n::t!("usage.limit_used", window = window_name(w.window_minutes))
+                        .to_string(),
+                ),
         )
         .child(
             div()
@@ -684,18 +750,18 @@ fn limit_row(p: Provider, w: &RateWindow, l: &RateLimits, now: i64, t: Theme) ->
                 .w_full()
                 .rounded_full()
                 .bg(rgb(t.border))
-                .child(div().h_full().w(relative(pct as f32 / 100.)).rounded_full().bg(rgb(color))),
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(pct as f32 / 100.))
+                        .rounded_full()
+                        .bg(rgb(color)),
+                ),
         )
         .child(secondary(&detail.join(" · "), t))
-        .children(stale.then(|| {
-            secondary(
-                &format!(
-                    "Out of date: the reset time has passed. {} sends a new reading with its next request.",
-                    p.label()
-                ),
-                t,
-            )
-        }))
+        .children(
+            stale.then(|| secondary(rust_i18n::t!("usage.stale", agent = p.label()).as_ref(), t)),
+        )
 }
 
 /// None when every agent with plan limits is hidden.
@@ -707,25 +773,23 @@ fn limits(s: &Snapshot, hidden: &BTreeSet<Provider>, t: Theme) -> Option<Div> {
     if shown.is_empty() {
         return None;
     }
-    let section = div()
-        .flex()
-        .flex_col()
-        .gap(px(sp::M))
-        .child(section_label("Plan limits", t));
+    let section = div().flex().flex_col().gap(px(sp::M)).child(section_label(
+        rust_i18n::t!("usage.plan_limits").to_string(),
+        t,
+    ));
     Some(section.children(shown.into_iter().map(|p| {
         let body = match s.limits.get(&p) {
-            None if p == Provider::ClaudeCode => secondary(
-                "No Claude Code limit data. Claude Code shares it only with a status line command; the README shows how to add one.",
-                t,
-            ),
-            None => secondary(
-                "No Codex limit data yet. Codex reports it with each request.",
-                t,
-            ),
+            None if p == Provider::ClaudeCode => {
+                secondary(rust_i18n::t!("usage.no_claude_limits").as_ref(), t)
+            }
+            None => secondary(rust_i18n::t!("usage.no_codex_limits").as_ref(), t),
             Some(l) => {
                 let windows: Vec<&RateWindow> = l.primary.iter().chain(&l.secondary).collect();
                 if windows.is_empty() {
-                    secondary(&format!("{}'s latest reading had no limit windows.", p.label()), t)
+                    secondary(
+                        rust_i18n::t!("usage.no_windows", agent = p.label()).as_ref(),
+                        t,
+                    )
                 } else {
                     div().flex().flex_col().gap(px(sp::M)).children(
                         windows
@@ -786,7 +850,7 @@ pub(super) fn session_detail(
         .font_weight(FontWeight::MEDIUM)
         .focus_visible(|d| d.underline())
         .child(chevron_left(t.text))
-        .child("Sessions")
+        .child(rust_i18n::t!("usage.sessions").to_string())
         .on_click(move |_, _, cx| {
             view.update(cx, |v, cx| v.show_detail(None, cx)).ok();
         });
@@ -796,18 +860,29 @@ pub(super) fn session_detail(
         .children(notes_gap(notes));
     let detail = s.detail.as_ref().filter(|d| &d.key == key);
     let Some(d) = detail else {
-        return page.child(secondary("Loading requests…", t).mt(px(sp::XL)));
+        return page.child(secondary(rust_i18n::t!("usage.loading").as_ref(), t).mt(px(sp::XL)));
     };
     if d.requests.is_empty() {
-        return page.child(secondary("No requests recorded for this session.", t).mt(px(sp::XL)));
+        return page
+            .child(secondary(rust_i18n::t!("usage.no_requests").as_ref(), t).mt(px(sp::XL)));
     }
     let n = d.requests.len();
     let color = agent_color(key.0, t);
     let first = d.requests[0].ts_ms;
     let last = d.requests[n - 1].ts_ms;
     let x_labels = vec![
-        format!("request 1 · {}", format::start_time(first, s.taken_at_ms)),
-        format!("request {n} · {}", format::start_time(last, s.taken_at_ms)),
+        rust_i18n::t!(
+            "usage.request_time",
+            n = 1,
+            time = format::start_time(first, s.taken_at_ms)
+        )
+        .to_string(),
+        rust_i18n::t!(
+            "usage.request_time",
+            n = n,
+            time = format::start_time(last, s.taken_at_ms)
+        )
+        .to_string(),
     ];
 
     // (a) context size per request.
@@ -823,11 +898,11 @@ pub(super) fn session_detail(
         .flex()
         .flex_col()
         .gap(px(sp::S))
-        .child(section_label("Context size per request", t))
-        .child(secondary(
-            "Input, cache writes and cache reads sent with each request.",
+        .child(section_label(
+            rust_i18n::t!("usage.context_size").to_string(),
             t,
         ))
+        .child(secondary(rust_i18n::t!("usage.context_note").as_ref(), t))
         .children(d.long_context.iter().map(|&x| {
             div()
                 .flex()
@@ -835,10 +910,7 @@ pub(super) fn session_detail(
                 .gap(px(sp::XS))
                 .child(div().w(px(16.)).h(px(2.)).bg(rgb(t.waiting)))
                 .child(secondary(
-                    &format!(
-                        "{}: long-context rates apply above this line",
-                        format::tokens(x)
-                    ),
+                    rust_i18n::t!("usage.long_context", n = format::tokens(x)).as_ref(),
                     t,
                 ))
         }))
@@ -872,14 +944,17 @@ pub(super) fn session_detail(
         .flex()
         .flex_col()
         .gap(px(sp::S))
-        .child(section_label("Cumulative estimated cost", t))
+        .child(section_label(
+            rust_i18n::t!("usage.cumulative_cost").to_string(),
+            t,
+        ))
         .child(figure(
             if unpriced as usize == n {
                 DASH.into()
             } else {
                 approx(sum)
             },
-            &format!("{n} requests, estimate at API list prices"),
+            rust_i18n::t!("usage.requests_estimate", n = n).as_ref(),
             t,
         ))
         .children((unpriced > 0).then(|| secondary(&unpriced_note(unpriced), t)))

@@ -46,14 +46,15 @@ impl Bridge for Dylib {
         let (call, free) = self
             .fns
             .get_or_init(|| load(&self.path, self.events.clone()))
-            .ok_or("the phone bridge did not load")?;
-        let request = CString::new(request.to_string()).map_err(|_| "NUL in request")?;
+            .ok_or(rust_i18n::t!("phones.bridge_load"))?;
+        let request =
+            CString::new(request.to_string()).map_err(|_| rust_i18n::t!("phones.request_nul"))?;
         // SAFETY: a NUL-terminated request; the response is the bridge's malloc'd,
         // NUL-terminated string, copied before it is freed with the bridge's own free.
         let text = unsafe {
             let response = call(request.as_ptr());
             if response.is_null() {
-                return Err("the phone bridge returned nothing".into());
+                return Err(rust_i18n::t!("phones.bridge_empty").into());
             }
             let text = CStr::from_ptr(response).to_string_lossy().into_owned();
             free(response);
@@ -62,7 +63,10 @@ impl Bridge for Dylib {
         let mut v: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         match v.get_mut("ok") {
             Some(ok) => Ok(ok.take()),
-            None => Err(v["error"].as_str().unwrap_or("bad bridge response").into()),
+            None => Err(v["error"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| rust_i18n::t!("phones.bridge_bad").to_string())),
         }
     }
 }

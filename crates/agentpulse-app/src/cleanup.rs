@@ -143,8 +143,15 @@ fn alive(table: &ProcTable, p: ProcessIdentity) -> Option<&ProcInfo> {
 fn names(mut v: Vec<String>) -> String {
     v.sort();
     match v.len() {
-        n @ 4.. => format!("{} and {} more", v[..3].join(", "), n - 3),
-        n @ 2.. => format!("{} and {}", v[..n - 1].join(", "), v[n - 1]),
+        n @ 4.. => {
+            rust_i18n::t!("notify.names_more", names = v[..3].join(", "), n = n - 3).to_string()
+        }
+        n @ 2.. => rust_i18n::t!(
+            "notify.names_and",
+            names = v[..n - 1].join(", "),
+            last = v[n - 1]
+        )
+        .to_string(),
         _ => v.concat(),
     }
 }
@@ -343,24 +350,29 @@ impl Tracker {
             {
                 continue;
             }
-            let body = format!(
-                "{} from a finished {} session is still running.",
-                row.name,
-                row.provider.label()
-            );
+            let body = rust_i18n::t!(
+                "notify.leftover_body",
+                name = row.name,
+                provider = row.provider.label()
+            )
+            .to_string();
             warned.push((body, row.name.clone()));
             row.warned_at_ms = Some(now_ms);
             self.dirty.insert(row.process);
         }
         match warned.len() {
             0 => {}
-            1 => host.notify("Leftover process", &warned[0].0),
+            1 => host.notify(
+                rust_i18n::t!("notify.leftover_title").as_ref(),
+                &warned[0].0,
+            ),
             n => host.notify(
-                &format!("{n} leftover processes"),
-                &format!(
-                    "{} from finished agent sessions are still running.",
-                    names(warned.into_iter().map(|w| w.1).collect())
-                ),
+                rust_i18n::t!("notify.leftovers_title", n = n).as_ref(),
+                rust_i18n::t!(
+                    "notify.leftovers_body",
+                    names = names(warned.into_iter().map(|w| w.1).collect())
+                )
+                .as_ref(),
             ),
         }
 
@@ -396,26 +408,33 @@ impl Tracker {
                     automatic: true,
                 });
                 let hours = (now_ms - ended) / HOUR_MS;
-                let body = format!(
-                    "{} ({} MB) was ended after {hours} hours.",
-                    row.name,
-                    rss >> 20
-                );
+                let body = rust_i18n::t!(
+                    "notify.ended_body",
+                    name = row.name,
+                    mb = rss >> 20,
+                    hours = hours
+                )
+                .to_string();
                 cleaned.push((body, row.name.clone(), rss, hours));
             }
         }
         match cleaned.len() {
             0 => {}
-            1 => host.notify("Ended leftover process", &cleaned[0].0),
+            1 => host.notify(rust_i18n::t!("notify.ended_title").as_ref(), &cleaned[0].0),
             n => {
                 let rss: u64 = cleaned.iter().map(|c| c.2).sum();
                 let hours = cleaned.iter().map(|c| c.3).min().unwrap_or(0);
-                let body = format!(
-                    "{} were ended after {hours} hours, freeing {} MB.",
-                    names(cleaned.into_iter().map(|c| c.1).collect()),
-                    rss >> 20
+                let body = rust_i18n::t!(
+                    "notify.ended_many_body",
+                    names = names(cleaned.into_iter().map(|c| c.1).collect()),
+                    hours = hours,
+                    mb = rss >> 20
+                )
+                .to_string();
+                host.notify(
+                    rust_i18n::t!("notify.ended_many_title", n = n).as_ref(),
+                    &body,
                 );
-                host.notify(&format!("Ended {n} leftover processes"), &body);
             }
         }
 
@@ -439,11 +458,24 @@ impl Tracker {
                 .warned_sessions
                 .insert((s.provider, s.session_id.clone()))
             {
-                let state = if waiting { "waiting on you" } else { "idle" };
                 let hours = (now_ms - last) / HOUR_MS;
-                let body =
-                    format!("{label} session in {project} has been {state} for {hours} hours.");
-                idle_new.push((body, format!("{label} in {project}"), hours));
+                let body = rust_i18n::t!(
+                    if waiting {
+                        "notify.waiting_body"
+                    } else {
+                        "notify.idle_body"
+                    },
+                    provider = label,
+                    project = project,
+                    hours = hours
+                )
+                .to_string();
+                idle_new.push((
+                    body,
+                    rust_i18n::t!("notify.in_project", provider = label, project = project)
+                        .to_string(),
+                    hours,
+                ));
             }
             idle.push(CleanupItem {
                 process: s.process,
@@ -464,14 +496,19 @@ impl Tracker {
 
         match idle_new.len() {
             0 => {}
-            1 => host.notify("Idle session", &idle_new[0].0),
+            1 => host.notify(rust_i18n::t!("notify.idle_title").as_ref(), &idle_new[0].0),
             n => {
                 let hours = idle_new.iter().map(|i| i.2).min().unwrap_or(0);
-                let body = format!(
-                    "{} have had no activity for {hours} hours or more.",
-                    names(idle_new.into_iter().map(|i| i.1).collect())
+                let body = rust_i18n::t!(
+                    "notify.idle_many_body",
+                    names = names(idle_new.into_iter().map(|i| i.1).collect()),
+                    hours = hours
+                )
+                .to_string();
+                host.notify(
+                    rust_i18n::t!("notify.idle_many_title", n = n).as_ref(),
+                    &body,
                 );
-                host.notify(&format!("{n} idle sessions"), &body);
             }
         }
 
@@ -513,8 +550,8 @@ impl Tracker {
                 .is_none_or(|t| now_ms - t >= SUGGEST_REPEAT_MS)
         {
             host.notify(
-                "Memory is low",
-                "Open Clean-up in AgentPulse to end leftover processes.",
+                rust_i18n::t!("notify.memory_title").as_ref(),
+                rust_i18n::t!("notify.memory_body").as_ref(),
             );
             self.last_suggest_ms = Some(now_ms);
         }

@@ -91,10 +91,10 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> 
     };
     let mut out = Vec::new();
     if stopped {
-        out.push(line("Data collection stopped".into()));
+        out.push(line(rust_i18n::t!("menubar.stopped").to_string()));
     }
     match s {
-        None if !stopped => out.push(line("Reading agent data…".into())),
+        None if !stopped => out.push(line(rust_i18n::t!("menubar.reading").to_string())),
         None => {}
         Some(s) => {
             out.push(line(updated(now_ms - s.taken_at_ms)));
@@ -104,21 +104,36 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> 
                 count(s, SessionStatus::Idle),
             );
             out.push(line(if active + waiting + idle == 0 {
-                "No agents running".into()
+                rust_i18n::t!("menubar.none").to_string()
             } else {
-                format!("{active} active · {waiting} waiting · {idle} idle")
+                rust_i18n::t!(
+                    "menubar.counts",
+                    active = active,
+                    waiting = waiting,
+                    idle = idle
+                )
+                .to_string()
             }));
-            out.push(line(format!(
-                "Tokens today  {}",
-                format::tokens(s.today_tokens.total())
-            )));
-            out.push(line(format!(
-                "Est. cost today  {}",
-                format::approx_cost(s.today_cost_usd).unwrap_or(DASH.into())
-            )));
+            out.push(line(
+                rust_i18n::t!(
+                    "menubar.tokens",
+                    value = format::tokens(s.today_tokens.total())
+                )
+                .to_string(),
+            ));
+            out.push(line(
+                rust_i18n::t!(
+                    "menubar.cost",
+                    value = format::approx_cost(s.today_cost_usd).unwrap_or(DASH.into())
+                )
+                .to_string(),
+            ));
             out.push(MenuLine {
                 image: Some(sparkline(&s.rate_history, s.taken_at_ms)),
-                ..line(format!("Output  {:.1} tok/s", s.output_rate))
+                ..line(
+                    rust_i18n::t!("menubar.output", value = format!("{:.1}", s.output_rate))
+                        .to_string(),
+                )
             });
             out.extend(
                 s.limits
@@ -137,7 +152,7 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> 
                         glyph(x.status),
                         truncate(format::project_name(x.project_path.as_deref())),
                         x.provider.label(),
-                        x.status.label()
+                        status_label(x.status)
                     ),
                     trailing: Some(
                         x.wall_ms(s.taken_at_ms)
@@ -156,10 +171,10 @@ pub fn lines(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> Vec<MenuLine> 
 fn updated(age_ms: i64) -> String {
     let s = age_ms.max(0) / 1000;
     match s {
-        _ if age_ms < JUST_NOW_MS => "Updated just now".into(),
-        0..60 => format!("Updated {s} s ago"),
-        60..3_600 => format!("Updated {} min ago", s / 60),
-        _ => format!("Updated {} h ago", s / 3_600),
+        _ if age_ms < JUST_NOW_MS => rust_i18n::t!("menubar.updated_now").to_string(),
+        0..60 => rust_i18n::t!("menubar.updated_seconds", n = s).to_string(),
+        60..3_600 => rust_i18n::t!("menubar.updated_minutes", n = s / 60).to_string(),
+        _ => rust_i18n::t!("menubar.updated_hours", n = s / 3_600).to_string(),
     }
 }
 
@@ -211,8 +226,9 @@ pub fn out_of_date(w: &RateWindow, now_ms: i64) -> bool {
 
 /// " · as of 14:05" for a plan-limit reading taken more than an hour before `now_ms`.
 pub fn as_of(ts_ms: i64, now_ms: i64) -> Option<String> {
-    (now_ms - ts_ms > LIMIT_AS_OF_AFTER_MS)
-        .then(|| format!(" · as of {}", format::start_time(ts_ms, now_ms)))
+    (now_ms - ts_ms > LIMIT_AS_OF_AFTER_MS).then(|| {
+        rust_i18n::t!("menubar.as_of", time = format::start_time(ts_ms, now_ms)).to_string()
+    })
 }
 
 /// The window nearest its limit across all agents, current readings first:
@@ -233,19 +249,42 @@ pub fn tightest_limit(
 
 /// "Codex 5h · 62% used · resets in 1h 12m", or "Codex 5h · Out of date".
 fn limit_text(p: Provider, w: &RateWindow, now_ms: i64) -> String {
-    let name = format!("{} {}", p.label(), short_window(w.window_minutes));
+    let name = format!("{} {}", p.label(), localized_window(w.window_minutes));
     match w.resets_at_s {
-        _ if out_of_date(w, now_ms) => format!("{name} · Out of date"),
-        Some(r) => format!(
-            "{name} · {:.0}% used · resets in {}",
-            w.used_percent,
-            format::duration((r * 1000 - now_ms) as u64)
-        ),
-        None => format!("{name} · {:.0}% used", w.used_percent),
+        _ if out_of_date(w, now_ms) => {
+            rust_i18n::t!("menubar.out_of_date", name = name).to_string()
+        }
+        Some(r) => rust_i18n::t!(
+            "menubar.limit_reset",
+            name = name,
+            percent = format!("{:.0}", w.used_percent),
+            time = format::duration((r * 1000 - now_ms) as u64)
+        )
+        .to_string(),
+        None => rust_i18n::t!(
+            "menubar.limit",
+            name = name,
+            percent = format!("{:.0}", w.used_percent)
+        )
+        .to_string(),
     }
 }
 
 /// "5h", "weekly", "daily", "90m": a window's name in a narrow row.
+fn localized_window(minutes: Option<u64>) -> String {
+    match minutes {
+        Some(10_080) => rust_i18n::t!("menubar.weekly").to_string(),
+        Some(1_440) => rust_i18n::t!("menubar.daily").to_string(),
+        Some(m) if m > 0 && m % 1_440 == 0 => {
+            rust_i18n::t!("menubar.days", n = m / 1_440).to_string()
+        }
+        Some(m) if m > 0 && m % 60 == 0 => rust_i18n::t!("menubar.hours", n = m / 60).to_string(),
+        Some(m) => rust_i18n::t!("menubar.minutes", n = m).to_string(),
+        None => rust_i18n::t!("menubar.plan").to_string(),
+    }
+}
+
+/// Stable English label carried in widget payloads; data, not presentation.
 pub fn short_window(minutes: Option<u64>) -> String {
     match minutes {
         Some(10_080) => "weekly".into(),
@@ -347,25 +386,25 @@ pub fn stale(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> bool {
 /// What VoiceOver says for the menu bar item.
 pub fn accessibility_label(s: Option<&Snapshot>, stopped: bool, now_ms: i64) -> String {
     if stale(s, stopped, now_ms) {
-        return "AgentPulse, not updating".into();
+        return rust_i18n::t!("menubar.not_updating").to_string();
     }
     let Some(s) = s else {
         return "AgentPulse".into();
     };
     let parts: Vec<String> = [
-        (SessionStatus::Waiting, "waiting"),
-        (SessionStatus::Active, "active"),
-        (SessionStatus::Idle, "idle"),
+        (SessionStatus::Waiting, "menubar.access_waiting"),
+        (SessionStatus::Active, "menubar.access_active"),
+        (SessionStatus::Idle, "menubar.access_idle"),
     ]
     .into_iter()
     .map(|(st, word)| (count(s, st), word))
     .filter(|&(n, _)| n > 0)
-    .map(|(n, word)| format!("{n} {word}"))
+    .map(|(n, word)| rust_i18n::t!(word, n = n).to_string())
     .collect();
     if parts.is_empty() {
-        "AgentPulse, no agents running".into()
+        rust_i18n::t!("menubar.none_accessibility").to_string()
     } else {
-        format!("AgentPulse, {}", parts.join(", "))
+        rust_i18n::t!("menubar.accessibility", states = parts.join(", ")).to_string()
     }
 }
 
@@ -558,6 +597,15 @@ pub fn preview(dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn status_label(status: SessionStatus) -> String {
+    match status {
+        SessionStatus::Waiting => rust_i18n::t!("menubar.status_waiting").to_string(),
+        SessionStatus::Active => rust_i18n::t!("menubar.status_active").to_string(),
+        SessionStatus::Idle => rust_i18n::t!("menubar.status_idle").to_string(),
+        SessionStatus::Completed => rust_i18n::t!("menubar.status_completed").to_string(),
+        SessionStatus::Failed => rust_i18n::t!("menubar.status_failed").to_string(),
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

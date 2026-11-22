@@ -127,8 +127,11 @@ pub fn run(
         ]);
         cx.bind_keys(text_field::bindings());
         cx.set_menus([Menu::new("AgentPulse").items([
-            MenuItem::action("Close Window", CloseWindow),
-            MenuItem::action("Quit AgentPulse", Quit),
+            MenuItem::action(
+                rust_i18n::t!("common.close_window").to_string(),
+                CloseWindow,
+            ),
+            MenuItem::action(rust_i18n::t!("common.quit").to_string(), Quit),
         ])]);
         let mtm = MainThreadMarker::new().expect("GPUI runs this on the main thread");
         let item = StatusItem::new(
@@ -136,6 +139,8 @@ pub fn run(
             Box::new(move |action| {
                 tx.try_send(action).ok();
             }),
+            &rust_i18n::t!("menubar.open"),
+            &rust_i18n::t!("menubar.quit"),
         );
         let hub = cx.new(|cx| Hub::new(rx, item, settings.clone(), phones, cx));
         #[cfg(feature = "screenshot")]
@@ -402,14 +407,14 @@ impl Ribbon {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::NeedsYou => "needs you",
-            Self::Sprinting => "sprinting",
-            Self::Working => "working",
-            Self::Idle => "idle",
-            Self::Failed => "failed",
-            Self::Ended => "ended",
+            Self::NeedsYou => rust_i18n::t!("overview.needs_you").to_string(),
+            Self::Sprinting => rust_i18n::t!("overview.sprinting").to_string(),
+            Self::Working => rust_i18n::t!("overview.working").to_string(),
+            Self::Idle => rust_i18n::t!("overview.idle").to_string(),
+            Self::Failed => rust_i18n::t!("overview.failed").to_string(),
+            Self::Ended => rust_i18n::t!("overview.ended").to_string(),
         }
     }
 }
@@ -434,8 +439,6 @@ enum Screen {
     Phones,
     Settings,
 }
-
-const STOPPED: &str = "Data collection stopped. Restart AgentPulse.";
 
 /// A row cat's session. Keyed by provider too: session ids are unique per agent only.
 type CatKey = (Provider, String);
@@ -518,14 +521,22 @@ impl AppView {
         window.focus(&focus, cx);
         let relay_field = cx.new(|cx| {
             TextField::new(
-                "Relay address",
-                "Your own relay (optional)",
+                rust_i18n::t!("phones.relay_address").to_string(),
+                rust_i18n::t!("phones.own_relay").to_string(),
                 false,
                 window,
                 cx,
             )
         });
-        let key_field = cx.new(|cx| TextField::new("Relay key", "Relay key", true, window, cx));
+        let key_field = cx.new(|cx| {
+            TextField::new(
+                rust_i18n::t!("phones.relay_key").to_string(),
+                rust_i18n::t!("phones.relay_key").to_string(),
+                true,
+                window,
+                cx,
+            )
+        });
         let mut subscriptions = subscriptions;
         subscriptions.push(
             cx.subscribe(&relay_field, |this, field, _: &Submitted, cx| {
@@ -1074,22 +1085,21 @@ fn table_cat_w() -> f32 {
 }
 
 const SESSION_COLUMNS: [Column; 9] = [
-    col("Status", 128., false),
-    col("Project", 0., false),
-    col("Model", 104., false),
-    col("Started", 92., true),
-    col("Duration", 68., true),
-    col("Active (est.)", 80., true),
-    col("Tokens", 56., true),
-    col("Est. cost", 72., true),
-    col("Claude Code", 76., true),
+    col("common.status", 128., false),
+    col("common.project", 0., false),
+    col("common.model", 104., false),
+    col("common.started", 92., true),
+    col("common.duration", 68., true),
+    col("common.active_est", 80., true),
+    col("common.tokens", 56., true),
+    col("common.est_cost", 72., true),
+    col("common.claude_code", 76., true),
 ];
 /// The narrowest the project column gets before the table scrolls sideways.
 const PROJECT_MIN: f32 = 140.;
 /// Left out where the whole table does not fit: Model, Started and Claude
 /// Code's own cost record, so the columns shown end on a whole column.
 const NARROW_HIDDEN: [usize; 3] = [2, 3, 8];
-const NARROW_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Widen the window for Model, Started and Claude Code's own cost record.";
 
 /// The Sessions columns shown in a window this wide.
 fn session_columns(window_width: f32) -> Vec<usize> {
@@ -1112,12 +1122,6 @@ fn table_width(columns: &[usize]) -> f32 {
         + (columns.len() - 1) as f32 * TABLE_GAP
         + PROJECT_MIN
 }
-/// Below the Sessions table: what the two cost columns are.
-const COST_NOTE: &str = "Est. cost is AgentPulse's estimate at API list prices. Claude Code is the \
-    session's own cost record, covering the Claude Code run that last wrote it and written when a \
-    session ends or saves its state, so a running session often has none yet (—). +? means Claude Code had no price for a model it used. \
-    Codex keeps no such record, so its sessions always show —.";
-
 /// Peak of the chart's y axis: the smallest 1, 2, 3, 4, 5, 6 or 8 times a power of ten
 /// at or above the history's peak. None when there is nothing to scale.
 fn axis_max(history: &[f32]) -> Option<f32> {
@@ -1150,13 +1154,43 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme();
         let nav = [
-            self.nav("Overview", Screen::Overview, t, cx),
-            self.nav("Sessions", Screen::Sessions, t, cx),
-            self.nav("Usage", Screen::Usage, t, cx),
-            self.nav("Clean-up", Screen::Cleanup, t, cx),
-            self.nav("Cats", Screen::Cats, t, cx),
-            self.nav("Phones", Screen::Phones, t, cx),
-            self.nav("Settings", Screen::Settings, t, cx),
+            self.nav(
+                rust_i18n::t!("overview.title").to_string(),
+                Screen::Overview,
+                t,
+                cx,
+            ),
+            self.nav(
+                rust_i18n::t!("sessions.title").to_string(),
+                Screen::Sessions,
+                t,
+                cx,
+            ),
+            self.nav(
+                rust_i18n::t!("usage.title").to_string(),
+                Screen::Usage,
+                t,
+                cx,
+            ),
+            self.nav(
+                rust_i18n::t!("cleanup.title").to_string(),
+                Screen::Cleanup,
+                t,
+                cx,
+            ),
+            self.nav(rust_i18n::t!("cats.title").to_string(), Screen::Cats, t, cx),
+            self.nav(
+                rust_i18n::t!("phones.title").to_string(),
+                Screen::Phones,
+                t,
+                cx,
+            ),
+            self.nav(
+                rust_i18n::t!("settings.title").to_string(),
+                Screen::Settings,
+                t,
+                cx,
+            ),
         ];
         let width = f32::from(window.viewport_size().width);
         let view = cx.weak_entity();
@@ -1195,9 +1229,9 @@ impl Render for AppView {
                 .justify_center()
                 .text_color(rgb(t.muted))
                 .child(if hub.stopped {
-                    STOPPED
+                    rust_i18n::t!("common.stopped").to_string()
                 } else {
-                    "Reading agent data…"
+                    rust_i18n::t!("common.reading").to_string()
                 })
                 .into_any_element(),
             (Screen::Overview, Some(s)) => self
@@ -1311,19 +1345,26 @@ fn roster(
 fn ago(ms: i64) -> String {
     let m = ms.max(0) / 60_000;
     match m {
-        0 => "under 1 min".into(),
-        1..60 => format!("{m} min"),
-        60..1_440 => format!("{} h {:02} min", m / 60, m % 60),
-        _ => format!("{} d {} h", m / 1_440, m % 1_440 / 60),
+        0 => rust_i18n::t!("format.under_minute").to_string(),
+        1..60 => rust_i18n::t!("format.minutes", minutes = m).to_string(),
+        60..1_440 => rust_i18n::t!(
+            "format.span_hours",
+            hours = m / 60,
+            minutes = format!("{:02}", m % 60)
+        )
+        .to_string(),
+        _ => {
+            rust_i18n::t!("format.span_days", days = m / 1_440, hours = m % 1_440 / 60).to_string()
+        }
     }
 }
 
 /// "118 tok/s", "4.2 tok/s".
 fn rate_text(r: f32) -> String {
     if r >= 9.95 {
-        format!("{r:.0} tok/s")
+        rust_i18n::t!("overview.rate", rate = format!("{r:.0}")).to_string()
     } else {
-        format!("{r:.1} tok/s")
+        rust_i18n::t!("overview.rate", rate = format!("{r:.1}")).to_string()
     }
 }
 
@@ -1347,27 +1388,27 @@ fn note(x: &AgentSession, r: Ribbon, now_ms: i64) -> String {
         .map(|ms| format::start_time(ms, now_ms));
     match r {
         Ribbon::NeedsYou => match since {
-            Some(s) => format!("Needs you for {s}"),
-            None => "Needs you".into(),
+            Some(s) => rust_i18n::t!("overview.need_since", time = s).to_string(),
+            None => rust_i18n::t!("overview.need").to_string(),
         },
         Ribbon::Sprinting | Ribbon::Working => {
             let mut line = rate_text(x.output_rate);
             if let Some(c) = x.resources.value().and_then(|r| r.cpu_percent) {
-                line += &format!(" · CPU {c:.0}%");
+                line += &rust_i18n::t!("overview.cpu", percent = format!("{c:.0}"));
             }
             line
         }
         Ribbon::Idle => match since {
-            Some(s) => format!("Idle {s}"),
-            None => "Idle".into(),
+            Some(s) => rust_i18n::t!("overview.idle_since", time = s).to_string(),
+            None => rust_i18n::t!("overview.idle_title").to_string(),
         },
         Ribbon::Failed => match ended_at {
-            Some(at) => format!("Failed {at} · API error"),
-            None => "Failed · API error".into(),
+            Some(at) => rust_i18n::t!("overview.failed_at", time = at).to_string(),
+            None => rust_i18n::t!("overview.failed_api").to_string(),
         },
         Ribbon::Ended => match ended_at {
-            Some(at) => format!("Ended {at}"),
-            None => "Ended".into(),
+            Some(at) => rust_i18n::t!("overview.ended_at", time = at).to_string(),
+            None => rust_i18n::t!("overview.ended_title").to_string(),
         },
     }
 }
@@ -1397,16 +1438,16 @@ impl AppView {
 
     fn nav(
         &self,
-        label: &'static str,
+        label: String,
         screen: Screen,
         t: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
         let on = self.screen == screen;
         div()
-            .id(label)
+            .id(SharedString::from(label.clone()))
             .role(Role::Tab)
-            .aria_label(label)
+            .aria_label(label.clone())
             .aria_selected(on)
             // One point less padding makes room for the focus ring's border,
             // so the sidebar lays out exactly as it did without one.
@@ -1421,6 +1462,7 @@ impl AppView {
                     d.text_color(rgb(t.muted)).hover(|s| s.bg(rgb(t.surface)))
                 }
             })
+            .truncate()
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.screen = screen;
@@ -1462,15 +1504,23 @@ impl AppView {
                 .gap(px(sp::S))
                 .child(pill(
                     &match need {
-                        0 => "no one needs you".to_string(),
-                        1 => "1 needs you".to_string(),
-                        n => format!("{n} need you"),
+                        0 => rust_i18n::t!("overview.none_need").to_string(),
+                        1 => rust_i18n::t!("overview.one_need").to_string(),
+                        n => rust_i18n::t!("overview.many_need", count = n).to_string(),
                     },
                     need > 0,
                     t,
                 ))
-                .child(pill(&format!("{working} working"), false, t))
-                .child(pill(&format!("{resting} resting"), false, t))
+                .child(pill(
+                    rust_i18n::t!("overview.working_count", count = working).as_ref(),
+                    false,
+                    t,
+                ))
+                .child(pill(
+                    rust_i18n::t!("overview.resting_count", count = resting).as_ref(),
+                    false,
+                    t,
+                ))
         });
         div()
             .id("overview")
@@ -1489,7 +1539,7 @@ impl AppView {
                     .flex_wrap()
                     .items_center()
                     .gap(px(sp::M))
-                    .child(heading("Roster"))
+                    .child(heading(rust_i18n::t!("overview.roster").to_string()))
                     .children(pills)
                     .child(today_figure(s, t).ml_auto()),
             )
@@ -1533,7 +1583,7 @@ impl AppView {
         div()
             .id(("cell", i))
             .role(Role::Button)
-            .aria_label(label)
+            .aria_label(label.clone())
             .tab_index(0)
             .cursor_pointer()
             .p(px(RING))
@@ -1661,12 +1711,12 @@ impl AppView {
                             div()
                                 .text_size(px(ty::PLATE))
                                 .font_weight(FontWeight::EXTRA_BOLD)
-                                .child("No agents running"),
+                                .child(rust_i18n::t!("overview.no_agents").to_string()),
                         )
                         .child(
                             div()
                                 .text_color(rgb(t.muted))
-                                .child("Start Claude Code or Codex and it will appear here."),
+                                .child(rust_i18n::t!("overview.start_agent").to_string()),
                         ),
                 ),
         )
@@ -1681,22 +1731,33 @@ impl AppView {
         else {
             return div()
                 .child(heading(key.0.label()))
-                .child(secondary("This session is no longer listed.", t));
+                .child(secondary(rust_i18n::t!("sessions.missing").as_ref(), t));
         };
         let r = Ribbon::of(x.status, self.sprinting(x));
         let path = x.project_path.as_deref();
-        let mut sub = vec![path.map_or("project path unknown".into(), format::display_path)];
+        let mut sub = vec![path.map_or(
+            rust_i18n::t!("common.unknown_path").to_string(),
+            format::display_path,
+        )];
         if let Some(m) = &x.model {
             sub.push(m.clone());
         }
         let mut when = vec![];
         if let Some(ms) = x.started_at_ms {
-            when.push(format!("started {}", format::start_time(ms, s.taken_at_ms)));
+            when.push(
+                rust_i18n::t!(
+                    "sessions.started",
+                    time = format::start_time(ms, s.taken_at_ms)
+                )
+                .to_string(),
+            );
         }
         if let Some(ms) = x.wall_ms(s.taken_at_ms) {
             when.push(format::duration(ms));
         }
-        when.push(format!("{} active (est.)", format::duration(x.active_ms)));
+        when.push(
+            rust_i18n::t!("sessions.active", time = format::duration(x.active_ms)).to_string(),
+        );
         div()
             .flex()
             .items_center()
@@ -1725,9 +1786,10 @@ impl AppView {
                     .child(secondary(&when.join(" · "), t))
                     .children((x.provider == Provider::ClaudeCode).then(|| {
                         secondary(
-                            &format!(
-                                "Claude Code's own cost record: {}",
-                                format::recorded_cost(x.recorded_cost).unwrap_or(DASH.into())
+                            &rust_i18n::t!(
+                                "sessions.recorded_cost",
+                                cost =
+                                    format::recorded_cost(x.recorded_cost).unwrap_or(DASH.into())
                             ),
                             t,
                         )
@@ -1787,7 +1849,7 @@ fn facts(x: &AgentSession, t: Theme) -> Div {
                 .flex()
                 .gap(px(3.))
                 .child(figure(format::tokens(x.tokens.total())).text_color(rgb(t.text)))
-                .child("tok"),
+                .child(rust_i18n::t!("overview.tok").to_string()),
         )
         .child(x.provider.label())
 }
@@ -1816,8 +1878,8 @@ fn pill(text: &str, need: bool, t: Theme) -> Div {
 /// Today's estimated cost and the fullest plan limit, at the right of the header.
 fn today_figure(s: &Snapshot, t: Theme) -> Div {
     let (cost, what) = match format::approx_cost(s.today_cost_usd) {
-        Some(c) => (c, "today · estimate"),
-        None => (DASH.into(), "today · no price for today's models"),
+        Some(c) => (c, rust_i18n::t!("overview.today_estimate").to_string()),
+        None => (DASH.into(), rust_i18n::t!("overview.no_price").to_string()),
     };
     let limit = crate::menubar::tightest_limit(&s.limits, s.taken_at_ms).map(|(p, l, w)| {
         (
@@ -1827,17 +1889,22 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
         )
     });
     let limit = match limit {
-        None => secondary(&format!("Plan limit {DASH}"), t),
-        Some((p, w, as_of)) if crate::menubar::out_of_date(w, s.taken_at_ms) => {
-            secondary(&format!("{} limit out of date{as_of}", p.label()), t)
-        }
+        None => secondary(
+            rust_i18n::t!("overview.plan_limit", value = DASH).as_ref(),
+            t,
+        ),
+        Some((p, w, as_of)) if crate::menubar::out_of_date(w, s.taken_at_ms) => secondary(
+            rust_i18n::t!("overview.limit_stale", provider = p.label(), as_of = as_of).as_ref(),
+            t,
+        ),
         Some((p, w, as_of)) => {
             let pct = w.used_percent.clamp(0., 100.);
             let resets = w.resets_at_s.map(|r| {
-                format!(
-                    " · resets {}",
-                    charts::reset_label(r, s.taken_at_ms, &chrono::Local)
+                rust_i18n::t!(
+                    "overview.resets",
+                    time = charts::reset_label(r, s.taken_at_ms, &chrono::Local)
                 )
+                .to_string()
             });
             div()
                 .flex()
@@ -1881,7 +1948,7 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .child(cost),
         )
-        .child(secondary(what, t))
+        .child(secondary(&what, t))
         .child(limit)
 }
 
@@ -1889,12 +1956,12 @@ fn today_figure(s: &Snapshot, t: Theme) -> Div {
 fn legend(t: Theme) -> Div {
     div().flex().flex_wrap().gap(px(sp::L)).children(
         [
-            (t.need, "needs you"),
-            (t.sprint, "sprinting"),
-            (t.work, "working"),
-            (t.idle, "idle"),
-            (t.fail, "failed"),
-            (t.ended, "ended"),
+            (t.need, rust_i18n::t!("overview.needs_you").to_string()),
+            (t.sprint, rust_i18n::t!("overview.sprinting").to_string()),
+            (t.work, rust_i18n::t!("overview.working").to_string()),
+            (t.idle, rust_i18n::t!("overview.idle").to_string()),
+            (t.fail, rust_i18n::t!("overview.failed").to_string()),
+            (t.ended, rust_i18n::t!("overview.ended").to_string()),
         ]
         .map(|(c, label)| {
             div()
@@ -1910,7 +1977,7 @@ fn legend(t: Theme) -> Div {
                             d.border_1().border_color(rgb(t.ended_text))
                         }),
                 )
-                .child(secondary(label, t))
+                .child(secondary(&label, t))
         }),
     )
 }
@@ -1929,15 +1996,16 @@ fn card(t: Theme) -> Div {
 
 /// Indexing note and error banner, shown between the title and the content.
 fn notes(s: &Snapshot, stopped: bool, t: Theme) -> Vec<Div> {
+    let stopped_message = rust_i18n::t!("common.stopped");
     let errors: Vec<&str> = s
         .errors
         .iter()
         .map(String::as_str)
-        .chain(stopped.then_some(STOPPED))
+        .chain(stopped.then_some(stopped_message.as_ref()))
         .collect();
     let mut notes = Vec::new();
     if s.indexing && !stopped {
-        notes.push(secondary("Indexing history…", t));
+        notes.push(secondary(rust_i18n::t!("overview.indexing").as_ref(), t));
     }
     if !errors.is_empty() {
         notes.push(
@@ -1961,7 +2029,7 @@ fn notes(s: &Snapshot, stopped: bool, t: Theme) -> Vec<Div> {
 /// The agents' CPU and memory, and the whole Mac's GPU, as text.
 fn machine_line(s: &Snapshot, t: Theme) -> Div {
     let fig = |v: String| div().font_weight(FontWeight::MEDIUM).child(v);
-    let word = |v: &'static str| div().text_color(rgb(t.muted)).child(v);
+    let word = |v: &str| div().text_color(rgb(t.muted)).child(v.to_string());
     let dot = || word("·");
     let cpu = s.agents_cpu_percent.map(|c| format!("{c:.1}%"));
     let gpu = s.system_gpu_percent.value().map(|g| format!("{g}%"));
@@ -1971,11 +2039,13 @@ fn machine_line(s: &Snapshot, t: Theme) -> Div {
         .flex_wrap()
         .gap(px(sp::XS))
         .text_size(px(ty::LABEL))
-        .child(word("All agents: CPU"))
+        .child(word(rust_i18n::t!("overview.all_cpu").as_ref()))
         .child(fig(cpu.clone().unwrap_or(DASH.into())))
-        .when(cpu.is_some(), |d| d.child(word("of one core")))
+        .when(cpu.is_some(), |d| {
+            d.child(word(rust_i18n::t!("overview.one_core").as_ref()))
+        })
         .child(dot())
-        .child(word("RAM"))
+        .child(word(&rust_i18n::t!("overview.ram")))
         .child(fig(s.agents_rss_bytes.map_or(DASH.into(), format::bytes)))
         .child(dot())
         .child(
@@ -1983,15 +2053,20 @@ fn machine_line(s: &Snapshot, t: Theme) -> Div {
                 .id("gpu")
                 .flex()
                 .gap(px(sp::XS))
-                .child(word("GPU"))
-                .child(gpu.clone().map_or(word("unavailable"), fig))
-                .when(gpu.is_some(), |d| d.child(word("whole Mac")))
+                .child(word(&rust_i18n::t!("overview.gpu")))
+                .child(
+                    gpu.clone()
+                        .map_or(word(rust_i18n::t!("overview.unavailable").as_ref()), fig),
+                )
+                .when(gpu.is_some(), |d| {
+                    d.child(word(rust_i18n::t!("overview.whole_mac").as_ref()))
+                })
                 .tooltip(move |_, cx| {
                     cx.new(|_| Tooltip {
                         text: if has_gpu {
-                            "GPU use of the whole Mac, not of any one agent"
+                            rust_i18n::t!("overview.gpu_tip").to_string()
                         } else {
-                            "Not readable on this Mac"
+                            rust_i18n::t!("overview.gpu_unreadable").to_string()
                         }
                         .into(),
                         t,
@@ -2047,7 +2122,7 @@ fn rate(
     div()
         .flex()
         .flex_col()
-        .child(section_label("Output rate", t).mb(px(sp::S)))
+        .child(section_label(rust_i18n::t!("overview.output_rate").to_string(), t).mb(px(sp::S)))
         .child(
             div()
                 .flex()
@@ -2064,7 +2139,7 @@ fn rate(
                                 .font_weight(FontWeight::EXTRA_BOLD)
                                 .child(format!("{:.1}", s.output_rate)),
                         )
-                        .child(secondary("tok/s, 30 s average, all agents", t)),
+                        .child(secondary(rust_i18n::t!("overview.rate_note").as_ref(), t)),
                 )
                 .child(
                     div()
@@ -2144,8 +2219,8 @@ fn rate(
                                 .justify_between()
                                 .text_size(px(ty::LABEL))
                                 .text_color(rgb(t.muted))
-                                .child("2 min ago")
-                                .child("now"),
+                                .child(rust_i18n::t!("format.two_minutes_ago").to_string())
+                                .child(rust_i18n::t!("format.now").to_string()),
                         ),
                 ),
         )
@@ -2179,12 +2254,17 @@ impl AppView {
                     .flex()
                     .items_baseline()
                     .gap(px(sp::M))
-                    .child(heading("Sessions"))
+                    .child(heading(rust_i18n::t!("sessions.title").to_string()))
                     .child(secondary(
-                        &format!(
-                            "{n} {} in the last 24 hours or still running",
-                            if n == 1 { "session" } else { "sessions" }
-                        ),
+                        rust_i18n::t!(
+                            if n == 1 {
+                                "sessions.count_one"
+                            } else {
+                                "sessions.count_other"
+                            },
+                            count = n
+                        )
+                        .as_ref(),
                         t,
                     )),
             )
@@ -2316,10 +2396,20 @@ impl AppView {
                                     })
                             }))
                             .child(
-                                secondary(if show(8) { COST_NOTE } else { NARROW_NOTE }, t)
-                                    .mt(px(sp::M)),
+                                secondary(
+                                    &rust_i18n::t!(if show(8) {
+                                        "sessions.cost_note"
+                                    } else {
+                                        "sessions.narrow_note"
+                                    }),
+                                    t,
+                                )
+                                .mt(px(sp::M)),
                             )
-                            .child(secondary("Click a session for its requests.", t).mt(px(sp::S))),
+                            .child(
+                                secondary(rust_i18n::t!("sessions.click").as_ref(), t)
+                                    .mt(px(sp::S)),
+                            ),
                     ),
             )
     }
@@ -2333,8 +2423,8 @@ fn heading(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-fn section_label(text: &'static str, t: Theme) -> Div {
-    secondary(text, t).font_weight(FontWeight::BOLD)
+fn section_label(text: impl Into<SharedString>, t: Theme) -> Div {
+    secondary(text.into().as_ref(), t).font_weight(FontWeight::BOLD)
 }
 
 fn secondary(text: &str, t: Theme) -> Div {
@@ -2360,7 +2450,11 @@ fn header(columns: &[Column], t: Theme) -> Div {
         } else {
             div().w(px(c.width)).flex_none()
         };
-        d = d.child(cell.when(c.numeric, |c| c.text_right()).child(c.title));
+        d = d.child(
+            cell.when(c.numeric, |c| c.text_right())
+                .truncate()
+                .child(rust_i18n::t!(c.title).to_string()),
+        );
     }
     d
 }
@@ -2387,7 +2481,10 @@ fn project_cell(s: &AgentSession, t: Theme) -> Div {
                 &format!(
                     "{} · {}",
                     s.provider.label(),
-                    path.map_or("project path unknown".into(), format::display_path)
+                    path.map_or(
+                        rust_i18n::t!("common.unknown_path").to_string(),
+                        format::display_path
+                    )
                 ),
                 t,
             )

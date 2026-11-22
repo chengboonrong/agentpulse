@@ -91,7 +91,7 @@ impl Qr {
         let size = v["width"].as_u64().unwrap_or(0) as usize;
         let rgba = v["rgba"].as_str().and_then(from_b64url).unwrap_or_default();
         if size == 0 || v["height"].as_u64() != Some(size as u64) || rgba.len() != size * size * 4 {
-            return Err("bad QR image from the bridge".into());
+            return Err(rust_i18n::t!("phones.bad_qr").into());
         }
         Ok(Qr {
             size,
@@ -417,7 +417,10 @@ impl Core {
                             Some(stored.is_some_and(|s| bound_key(&s, own.as_deref()).is_some()));
                         self.key_checked = own;
                     }
-                    Err(e) => self.error = Some(format!("Cannot keep the relay key: {e}")),
+                    Err(e) => {
+                        self.error =
+                            Some(rust_i18n::t!("phones.keep_key_error", error = e).to_string())
+                    }
                 }
             }
         }
@@ -429,7 +432,7 @@ impl Core {
     fn start_pairing(&mut self, now: i64) -> Result<Started, String> {
         self.error = None;
         if self.bridge.is_none() {
-            return Err("Phones need the app bundle.".into());
+            return Err(rust_i18n::t!("phones.bundle_error").into());
         }
         let own = self.own_relay();
         self.cancel_pairing(now);
@@ -463,7 +466,7 @@ impl Core {
         });
         if !self.save() {
             self.forget(&id, false, now);
-            return Err(format!("Cannot save {}.", store::FILE_NAME));
+            return Err(rust_i18n::t!("phones.save_error", file = store::FILE_NAME).to_string());
         }
         let created = self.relay.call(
             "POST",
@@ -473,11 +476,8 @@ impl Core {
         );
         let failure = match created {
             Ok(Reply { status: 201, .. }) => None,
-            Ok(r) => Some(format!(
-                "The relay refused the pairing (HTTP {}).",
-                r.status
-            )),
-            Err(e) => Some(format!("Cannot reach the relay: {e}")),
+            Ok(r) => Some(rust_i18n::t!("phones.refused_error", status = r.status).to_string()),
+            Err(e) => Some(rust_i18n::t!("phones.reach_error", error = e).to_string()),
         };
         if let Some(failure) = failure {
             self.forget(&id, false, now);
@@ -491,7 +491,7 @@ impl Core {
             Ok(qr) => qr,
             Err(e) => {
                 self.forget(&id, true, now);
-                return Err(format!("Cannot make the QR code: {e}"));
+                return Err(rust_i18n::t!("phones.qr_error", error = e).to_string());
             }
         };
         self.live.entry(id.clone()).or_default().next_poll_ms = now + POLL_WAITING_MS;
@@ -538,7 +538,7 @@ impl Core {
         // Keys first: if they stay, so does the record, and the user can try again.
         if let Err(e) = self.bridge(&json!({"op": "pair.delete", "id": id})) {
             tracing::warn!(error = %e, "cannot delete a pairing's keys");
-            self.error = Some(format!("Cannot remove the phone: {e}. Try again."));
+            self.error = Some(rust_i18n::t!("phones.remove_error", error = e).to_string());
             return;
         }
         self.forget(id, at_relay, now);
@@ -599,7 +599,7 @@ impl Core {
                     let created = self.pairing(&id).map_or(now, |p| p.created_at_ms);
                     if now >= created + EXPIRY_MS {
                         self.forget(&id, true, now);
-                        self.error = Some("The pairing code expired.".into());
+                        self.error = Some(rust_i18n::t!("phones.expired_error").into());
                     } else if poll_due && !backoff && self.shown(&id) {
                         self.live_mut(&id).next_poll_ms = now + POLL_WAITING_MS;
                         self.poll(&id, now);
@@ -813,7 +813,7 @@ impl Core {
             Err(e) => {
                 tracing::warn!(error = %e, "a phone's hello did not check out; pairing deleted");
                 self.forget(id, true, now);
-                self.error = Some("The phone's answer did not check out. Pair again.".into());
+                self.error = Some(rust_i18n::t!("phones.answer_error").into());
             }
         }
     }
@@ -847,7 +847,7 @@ impl Core {
             401 | 404 if method != "DELETE" => match self.pairing(id).map(|p| p.state) {
                 Some(State::Waiting) => {
                     self.forget(id, false, now);
-                    self.error = Some("The relay dropped the pairing. Pair again.".into());
+                    self.error = Some(rust_i18n::t!("phones.dropped_error").into());
                 }
                 Some(State::Paired) => {
                     if let Some(p) = self.pairing_mut(id) {
@@ -929,7 +929,7 @@ impl Core {
             Some("listener-failed") => {
                 let error = e["error"].as_str().unwrap_or_default();
                 tracing::warn!(error, "the direct listener failed");
-                self.error = Some(format!("Direct connection unavailable: {error}"));
+                self.error = Some(rust_i18n::t!("phones.direct_error", error = error).to_string());
                 self.listener = None;
                 self.listener_retry_ms = now + LISTENER_RETRY_MS;
             }
@@ -969,7 +969,7 @@ impl Core {
         if let Err(e) = self.bridge(&set) {
             // The bridge stopped the listener; try again in 30 s.
             tracing::warn!(error = %e, "cannot set the direct listener");
-            self.error = Some(format!("Direct connection unavailable: {e}"));
+            self.error = Some(rust_i18n::t!("phones.direct_error", error = e).to_string());
             self.listener = None;
             self.listener_retry_ms = now + LISTENER_RETRY_MS;
             return;
@@ -1045,7 +1045,7 @@ impl Core {
     fn bridge(&self, request: &Value) -> Result<Value, String> {
         self.bridge
             .as_ref()
-            .ok_or("Phones need the app bundle.")?
+            .ok_or(rust_i18n::t!("phones.bundle_error"))?
             .call(request)
     }
 

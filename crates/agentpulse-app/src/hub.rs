@@ -260,8 +260,10 @@ impl Hub {
             available = ?self.available().map(|r| r.version.as_str()),
             "update check done"
         );
-        self.item
-            .set_update(self.available().map(|r| r.version.as_str()));
+        let update_title = self
+            .available()
+            .map(|r| rust_i18n::t!("menubar.update", version = &r.version).to_string());
+        self.item.set_update(update_title.as_deref());
         self.phones
             .set_update(self.available().map(|r| r.version.clone()));
         self.schedule_check(cx);
@@ -327,7 +329,7 @@ impl Hub {
         let relay = settings::relay_address(text);
         self.phone_error = relay
             .is_none()
-            .then(|| "That isn't a relay address: it starts with https://.".to_string());
+            .then(|| rust_i18n::t!("phones.invalid_address").to_string());
         match relay {
             Some(relay) => self.change_phones(|p| p.relay = Some(relay), cx),
             None => cx.notify(),
@@ -351,11 +353,13 @@ impl Hub {
             .filter(|k| !k.is_empty() && k.len() <= 256 && !k.contains(char::is_whitespace));
         self.phone_error = key
             .is_none()
-            .then(|| "That isn't a relay key: one word, at most 256 characters.".to_string());
+            .then(|| rust_i18n::t!("phones.invalid_key").to_string());
         // Bound to the address it is saved for, so it never goes to another relay.
         match (key, self.settings.phones().relay) {
             (Some(key), Some(relay)) => self.phones.set_relay_key(Some((relay, key.to_string()))),
-            (Some(_), None) => self.phone_error = Some("Set your relay's address first.".into()),
+            (Some(_), None) => {
+                self.phone_error = Some(rust_i18n::t!("phones.address_first").to_string())
+            }
             (None, _) => {}
         }
         cx.notify();
@@ -376,7 +380,7 @@ impl Hub {
                 hub.phone_error = match result {
                     Ok(Ok(_)) => None,
                     Ok(Err(e)) => Some(e),
-                    Err(_) => Some("The phone link stopped. Restart AgentPulse.".into()),
+                    Err(_) => Some(rust_i18n::t!("phones.link_stopped").to_string()),
                 };
                 cx.notify();
             })

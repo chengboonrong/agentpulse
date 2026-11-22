@@ -9,7 +9,7 @@ use agentpulse_process::Pressure;
 use super::cleanup::{CONFIRM, danger, line_row};
 use super::settings::{button, card_title};
 use super::*;
-use crate::tidy::{self, Action, Cache, CacheRow, Mac, Repo, plural};
+use crate::tidy::{self, Action, Cache, CacheRow, Mac, Repo};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Card {
@@ -19,26 +19,28 @@ enum Card {
 }
 
 /// Title, Check's accessible label, and the line shown before the first Check.
-const CARDS: [(Card, &str, &str, &str); 3] = [
-    (
-        Card::Caches,
-        "Disk caches",
-        "Check disk caches",
-        "Homebrew, uv and npm download caches.",
-    ),
-    (
-        Card::Worktrees,
-        "Worktrees",
-        "Check worktrees",
-        "Worktrees of repos your agents worked in.",
-    ),
-    (
-        Card::Mac,
-        "This Mac",
-        "Check this Mac",
-        "Swap, simulators and virtual machines.",
-    ),
-];
+fn cards() -> [(Card, &'static str, &'static str, &'static str); 3] {
+    [
+        (
+            Card::Caches,
+            "cleanup.disk",
+            "cleanup.check_disk",
+            "cleanup.disk_blurb",
+        ),
+        (
+            Card::Worktrees,
+            "cleanup.worktrees",
+            "cleanup.check_worktrees",
+            "cleanup.worktrees_blurb",
+        ),
+        (
+            Card::Mac,
+            "cleanup.this_mac",
+            "cleanup.check_mac",
+            "cleanup.mac_blurb",
+        ),
+    ]
+}
 
 #[derive(Default)]
 pub(super) struct Manual {
@@ -71,22 +73,37 @@ fn card_of(a: &Action) -> Card {
 }
 
 /// The button's label, then the armed one's.
-fn labels(a: &Action) -> (&'static str, &'static str) {
+fn labels(a: &Action) -> (String, String) {
     match a {
-        Action::Clean(Cache::BrewFormulae) | Action::Remove { .. } => ("Remove", "Confirm remove"),
-        Action::Clean(_) => ("Clean", "Confirm clean"),
-        Action::Prune(_) => ("Prune", "Confirm prune"),
-        Action::ShutDownSimulators => ("Shut down all", "Confirm shut down"),
-        Action::DeleteUnavailableSimulators => ("Delete unavailable", "Confirm delete"),
+        Action::Clean(Cache::BrewFormulae) | Action::Remove { .. } => (
+            rust_i18n::t!("cleanup.remove").to_string(),
+            rust_i18n::t!("cleanup.confirm_remove").to_string(),
+        ),
+        Action::Clean(_) => (
+            rust_i18n::t!("cleanup.clean").to_string(),
+            rust_i18n::t!("cleanup.confirm_clean").to_string(),
+        ),
+        Action::Prune(_) => (
+            rust_i18n::t!("cleanup.prune").to_string(),
+            rust_i18n::t!("cleanup.confirm_prune").to_string(),
+        ),
+        Action::ShutDownSimulators => (
+            rust_i18n::t!("cleanup.shutdown_all").to_string(),
+            rust_i18n::t!("cleanup.confirm_shutdown").to_string(),
+        ),
+        Action::DeleteUnavailableSimulators => (
+            rust_i18n::t!("cleanup.delete_unavailable").to_string(),
+            rust_i18n::t!("cleanup.confirm_delete").to_string(),
+        ),
     }
 }
 
-fn pressure(p: Option<Pressure>) -> &'static str {
+fn pressure(p: Option<Pressure>) -> String {
     match p {
-        Some(Pressure::Normal) => "normal",
-        Some(Pressure::Warn) => "high",
-        Some(Pressure::Critical) => "critical",
-        None => "unknown",
+        Some(Pressure::Normal) => rust_i18n::t!("cleanup.pressure_normal").to_string(),
+        Some(Pressure::Warn) => rust_i18n::t!("cleanup.pressure_high").to_string(),
+        Some(Pressure::Critical) => rust_i18n::t!("cleanup.pressure_critical").to_string(),
+        None => rust_i18n::t!("cleanup.pressure_unknown").to_string(),
     }
 }
 
@@ -97,7 +114,7 @@ fn path(p: &std::path::Path) -> String {
 impl AppView {
     pub(super) fn manual_cards(&self, t: Theme, view: &WeakEntity<Self>) -> Vec<Div> {
         let m = &self.manual;
-        CARDS
+        cards()
             .into_iter()
             .map(|(which, title, aria, blurb)| {
                 let rows = match which {
@@ -106,12 +123,12 @@ impl AppView {
                     Card::Mac => m.mac.as_ref().map(|x| self.mac_rows(x, t, view)),
                 };
                 let body = match (rows, which) {
-                    (None, _) => vec![secondary(blurb, t)],
+                    (None, _) => vec![secondary(&rust_i18n::t!(blurb), t)],
                     (Some(r), Card::Caches) if r.is_empty() => {
-                        vec![secondary("No Homebrew, uv or npm found.", t)]
+                        vec![secondary(rust_i18n::t!("cleanup.no_tools").as_ref(), t)]
                     }
                     (Some(r), Card::Worktrees) if r.is_empty() => {
-                        vec![secondary("No stale worktrees.", t)]
+                        vec![secondary(rust_i18n::t!("cleanup.no_stale").as_ref(), t)]
                     }
                     // This Mac always has its swap row.
                     (Some(r), _) => r,
@@ -119,7 +136,13 @@ impl AppView {
                 card(t)
                     .mt(px(sp::L))
                     .gap(px(sp::M))
-                    .child(self.card_head(which, title, aria, t, view))
+                    .child(self.card_head(
+                        which,
+                        &rust_i18n::t!(title),
+                        &rust_i18n::t!(aria),
+                        t,
+                        view,
+                    ))
                     .children(body)
             })
             .collect()
@@ -128,23 +151,29 @@ impl AppView {
     fn card_head(
         &self,
         card: Card,
-        title: &'static str,
-        aria: &'static str,
+        title: &str,
+        aria: &str,
         t: Theme,
         view: &WeakEntity<Self>,
     ) -> Div {
         let i = card as usize;
         let freed = self.manual.freed[i];
         let check = if self.manual.checking[i] {
-            secondary("Checking…", t).flex_none().into_any_element()
+            secondary(rust_i18n::t!("cleanup.checking").as_ref(), t)
+                .flex_none()
+                .into_any_element()
         } else {
             let v = view.clone();
-            button(("tidy-check", i), "Check", t)
-                .aria_label(aria)
-                .on_click(move |_, _, cx| {
-                    v.update(cx, |v, cx| v.check(card, cx)).ok();
-                })
-                .into_any_element()
+            button(
+                ("tidy-check", i),
+                rust_i18n::t!("cleanup.check").as_ref(),
+                t,
+            )
+            .aria_label(aria.to_string())
+            .on_click(move |_, _, cx| {
+                v.update(cx, |v, cx| v.check(card, cx)).ok();
+            })
+            .into_any_element()
         };
         div()
             .flex()
@@ -152,7 +181,13 @@ impl AppView {
             .gap(px(sp::M))
             .child(div().flex_1().child(card_title(title)))
             .when(freed > 0, |d| {
-                d.child(secondary(&format!("Freed {}", format::bytes(freed)), t).flex_none())
+                d.child(
+                    secondary(
+                        rust_i18n::t!("cleanup.freed", bytes = format::bytes(freed)).as_ref(),
+                        t,
+                    )
+                    .flex_none(),
+                )
             })
             .child(check)
     }
@@ -182,25 +217,34 @@ impl AppView {
             return row.when_some(note, |d, note| d.child(secondary(note, t).flex_none()));
         };
         let end: gpui::AnyElement = match done {
-            _ if m.running.contains(&a) => secondary("Cleaning…", t).flex_none().into_any_element(),
-            Some(Ok(0)) => secondary("Done", t).flex_none().into_any_element(),
-            Some(Ok(freed)) => secondary(&format!("Freed {}", format::bytes(*freed)), t)
+            _ if m.running.contains(&a) => secondary(rust_i18n::t!("cleanup.cleaning").as_ref(), t)
                 .flex_none()
                 .into_any_element(),
+            Some(Ok(0)) => secondary(rust_i18n::t!("cleanup.done").as_ref(), t)
+                .flex_none()
+                .into_any_element(),
+            Some(Ok(freed)) => secondary(
+                rust_i18n::t!("cleanup.freed", bytes = format::bytes(*freed)).as_ref(),
+                t,
+            )
+            .flex_none()
+            .into_any_element(),
             Some(Err(_)) | None => {
                 let (label, confirm_label) = labels(&a);
                 let armed = m.armed.as_ref().is_some_and(|(x, _)| *x == a);
                 let (b, label) = if armed {
-                    (danger(("tidy", n), confirm_label, t), confirm_label)
+                    (danger(("tidy", n), &confirm_label, t), confirm_label)
                 } else {
-                    (button(("tidy", n), label, t), label)
+                    (button(("tidy", n), &label, t), label)
                 };
                 let v = view.clone();
-                b.aria_label(format!("{label} {name}"))
-                    .on_click(move |_, _, cx| {
-                        v.update(cx, |v, cx| v.click(a.clone(), cx)).ok();
-                    })
-                    .into_any_element()
+                b.aria_label(
+                    rust_i18n::t!("cleanup.action_name", label = label, name = name).to_string(),
+                )
+                .on_click(move |_, _, cx| {
+                    v.update(cx, |v, cx| v.click(a.clone(), cx)).ok();
+                })
+                .into_any_element()
             }
         };
         row.child(end)
@@ -224,7 +268,7 @@ impl AppView {
                 };
                 // A failed Check offers nothing to clean.
                 let action = r.error.is_none().then_some(a);
-                self.row(k, r.cache.name(), line, bytes, action, None, t, view)
+                self.row(k, &r.cache.name(), line, bytes, action, None, t, view)
             })
             .collect()
     }
@@ -234,10 +278,15 @@ impl AppView {
         for repo in repos {
             let name = format::project_name(repo.main.to_str());
             if repo.prunable > 0 {
-                let line = format!(
-                    "{} already deleted",
-                    plural(repo.prunable, "worktree folder")
-                );
+                let line = rust_i18n::t!(
+                    if repo.prunable == 1 {
+                        "cleanup.worktree_deleted_one"
+                    } else {
+                        "cleanup.worktree_deleted_other"
+                    },
+                    n = repo.prunable
+                )
+                .to_string();
                 let a = Action::Prune(repo.main.clone());
                 rows.push(self.row(1000 + rows.len(), name, line, 0, Some(a), None, t, view));
             }
@@ -257,10 +306,15 @@ impl AppView {
 
     fn mac_rows(&self, mac: &Mac, t: Theme, view: &WeakEntity<Self>) -> Vec<Div> {
         let total = mac.swap_total.map_or(format::DASH.into(), format::bytes);
-        let swap = format!("Of {total} · Memory pressure {}", pressure(mac.pressure));
+        let swap = rust_i18n::t!(
+            "cleanup.swap_line",
+            total = total,
+            pressure = pressure(mac.pressure)
+        )
+        .to_string();
         let mut rows = vec![self.row(
             2000,
-            "Swap used",
+            rust_i18n::t!("cleanup.swap_used").as_ref(),
             swap,
             mac.swap_used.unwrap_or(0),
             None,
@@ -270,16 +324,38 @@ impl AppView {
         )];
         if let Some(s) = &mac.simulators {
             let shut = (s.booted > 0).then_some(Action::ShutDownSimulators);
-            let line = format!("{} booted", plural(s.booted, "simulator"));
-            rows.push(self.row(2001, "iOS simulators", line, 0, shut, None, t, view));
+            let line = rust_i18n::t!(
+                if s.booted == 1 {
+                    "cleanup.booted_one"
+                } else {
+                    "cleanup.booted_other"
+                },
+                n = s.booted
+            )
+            .to_string();
+            rows.push(self.row(
+                2001,
+                rust_i18n::t!("cleanup.simulators").as_ref(),
+                line,
+                0,
+                shut,
+                None,
+                t,
+                view,
+            ));
             let delete = (s.unavailable > 0).then_some(Action::DeleteUnavailableSimulators);
-            let line = format!(
-                "{} with no runtime installed",
-                plural(s.unavailable, "simulator")
-            );
+            let line = rust_i18n::t!(
+                if s.unavailable == 1 {
+                    "cleanup.no_runtime_one"
+                } else {
+                    "cleanup.no_runtime_other"
+                },
+                n = s.unavailable
+            )
+            .to_string();
             rows.push(self.row(
                 2002,
-                "Unavailable simulators",
+                rust_i18n::t!("cleanup.unavailable_simulators").as_ref(),
                 line,
                 s.unavailable_bytes,
                 delete,
@@ -290,7 +366,7 @@ impl AppView {
         }
         // Report only: stopping a VM or an emulator can corrupt its disk.
         for (k, (product, rss)) in mac.vms.iter().enumerate() {
-            let line = "Quit it from its own app to free this".to_string();
+            let line = rust_i18n::t!("cleanup.quit_app").to_string();
             rows.push(self.row(2100 + k, product, line, *rss, None, None, t, view));
         }
         rows
