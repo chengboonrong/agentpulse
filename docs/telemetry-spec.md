@@ -522,7 +522,7 @@ signature is valid. A refused update shows Sparkle's error and the running versi
 
 The phone link (docs/mobile.md) is opt-in and makes no request until a phone is being paired
 or is paired. It talks only to the relay: the AgentPulse relay at `https://relay.snitco.com`
-unless a relay address is set in Settings, Phones, and then only that one; a pairing keeps
+unless a relay address is set in Phones (in the sidebar), and then only that one; a pairing keeps
 the relay it was made on. Over HTTPS (plain HTTP only for `localhost`), through NSURLSession
 with `User-Agent: AgentPulse/<version>`, `Accept: application/json` and `Accept-Language:
 en`. Requests: `POST /v1/pairings` to create a pairing (the relay key, if one is saved, only

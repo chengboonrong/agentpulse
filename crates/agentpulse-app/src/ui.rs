@@ -430,6 +430,7 @@ enum Screen {
     Usage,
     Cleanup,
     Cats,
+    Phones,
     Settings,
 }
 
@@ -465,7 +466,7 @@ struct AppView {
     preview: [CatAnimator; 2],
     /// Holds keyboard focus when no control does, so Tab reaches the controls.
     focus: FocusHandle,
-    /// The Phones card's relay address and (secure) relay key.
+    /// The Phones screen's relay address and (secure) relay key.
     relay_field: Entity<TextField>,
     key_field: Entity<TextField>,
     /// The Forget Key button, which takes focus once a typed key is saved.
@@ -814,15 +815,15 @@ async fn screenshot(
         cx.notify();
     })?;
     cx.update(|window, cx| capture(window, cx, &dir.join("settings-end.png")))??;
-    // The Phones card from fixtures: no bridge, no network.
+    // The Phones screen from fixtures: no bridge, no network.
     for (file, fixture) in phone_fixtures(crate::hub::now_ms()) {
         this.update(cx, |this, cx| {
             this.hub.update(cx, |hub, cx| {
                 hub.phone_fixture = Some(fixture);
                 hub.phones_changed(cx);
             });
-            // The card is the page's fifth child, after the heading and three cards.
-            this.page_scroll.scroll_to_item(4);
+            this.screen = Screen::Phones;
+            this.page_scroll.set_offset(point(px(0.), px(0.)));
             cx.notify();
         })?;
         cx.update(|window, cx| capture(window, cx, &dir.join(file)))??;
@@ -853,9 +854,9 @@ async fn screenshot(
     Ok(())
 }
 
-/// The Phones card's states for screenshots, each with its `phones` settings.
+/// The Phones screen's states for screenshots, each with its `phones` settings.
 #[cfg(feature = "screenshot")]
-fn phone_fixtures(now: i64) -> [(&'static str, (crate::phones::View, crate::settings::Phones)); 4] {
+fn phone_fixtures(now: i64) -> [(&'static str, (crate::phones::View, crate::settings::Phones)); 5] {
     use crate::phones::{Phone, Qr, Started, State, View};
     use crate::settings::Phones;
     // Any 25×25 pattern does for layout: three finder squares and a scatter.
@@ -889,8 +890,34 @@ fn phone_fixtures(now: i64) -> [(&'static str, (crate::phones::View, crate::sett
         available: true,
         ..View::default()
     };
+    let paired = View {
+        phones: vec![
+            phone(
+                "a",
+                Some("Work iPhone"),
+                State::Paired,
+                None,
+                Some(now - 6 * 60_000),
+                true,
+            ),
+            phone(
+                "b",
+                None,
+                State::Gone,
+                None,
+                Some(now - 3 * 86_400_000),
+                false,
+            ),
+        ],
+        relay_key: Some(true),
+        ..view.clone()
+    };
+    let error = crate::phones::View {
+        error: Some("Cannot reach the relay: timed out".into()),
+        ..paired.clone()
+    };
     [
-        ("phones-no-relay.png", (view.clone(), Phones::default())),
+        ("phones-empty.png", (view.clone(), Phones::default())),
         (
             "phones-qr.png",
             (
@@ -928,34 +955,8 @@ fn phone_fixtures(now: i64) -> [(&'static str, (crate::phones::View, crate::sett
                 relay.clone(),
             ),
         ),
-        (
-            "phones-paired.png",
-            (
-                View {
-                    phones: vec![
-                        phone(
-                            "a",
-                            Some("Work iPhone"),
-                            State::Paired,
-                            None,
-                            Some(now - 6 * 60_000),
-                            true,
-                        ),
-                        phone(
-                            "b",
-                            None,
-                            State::Gone,
-                            None,
-                            Some(now - 3 * 86_400_000),
-                            false,
-                        ),
-                    ],
-                    relay_key: Some(true),
-                    ..view
-                },
-                relay,
-            ),
-        ),
+        ("phones-paired.png", (paired, relay.clone())),
+        ("phones-error.png", (error, relay)),
     ]
 }
 
@@ -1150,6 +1151,7 @@ impl Render for AppView {
             self.nav("Usage", Screen::Usage, t, cx),
             self.nav("Clean-up", Screen::Cleanup, t, cx),
             self.nav("Cats", Screen::Cats, t, cx),
+            self.nav("Phones", Screen::Phones, t, cx),
             self.nav("Settings", Screen::Settings, t, cx),
         ];
         let width = f32::from(window.viewport_size().width);
@@ -1169,14 +1171,18 @@ impl Render for AppView {
         let content = match (self.screen, &hub.snapshot) {
             // Needs no agent data.
             (Screen::Cats, _) => self.cats_screen(t, view.clone()).into_any_element(),
-            (Screen::Settings, _) => {
+            (Screen::Phones, _) => {
                 let phone = settings::PhoneControls {
                     relay: &self.relay_field,
                     key: &self.key_field,
                     forget: &self.forget_focus,
                     view: view.clone(),
                 };
-                settings::screen(hub, &self.hub, phone, t, &self.page_scroll).into_any_element()
+                settings::phones_screen(hub, &self.hub, phone, t, &self.page_scroll)
+                    .into_any_element()
+            }
+            (Screen::Settings, _) => {
+                settings::screen(hub, &self.hub, t, &self.page_scroll).into_any_element()
             }
             (_, None) => div()
                 .flex_1()
@@ -2571,7 +2577,7 @@ mod tests {
                 ),
                 (&[ON_RIBBON], &[t.need, t.sprint, t.work, t.idle, t.fail]),
                 (&[t.ended_text], &[t.ended]),
-                // The Phones card's errors.
+                // The Phones screen's errors.
                 (&[t.failed], &[t.card]),
             ];
             for (fgs, bgs) in pairs {

@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.chengboonrong.agentpulse.link.Pairing
@@ -180,7 +181,8 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
             error != null -> Message(padding, "Can't Read Your Macs", error)
             model.pairings.isEmpty() -> Message(
                 padding, "No Macs",
-                "On your Mac, open AgentPulse Settings, then Phones, and choose Pair a Phone.",
+                "1. Install AgentPulse on your Mac from agentpulse.snitco.com.\n2. Open it, choose Phones in the sidebar, and click Pair a Phone.\n3. Tap Pair a Mac below and scan the code.",
+                textAlign = TextAlign.Start,
             ) {
                 Button(onClick = { model.pairRequest = PairRequest() }) { Text("Pair a Mac") }
             }
@@ -374,7 +376,7 @@ private fun Bar(title: String, back: (() -> Unit)?) {
 }
 
 @Composable
-fun Message(padding: androidx.compose.foundation.layout.PaddingValues, title: String, text: String, action: @Composable () -> Unit = {}) {
+fun Message(padding: androidx.compose.foundation.layout.PaddingValues, title: String, text: String, textAlign: TextAlign = TextAlign.Unspecified, action: @Composable () -> Unit = {}) {
     Column(
         Modifier.fillMaxSize().padding(padding).padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -383,7 +385,7 @@ fun Message(padding: androidx.compose.foundation.layout.PaddingValues, title: St
         Text(title, style = MaterialTheme.typography.titleLarge)
         if (text.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = textAlign)
         }
         Spacer(Modifier.height(16.dp))
         action()

@@ -38,13 +38,13 @@ pub struct Hub {
     update_timer: Option<Task<()>>,
     check_task: Option<Task<()>>,
     pub phones: PhoneLink,
-    /// The Phones card's own error: a bad address or key, or a pairing that did not start.
+    /// The Phones screen's own error: a bad address or key, or a pairing that did not start.
     pub phone_error: Option<String>,
     /// "Pair a Phone" was clicked and the worker has not answered yet.
     pub pairing_starting: bool,
     /// Repaints each second while a QR code's countdown runs.
     countdown: Option<Task<()>>,
-    /// The Phones card's view and settings in screenshot mode, instead of the real ones.
+    /// The Phones screen's view and settings in screenshot mode, instead of the real ones.
     #[cfg(feature = "screenshot")]
     pub phone_fixture: Option<(phones::View, settings::Phones)>,
     cat: CatAnimator,
@@ -287,7 +287,7 @@ impl Hub {
         }));
     }
 
-    /// What the Phones card shows: the worker's view and the `phones` settings.
+    /// What the Phones screen shows: the worker's view and the `phones` settings.
     pub fn phone_state(&self) -> (phones::View, settings::Phones) {
         #[cfg(feature = "screenshot")]
         if let Some(fixture) = &self.phone_fixture {

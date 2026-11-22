@@ -2,7 +2,7 @@ AgentPulse for iPhone and iPad is a companion to AgentPulse for Mac, a free, ope
 
 To try it:
 1. On a Mac with Apple Silicon and macOS 14 or later, install AgentPulse from https://github.com/chengboonrong/agentpulse/releases/latest/download/AgentPulse.dmg and open it.
-2. In AgentPulse Settings, find the Phones card and click "Pair a Phone"; a QR code appears.
+2. In AgentPulse, choose Phones in the sidebar and click "Pair a Phone"; a QR code appears.
 3. In the iPhone app, tap + and scan the QR code (or paste the link shown under it), then confirm.
 The Mac then appears in the list. With no AI coding agents running, it shows "No agents"; with Claude Code or Codex CLI running in a terminal, each session appears with its status, tokens and estimated cost.
 

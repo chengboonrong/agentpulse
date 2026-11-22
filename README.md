@@ -127,7 +127,7 @@ to Sparkle; its button opens the release's GitHub page. Sparkle installs the upd
 if its signature checks out, and keeps the running version otherwise. Values AgentPulse
 cannot measure are shown as unavailable, not as zero.
 
-Phones (Settings, Phones; opt-in, see [docs/mobile.md](docs/mobile.md)) make no request until
+Phones (in the sidebar; opt-in, see [docs/mobile.md](docs/mobile.md)) make no request until
 a phone is being paired or is paired. Pairing goes through the AgentPulse relay at
 `relay.snitco.com` unless you set your own relay address. A paired phone gets the
 widget's metadata (live sessions with their project's folder name, today's tokens and cost,
