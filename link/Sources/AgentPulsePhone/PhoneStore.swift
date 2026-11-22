@@ -8,7 +8,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
     /// The pairing id, base64url.
     public let id: String
     public let relay: URL
-    public let macName: String
+    public internal(set) var macName: String
     /// The Mac's raw 32-byte public key.
     public let macKey: Data
     /// The latest accepted state's `payload` (widget.json version 1), as JSON.
@@ -166,6 +166,15 @@ public struct PhoneStore: Sendable {
             if all[i] != before { try save(all) }
             return (all[i], result)
         }
+    }
+
+    /// A name kept only on this phone. Returns the renamed pairing; nil for a blank name or
+    /// a pairing that is gone.
+    @discardableResult
+    public func rename(_ id: String, to name: String) throws -> Pairing? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return try update(id) { $0.macName = name }?.0
     }
 
     /// Deletes a pairing and its secrets.

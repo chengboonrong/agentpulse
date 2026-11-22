@@ -250,6 +250,8 @@ pushes only go through the relay. Widgets use the relay only.
 
 - Macs list (each: name, last update, agents), a Mac's view (counts, sessions, today,
   cat), Pair (camera scanner with VisionKit; paste field in the simulator), Remove.
+- Settings: rename a Mac (kept on this phone only), remove it, and switch direct
+  connections on the same network off or on. No Live Activity switch until it exists.
 - While open: a direct connection to each paired Mac on the same network, else fetches
   `down` every 10 s; widgets (small, medium) fetch in their timeline
   provider and show "as of".

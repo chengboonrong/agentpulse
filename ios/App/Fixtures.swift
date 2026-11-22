@@ -4,13 +4,15 @@ import AgentPulsePhone
 import CryptoKit
 import Foundation
 
-/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|pair-confirm|pair-code|empty>`: each screen from fixture
+/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|settings|pair-confirm|pair-code|empty>`: each screen from fixture
 /// data, without network, for screenshots. Debug builds only.
 @MainActor
 enum Fixtures {
     static func model(_ name: String) -> AppModel {
         let dir = FileManager.default.temporaryDirectory.appending(path: "fixtures")
         let model = AppModel(client: PhoneClient(store: PhoneStore(container: dir, secrets: MemorySecrets())), offline: true)
+        // Offline: set, not saved, so a value stored on the simulator doesn't leak in.
+        model.directEnabled = true
         let studio = pairing("Studio", minutesAgo: 1, payload: busy)
         switch name {
         case "macs":
@@ -18,6 +20,9 @@ enum Fixtures {
                 studio, pairing("MacBook Pro", minutesAgo: 42, payload: quiet), pairing("Mac mini", minutesAgo: nil),
             ]
             model.direct = [studio.id]
+        case "settings":
+            model.pairings = [studio, pairing("MacBook Pro", minutesAgo: 42, payload: quiet)]
+            model.settingsShown = true
         case "mac":
             model.pairings = [studio]
             model.direct = [studio.id]
