@@ -32,6 +32,7 @@ use crate::updates;
 
 mod cats;
 mod cleanup;
+mod manual;
 mod settings;
 mod text_field;
 
@@ -474,6 +475,8 @@ struct AppView {
     focus_forget: bool,
     /// The Clean-up row whose End was clicked once, and when.
     armed: Option<(ProcessIdentity, Instant)>,
+    /// The Clean-up screen's Disk caches, Worktrees and This Mac cards.
+    manual: manual::Manual,
     last_tick: Instant,
     active: bool,
     visible: bool,
@@ -553,6 +556,7 @@ impl AppView {
             forget_focus: cx.focus_handle().tab_stop(true),
             focus_forget: false,
             armed: None,
+            manual: manual::Manual::default(),
             last_tick: Instant::now(),
             active: window.is_window_active(),
             visible: window.visibility().is_visible(),

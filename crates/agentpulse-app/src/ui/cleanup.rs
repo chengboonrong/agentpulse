@@ -161,6 +161,7 @@ impl AppView {
                     })),
             )
         })
+        .children(self.manual_cards(t, &view))
     }
 
     /// End's first click arms it for [`CONFIRM`]; a second click within that ends the process.
@@ -191,8 +192,25 @@ impl AppView {
     }
 }
 
+/// An armed button's second click, which cannot be undone: the fail ribbon's red.
+pub(super) fn danger(id: impl Into<ElementId>, label: &'static str, t: Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .flex_none()
+        .px(px(sp::M))
+        .py(px(sp::XS))
+        .rounded(px(8.))
+        .with_focus_ring(t)
+        .bg(rgb(t.fail))
+        .text_color(rgb(ON_RIBBON))
+        .font_weight(FontWeight::MEDIUM)
+        .hover(|s| s.opacity(0.9))
+        .child(label)
+}
+
 /// A name over one muted line, then memory, then whatever the caller adds.
-fn line_row(name: &str, line: &str, rss_bytes: u64, t: Theme) -> Div {
+pub(super) fn line_row(name: &str, line: &str, rss_bytes: u64, t: Theme) -> Div {
     div()
         .px(px(sp::S))
         .flex()
@@ -246,20 +264,7 @@ fn item_row(
     let confirm = armed == Some(p);
     let label = if confirm { "Confirm end" } else { "End" };
     let end = if confirm {
-        // Ending is the one action here that cannot be undone: the fail ribbon's red.
-        div()
-            .id(("end", n))
-            .role(Role::Button)
-            .flex_none()
-            .px(px(sp::M))
-            .py(px(sp::XS))
-            .rounded(px(8.))
-            .with_focus_ring(t)
-            .bg(rgb(t.fail))
-            .text_color(rgb(ON_RIBBON))
-            .font_weight(FontWeight::MEDIUM)
-            .hover(|s| s.opacity(0.9))
-            .child(label)
+        danger(("end", n), label, t)
     } else {
         button(("end", n), label, t)
     };
