@@ -95,4 +95,4 @@ npx wrangler secret put APNS_TOPIC
 ```
 
 Then put the Worker's URL (for example `https://agentpulse-relay.<subdomain>.workers.dev`)
-in AgentPulse, Settings, Phones.
+in AgentPulse, Phones (in the sidebar).

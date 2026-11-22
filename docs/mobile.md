@@ -32,7 +32,7 @@ more Macs through a relay that sees only ciphertext.
 |---|---|---|
 | Link | `link/` (Swift package `AgentPulseLink`, CryptoKit and Network.framework), used by the Mac bridge and the iPhone app | Relay message sealing, the direct connection's handshake, framing, listener and client |
 | Crypto, QR | `macos/Bridge/` (Swift, CoreImage), loaded by the Rust app as today | Keys in the Keychain, calls into `link/`, QR image |
-| Mac client | `crates/agentpulse-app/src/phones.rs`, Settings "Phones" card | Pairing, publishing, pushes, the paired list |
+| Mac client | `crates/agentpulse-app/src/phones.rs`, the Phones screen (in the sidebar), with relay and direct connection under "Connection" | Pairing, publishing, pushes, the paired list |
 | Relay + push gateway | `relay/` (TypeScript, Cloudflare Worker + Durable Objects) | Mailboxes and APNs sends |
 | iPhone app | `ios/` (SwiftUI, XcodeGen like `macos/`) | Scanning, the Macs, sessions, widgets, Live Activity |
 
@@ -91,7 +91,7 @@ fails (any error, including still 429 after waiting), the phone sends a best-eff
 
 ## Pairing
 
-1. The Mac (Settings, Phones, "Pair a Phone") makes a pairing:
+1. The Mac (Phones, "Pair a Phone") makes a pairing:
    - id: 16 random bytes, base64url;
    - its key pair;
    - a pairing secret, 32 random bytes;
@@ -170,7 +170,7 @@ the relay. Idea borrowed from Orca's direct LAN path; Orca's code is not used.
   The phone tries each AgentPulse service it finds; a Mac that doesn't know the
   pairing closes the connection without a reply.
 - The Mac listens only while at least one pairing is confirmed and "Direct connection"
-  (Settings, Phones, on by default) is on. At most 8 connections across all pairings, counting
+  (Phones, under "Connection", on by default) is on. At most 8 connections across all pairings, counting
   ones still in the handshake, which gets 5 s from accept to the Mac's reply. A device on
   the network can hold those slots; phones then fall back to the relay, which is
   accepted.
@@ -216,10 +216,11 @@ pushes only go through the relay. Widgets use the relay only.
 
 ## Mac client
 
-- Settings, a "Phones" card: relay address (empty uses the AgentPulse relay,
-  `https://relay.snitco.com`, see `relay/README.md`, "Public relay"), "Pair a Phone" (QR sheet
-  with a countdown), "Direct connection" (on by default), the paired phones with last
-  seen time and whether they are connected directly, and Remove per phone.
+- The Phones screen: "Pair a Phone" (QR sheet with a countdown), the paired phones
+  with last seen time and whether they are connected directly, and Remove per phone;
+  under "Connection", relay address (empty uses the AgentPulse relay,
+  `https://relay.snitco.com`, see `relay/README.md`, "Public relay") and "Direct connection"
+  (on by default).
 - The direct listener (see above), sending the same state messages to connected phones.
 - Publishing, per confirmed pairing: the widget payload, sealed, `PUT down` when it
   changed (ignoring `generatedAtMs`) and at most every 10 s. Every 5 minutes it re-sends
