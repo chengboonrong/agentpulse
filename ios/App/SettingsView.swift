@@ -17,6 +17,13 @@ struct SettingsView: View {
                         NavigationLink(p.macName) { MacSettingsView(pairing: p) }
                     }
                 }
+                Section {
+                    NavigationLink {
+                        NotificationsView()
+                    } label: {
+                        LabeledContent("Notifications", value: notificationSummary)
+                    }
+                }
                 Section("Connection") {
                     Toggle("Connect directly on the same network", isOn: $model.directEnabled)
                 }
@@ -27,12 +34,22 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .navigationDestination(isPresented: $model.notificationsShown) { NotificationsView() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
         }
+    }
+
+    private var notificationSummary: String {
+        // Show the effective choices sent to the Macs.
+        guard model.notificationsAllowed else { return "Off" }
+        let choices = model.notifyChoices
+        let names = [(choices.waiting, "Waiting"), (choices.finished, "Finished"), (choices.failed, "Failed")]
+            .filter { $0.0 }.map { $0.1 }
+        return names.isEmpty ? "Off" : names.joined(separator: ", ")
     }
 
     private var relayHosts: String {

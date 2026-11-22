@@ -4,6 +4,8 @@ import Foundation
 import Network
 import Observation
 import WidgetKit
+import UIKit
+import UserNotifications
 
 /// A request to show the Pair sheet: from "Pair a Mac" (no link) or an opened link.
 struct PairRequest: Identifiable {
@@ -28,6 +30,23 @@ final class AppModel {
     var session: String?
     var pairRequest: PairRequest?
     var settingsShown = false
+    var notificationsShown = false
+    var notificationStatus: UNAuthorizationStatus = .notDetermined
+    var notificationError: String?
+    var notificationsAllowed: Bool {
+        notificationStatus == .authorized || notificationStatus == .provisional || notificationStatus == .ephemeral
+    }
+    var pushToken: Data?
+    var notifyChoices = UserDefaults.standard.data(forKey: "notifyChoices")
+        .flatMap { try? JSONDecoder().decode(NotifyChoices.self, from: $0) } ?? .defaults {
+        didSet {
+            guard !offline else { return }
+            UserDefaults.standard.set(try? JSONEncoder().encode(notifyChoices), forKey: "notifyChoices")
+            // A known token is used now; only an unknown one waits for the callback.
+            syncNotifications(register: pushToken == nil)
+        }
+    }
+
     var directEnabled = UserDefaults.standard.object(forKey: "directConnection") as? Bool ?? true {
         didSet {
             if !offline { UserDefaults.standard.set(directEnabled, forKey: "directConnection") }
@@ -54,6 +73,10 @@ final class AppModel {
     @ObservationIgnored private var connections: [String: DirectConnection] = [:]
     @ObservationIgnored private var connecting: Set<String> = []
     @ObservationIgnored private var browser: LinkBrowser?
+    @ObservationIgnored private var notificationSync: Task<Void, Never>?
+    /// One-Mac syncs after a direct connection; any newer sync cancels them, so a stale
+    /// PUT or `notify` never lands last.
+    @ObservationIgnored private var pairingSyncs: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var refresh: Task<Void, Never>?
 
     init(client: PhoneClient, offline: Bool = false) {
@@ -92,6 +115,10 @@ final class AppModel {
     func start() {
         guard !offline, refresh == nil else { return }
         reload()
+        Task {
+            notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            syncNotifications()
+        }
         #if DEBUG
         // scripts/e2e-ios.sh: removes every Mac with no tap, and nothing else.
         if UserDefaults.standard.bool(forKey: "AgentPulseE2ERemove") {
@@ -122,6 +149,7 @@ final class AppModel {
     /// A pairing that just got its first state.
     func added(_ p: Pairing) {
         reload()
+        syncNotifications()
         WidgetCenter.shared.reloadAllTimelines()
         browse()
         Task {
@@ -162,6 +190,65 @@ final class AppModel {
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    func setChoice(_ key: WritableKeyPath<NotifyChoices, Bool>, _ enabled: Bool) {
+        notifyChoices[keyPath: key] = enabled
+    }
+
+    func requestNotifications() async {
+        guard !offline else { return }
+        notificationError = nil
+        do {
+            _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        } catch {
+            notificationError = error.localizedDescription
+        }
+        notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        syncNotifications()
+    }
+
+    func receivedPushToken(_ token: Data) {
+        pushToken = token
+        syncNotifications(register: false)
+    }
+
+    func syncNotifications(register: Bool = true, pairingID: String? = nil) {
+        guard !offline else { return }
+        let effective = notificationsAllowed ? notifyChoices : .off
+        if let pairingID {
+            pairingSyncs[pairingID]?.cancel()
+        } else {
+            notificationSync?.cancel()
+            for t in pairingSyncs.values { t.cancel() }
+            pairingSyncs = [:]
+        }
+        if effective.any, register {
+            UIApplication.shared.registerForRemoteNotifications()
+            return
+        }
+        let token = pushToken
+        guard !effective.any || token != nil else { return }
+        let sync = Task {
+            for p in pairings where pairingID == nil || p.id == pairingID {
+                guard !Task.isCancelled else { return }
+                guard pairing(p.id) != nil else { continue }
+                await report(p.id) {
+                    if effective.any, let token {
+                        #if DEBUG
+                        let environment = PhoneClient.PushEnvironment.development
+                        #else
+                        let environment = PhoneClient.PushEnvironment.production
+                        #endif
+                        try await self.client.putPushToken(token, environment: environment, p)
+                    }
+                    try Task.checkCancellation()
+                    guard self.pairing(p.id) != nil else { return }
+                    try await self.client.notify(effective, p)
+                }
+            }
+        }
+        if let pairingID { pairingSyncs[pairingID] = sync } else { notificationSync = sync }
     }
 
     // MARK: -
@@ -210,6 +297,8 @@ final class AppModel {
             connections[id] = c
             direct.insert(id)
             problems[id] = nil
+            // The relay notify must have a newer seq than the direct connection's seen.
+            syncNotifications(register: false, pairingID: id)
             Task { await listen(id, c) }
             return
         }

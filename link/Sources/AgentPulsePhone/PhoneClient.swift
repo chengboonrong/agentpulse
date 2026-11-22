@@ -105,19 +105,106 @@ public struct PhoneClient: Sendable {
         return try take(plaintext, pairing.id).1 ?? current
     }
 
-    public enum Up: String, Sendable { case seen, unpair }
+    public enum Up: String, Sendable { case seen, unpair, notify }
 
     /// `POST up` through the relay.
     public func post(_ type: Up, _ pairing: Pairing) async throws {
+        try await post(type, pairing, fields: [:])
+    }
+
+    private func post(_ type: Up, _ pairing: Pairing, fields: [String: Bool]) async throws {
         let (key, token) = try store.keys(pairing.id)
         let sealed = try RelayMessage.seal(
-            nextUp(type, pairing.id), to: macKey(pairing), from: key, direction: .up, pairingId: rawId(pairing))
+            nextUp(type, pairing.id, fields: fields), to: macKey(pairing), from: key, direction: .up, pairingId: rawId(pairing))
         let (status, _) = try await request("POST", pairing, "up", token: token, body: ["message": sealed])
         switch status {
         case 204: return
         case 401, 404: throw PhoneError.removed
         default: throw PhoneError.badResponse(status)
         }
+    }
+
+    public func notify(_ choices: NotifyChoices, _ pairing: Pairing) async throws {
+        try await post(.notify, pairing, fields: [
+            "waiting": choices.waiting, "finished": choices.finished, "failed": choices.failed,
+        ])
+    }
+
+    public enum PushEnvironment: String, Sendable { case development, production }
+
+    // This PUT replaces all tokens; the Live Activity must send activity and start here too.
+    public func putPushToken(_ token: Data, environment: PushEnvironment, _ pairing: Pairing) async throws {
+        let (status, _) = try await request(
+            "PUT", pairing, "push-tokens", token: store.keys(pairing.id).token,
+            body: ["alert": token.map { String(format: "%02x", $0) }.joined(), "environment": environment.rawValue])
+        switch status {
+        case 204: return
+        case 401, 404: throw PhoneError.removed
+        default: throw PhoneError.badResponse(status)
+        }
+    }
+
+    struct AlertEvent: Decodable, Sendable {
+        let kind: String
+        let agent: String
+        let project: String
+    }
+
+    private struct Alert: Decodable {
+        let seq: UInt64
+        let type: String
+        let events: [AlertEvent]
+        let more: Int?
+    }
+
+    public func openAlert(_ message: String) -> AlertContent? {
+        do {
+            let pairings = try store.pairings()
+            for p in pairings {
+                guard let plaintext = try? RelayMessage.open(
+                    message, with: store.keys(p.id).key, from: macKey(p),
+                    direction: .alert, pairingId: rawId(p)) else { continue }
+                let alert = try JSONDecoder().decode(Alert.self, from: plaintext)
+                guard alert.type == "alert",
+                    let content = Self.alertText(events: alert.events, more: alert.more,
+                        macName: p.macName, pairingCount: pairings.count, thread: p.id)
+                else { return nil }
+                return try store.update(p.id) { p -> AlertContent? in
+                    var guardSeq = SeqGuard(last: p.alertSeq)
+                    guard guardSeq.accept(alert.seq) else { return nil }
+                    p.alertSeq = alert.seq
+                    return content
+                }?.1
+            }
+        } catch {}
+        return nil
+    }
+
+    static func alertText(
+        events: [AlertEvent], more: Int?, macName: String, pairingCount: Int, thread: String
+    ) -> AlertContent? {
+        guard !events.isEmpty, events.allSatisfy({ ["waiting", "finished", "failed"].contains($0.kind) }),
+            more.map({ $0 >= 0 }) ?? true else { return nil }
+        let title: String
+        var body: String
+        if events.count == 1, let event = events.first {
+            switch event.kind {
+            case "waiting":
+                title = "\(event.agent) is waiting"
+                body = "\(event.project) needs your answer."
+            case "finished":
+                title = "\(event.agent) finished"
+                body = "\(event.project) is ready for your next prompt."
+            default:
+                title = "\(event.agent) failed"
+                body = "\(event.project) stopped with an error."
+            }
+        } else {
+            title = "\(events.count + (more ?? 0)) agents " + (events.contains { $0.kind == "waiting" } ? "need you" : "updated")
+            body = events.map { "\($0.project): \($0.kind)" }.joined(separator: "\n")
+            if let more { body += "\nand \(more) more" }
+        }
+        return AlertContent(title: title, subtitle: pairingCount > 1 ? macName : "", body: body, thread: thread)
     }
 
     /// Tells the Mac (`unpair`; the Mac then deletes the pairing at the relay) and deletes the
@@ -187,12 +274,14 @@ public struct PhoneClient: Sendable {
     }
 
     /// The next `up` message, its seq taken from the shared record.
-    private func nextUp(_ type: Up, _ id: String) throws -> Data {
+    private func nextUp(_ type: Up, _ id: String, fields: [String: Bool] = [:]) throws -> Data {
         guard let (_, seq) = try store.update(id, { p -> UInt64 in
             p.upSeq += 1
             return p.upSeq
         }) else { throw PhoneError.removed }
-        var m: [String: Any] = ["seq": seq, "type": type.rawValue]
+        var m: [String: Any] = fields
+        m["seq"] = seq
+        m["type"] = type.rawValue
         if type == .seen { m["sentAtMs"] = Self.nowMs() }
         return try JSONSerialization.data(withJSONObject: m)
     }
@@ -232,4 +321,27 @@ public struct PhoneClient: Sendable {
         }
         throw PhoneError.busy
     }
+}
+
+public struct NotifyChoices: Codable, Equatable, Sendable {
+    public var waiting: Bool
+    public var finished: Bool
+    public var failed: Bool
+
+    public init(waiting: Bool, finished: Bool, failed: Bool) {
+        self.waiting = waiting
+        self.finished = finished
+        self.failed = failed
+    }
+
+    public static let defaults = Self(waiting: true, finished: false, failed: true)
+    public static let off = Self(waiting: false, finished: false, failed: false)
+    public var any: Bool { waiting || finished || failed }
+}
+
+public struct AlertContent: Equatable, Sendable {
+    public let title: String
+    public let subtitle: String
+    public let body: String
+    public let thread: String
 }

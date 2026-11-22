@@ -9,9 +9,12 @@ TestFlight builds come from `fastlane beta` (below).
 | `project.yml` | XcodeGen spec. The generated `AgentPulsePhone.xcodeproj` is not committed. |
 | `App/` | The app: Macs list, a Mac's view, a session's view (iPad), Pair (VisionKit scanner, or a paste field where there is no camera), the `agentpulse://pair` link, DEBUG fixtures. |
 | `e2e/` | UI tests of the iPad and iPhone layouts on the fixtures ([below](#ui-tests-ipad-and-iphone-layouts)). |
+| `Notifications/` | Notification service extension: decrypts alert text using the shared pairings and Keychain. |
 | `Widget/` | Small and medium widgets for the first paired Mac: `GET down` every 15 minutes through the relay, else the last stored state, always "as of". |
 
-Both use `macos/Shared/` (the widget payload and views) and `link/`'s `AgentPulsePhone`
+The three targets are `AgentPulse` (app), `AgentPulseWidget` (widgets), and
+`AgentPulseNotifications` (notification service extension). The app and widgets use
+`macos/Shared/` (the widget payload and views); all three use `link/`'s `AgentPulsePhone`
 (pairing, the relay, the direct connection, the store in the App Group
 `group.io.github.chengboonrong.AgentPulse` with the secrets in the Keychain under that group).
 
@@ -50,8 +53,10 @@ views on both.
 ## Fixtures (Debug builds only)
 
 `xcrun simctl launch $UDID io.github.chengboonrong.AgentPulse.phone -AgentPulseFixture <name>`
-shows a screen from fixture data without network: `macs`, `mac`, `session` (a selected
-session, shown in its column on iPad), `pair-confirm`, `pair-code`, `empty`. `xcrun simctl ui $UDID appearance dark` for dark mode,
+shows a screen from fixture data without network: `macs`, `mac`, `mac-old-format`,
+`mac-new-format`, `mac-update`, `session` (a selected session, shown in its column on
+iPad), `settings`, `notifications`, `notifications-denied`, `notifications-undetermined`,
+`pair-confirm`, `pair-code`, `empty`. `xcrun simctl ui $UDID appearance dark` for dark mode,
 `xcrun simctl io $UDID screenshot <png>` to capture.
 
 ## UI tests (iPad and iPhone layouts)
@@ -123,3 +128,26 @@ fixtures (above) on an iPhone 6.9" and an iPad 13" simulator, light and dark, wi
 ("Release This Version"). Age rating, App Privacy ("Data Not Collected"), pricing (Free)
 and content rights are set once in App Store Connect; the privacy policy is
 `site/privacy.html`.
+
+## Push notifications on real devices
+
+One-time setup in the Apple developer portal:
+
+- Enable Push Notifications on the app App ID,
+  `io.github.chengboonrong.AgentPulse.phone`.
+- Register the extension App ID,
+  `io.github.chengboonrong.AgentPulse.phone.Notifications`, and enable the same
+  App Group, `group.io.github.chengboonrong.AgentPulse`, on it by hand in the portal.
+- Under Keys, create an APNs authentication key, enable Apple Push Notifications
+  service (APNs), and download the `.p8` file. Record its key ID and your team ID.
+- Regenerate provisioning profiles for the app and extension (automatic signing
+  handles this for TestFlight).
+
+Configure the relay's `APNS_KEY_P8`, `APNS_KEY_ID`, `APNS_TEAM_ID` and
+`APNS_TOPIC` secrets; the topic is the app bundle id. See
+[Push gateway](../docs/mobile.md#push-gateway) for the gateway protocol.
+Debug builds use `development`. TestFlight and App Store builds use `production`,
+because export rewrites `aps-environment`. The `development` value in the app
+entitlements file is intended. A Release build run from Xcode must not be used to
+test alerts: development signing gives it a sandbox token while the app sends
+`production`.
