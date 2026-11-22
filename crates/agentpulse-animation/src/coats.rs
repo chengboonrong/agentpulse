@@ -736,6 +736,7 @@ impl Look {
             Provider::Codex => "codex-night",
             Provider::OpenCode => "cloud",
             Provider::Grok => "silver-tabby",
+            Provider::Qwen => "lilac",
         };
         Look {
             coat: find_coat(id).expect("default coat exists"),
@@ -1078,6 +1079,7 @@ mod tests {
             Provider::Codex,
             Provider::OpenCode,
             Provider::Grok,
+            Provider::Qwen,
         ] {
             let (look, old) = (Look::default_for(p), palette(p));
             assert_eq!(look.palette(), old, "{p:?}");

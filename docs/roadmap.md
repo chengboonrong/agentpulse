@@ -42,7 +42,7 @@ not been measured.
   Space to open it).
 - Not started: Agents and Insights screens.
 
-## Phase 2 — Agent monitoring: Claude Code, Codex, Grok and OpenCode done
+## Phase 2 — Agent monitoring: Claude Code, Codex, Grok, OpenCode and Qwen Code done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
 - Done: Claude Code's own recorded session cost (`cost-state`) beside the estimate, in the
   Sessions table and under the estimate in Overview rows; "—" until Claude Code writes one,
@@ -56,6 +56,8 @@ not been measured.
 - Built, not exercised: the Active state of a Codex session (no Codex task ran while it was
   checked), reading uncompressed rollouts from `archived_sessions` (the local archives are
   all `.jsonl.zst`, which are not read), and cache writes (every local record had 0).
+- Done: Qwen Code adapter. Read-only JSONL tailing under `$QWEN_RUNTIME_DIR` (or `~/.qwen`),
+  metadata-only parsing, disjoint token buckets, transcript-age status and an unpriced lilac cat.
 - Done: Grok CLI adapter. Sessions under `$GROK_HOME` (or `~/.grok`): tokens and Grok's own
   per-turn charge from `usage.json`, activity and Active/Waiting/Idle from `events.jsonl`,
   live sessions from the `events.jsonl` that `grok` processes hold open, the folder from the
@@ -161,6 +163,13 @@ not been measured.
   `settings.json` beside the coats; the `AGENTPULSE_ANIMATION` variables still win, and
   Reduce Motion still stops the cats. Rendered through screenshot mode; clicks and keyboard
   use not exercised by a person.
+- Done: agent switches (part 1 of #59). Settings, Agents: one switch per agent, "Not
+  detected" when its data folder is missing, saved as `agents.hidden` in `settings.json`
+  (unknown keys kept). Hiding is display only: collection goes on, and the collector leaves
+  the agent out of each snapshot (sessions, CPU and memory, today's tokens and cost, output
+  rate, Usage days, lanes and caching saving, plan limits), so the menu-bar cat, widgets and
+  phones follow. Clean-up still sees every agent. Applied on the next tick, no restart.
+  Next: more adapters (#59 part 2).
 - Alerts and thresholds.
 - Distribution outside the App Store (owner's choice, 2026-11-13). Done:
   `scripts/bundle.sh` signs with the hardened runtime and builds a DMG; `--release` signs

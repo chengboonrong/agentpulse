@@ -26,9 +26,19 @@ pub enum Provider {
     Codex,
     OpenCode,
     Grok,
+    Qwen,
 }
 
 impl Provider {
+    /// Every supported agent, in the order lists of agents show them.
+    pub const ALL: [Provider; 5] = [
+        Provider::ClaudeCode,
+        Provider::Codex,
+        Provider::Grok,
+        Provider::OpenCode,
+        Provider::Qwen,
+    ];
+
     /// Stable key used in the database.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -36,19 +46,13 @@ impl Provider {
             Provider::Codex => "codex",
             Provider::OpenCode => "opencode",
             Provider::Grok => "grok",
+            Provider::Qwen => "qwen-code",
         }
     }
 
     /// The inverse of [`Provider::as_str`].
     pub fn parse(key: &str) -> Option<Provider> {
-        [
-            Provider::ClaudeCode,
-            Provider::Codex,
-            Provider::OpenCode,
-            Provider::Grok,
-        ]
-        .into_iter()
-        .find(|p| p.as_str() == key)
+        Provider::ALL.into_iter().find(|p| p.as_str() == key)
     }
 
     pub fn label(self) -> &'static str {
@@ -57,6 +61,7 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::OpenCode => "OpenCode",
             Provider::Grok => "Grok",
+            Provider::Qwen => "Qwen Code",
         }
     }
 }
@@ -441,6 +446,7 @@ mod tests {
             Provider::Codex,
             Provider::OpenCode,
             Provider::Grok,
+            Provider::Qwen,
         ] {
             assert_eq!(Provider::parse(p.as_str()), Some(p));
         }
