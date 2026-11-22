@@ -164,6 +164,8 @@ Live Activities with ActivityKit push notifications").
 When the phone and a paired Mac are on the same network, the app talks to the Mac
 directly: faster than the relay, and still working when the relay is down. Away from it,
 the relay. Idea borrowed from Orca's direct LAN path; Orca's code is not used.
+Reference for the phone app's pages: [Orca Docs, Mobile companion](https://orca.dev/docs/mobile),
+mapped page by page in #38.
 
 - Discovery: the Mac advertises Bonjour service `_agentpulse._tcp` with the instance
   name "AgentPulse" and TXT `v=1` only, so the network learns nothing about pairings.
