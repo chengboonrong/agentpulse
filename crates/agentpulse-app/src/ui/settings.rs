@@ -3,7 +3,9 @@
 //! other screens.
 
 use agentpulse_platform_macos::reduce_motion;
-use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
+use agentpulse_telemetry::{
+    ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter, QwenAdapter,
+};
 use gpui::ClickEvent;
 
 use super::cats::toggled;
@@ -97,6 +99,7 @@ fn detected(p: Provider) -> bool {
         Provider::Codex => CodexAdapter::default_root(),
         Provider::OpenCode => OpenCodeAdapter::default_root(),
         Provider::Grok => GrokAdapter::default_root(),
+        Provider::Qwen => QwenAdapter::default_root(),
     }
     .is_some_and(|root| root.exists())
 }
