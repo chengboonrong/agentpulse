@@ -791,6 +791,7 @@ async fn screenshot(
         (Provider::ClaudeCode, "cats.png"),
         (Provider::Codex, "cats-codex.png"),
         (Provider::Grok, "cats-grok.png"),
+        (Provider::Qwen, "cats-qwen.png"),
         (Provider::OpenCode, "cats-opencode.png"),
     ] {
         this.update(cx, |this, cx| {

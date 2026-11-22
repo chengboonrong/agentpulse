@@ -21,11 +21,13 @@ use serde::Deserialize;
 mod codex;
 mod grok;
 mod opencode;
+mod qwen;
 mod tail;
 
 pub use codex::CodexAdapter;
 pub use grok::GrokAdapter;
 pub use opencode::OpenCodeAdapter;
+pub use qwen::QwenAdapter;
 use tail::{Groups, Tailer, TranscriptFile, read_lines, ts_ms};
 
 /// Where the status-line command in the README saves Claude Code's status-line

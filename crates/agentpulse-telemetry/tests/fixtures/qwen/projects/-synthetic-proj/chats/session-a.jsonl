@@ -1,0 +1,6 @@
+{"uuid":"user-1","sessionId":"session-a","timestamp":"2026-11-17T09:00:01.000Z","type":"user","cwd":"/synthetic/proj","message":{"parts":[{"text":"hello"}]}}
+{"uuid":"answer-1","sessionId":"session-a","timestamp":"2026-11-17T09:00:02.000Z","type":"assistant","cwd":"/synthetic/proj","model":"coder-model","usageMetadata":{"promptTokenCount":2000,"candidatesTokenCount":300,"thoughtsTokenCount":100,"cachedContentTokenCount":1500,"totalTokenCount":2300},"message":{"parts":[{"text":"hello"}]}}
+{"uuid":"telemetry-1","sessionId":"session-a","timestamp":"2026-11-17T09:00:03.000Z","type":"system","subtype":"ui_telemetry","usageMetadata":{"promptTokenCount":2000,"candidatesTokenCount":300},"systemPayload":{"event":"qwen-code.api_response"}}
+not json
+{"uuid":"tool-1","sessionId":"session-a","timestamp":"2026-11-17T09:00:04.000Z","type":"tool_result","cwd":"/synthetic/new-proj","toolCallResult":{"resultDisplay":"hello"}}
+{"uuid":"answer-2","sessionId":"session-a","timestamp":"2026-11-17T09:00:05.000Z","type":"assistant","model":"qwen-test","usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":20,"candidatesTokenCount":5,"thoughtsTokenCount":3}}

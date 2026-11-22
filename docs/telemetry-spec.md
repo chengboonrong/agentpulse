@@ -292,6 +292,55 @@ price table, where it is unpriced.
 - Discovery skips symlinks and each read re-checks just before opening; a file swapped
   for a symlink in between could still be followed.
 
+## Qwen Code
+
+Root: `$QWEN_RUNTIME_DIR` if set and non-empty, else `~/.qwen`. A missing root or
+`projects/` folder is not an error; Qwen simply shows no sessions. A symlinked root is
+followed; nothing below it is. Verified format:
+Qwen Code 0.14.5.
+
+### Source files and privacy
+- Only `projects/<sanitised cwd>/chats/<session id>.jsonl` is opened: one append-only
+  JSONL file per session. Symlinked files and folders are skipped, including on cached
+  reads. No settings, credentials or other runtime files are opened.
+- The session id is the file stem. The sanitised project folder cannot be decoded, so
+  the project path comes from the first record's `cwd` (storage keeps a session's first path).
+- Records are deserialized into metadata-only structs: `uuid`, `sessionId`, `timestamp`,
+  `type`, `cwd`, `model` and `usageMetadata` token counts (`promptTokenCount`,
+  `candidatesTokenCount`, `cachedContentTokenCount`). All content fields are skipped
+  by serde; no line text is stored or logged. Malformed lines are skipped.
+- Every record's timestamp counts as activity; the first timestamp starts the session.
+  The model comes from the newest assistant record. Tailing uses the shared transcript
+  reader and budgets, resumes at stored offsets and retries incomplete final lines.
+
+### Token accounting
+- One event per `assistant` record with `usageMetadata`, keyed by `<sessionId>:<uuid>`.
+- Cache read = `cachedContentTokenCount`; input = `promptTokenCount` minus cached,
+  saturating at zero; output = `candidatesTokenCount`; cache writes = zero.
+- Candidates already include thoughts, so `thoughtsTokenCount` is not added.
+  `totalTokenCount` is not used.
+- `system` / `ui_telemetry` records repeat API responses and add no tokens.
+
+### Live sessions and status
+- No live sessions or process resources are reported. Qwen runs as `node`, and matching
+  only its process name and working directory could claim an unrelated Node process.
+- The core's transcript-age rule applies: active within 30 seconds, ended after 5 minutes
+  of silence, as Completed. Qwen sessions never show Waiting or Failed.
+
+### Cost
+Unpriced: local sessions use Qwen OAuth (`qwen-oauth`) with model alias `coder-model`,
+which has no list price. No charge or price is supplied; cost is unavailable, never $0.
+
+### Known gaps
+- No process, CPU, memory or orphan clean-up. Matching Qwen's Node argv is future work.
+- Waiting on the user for more than 5 minutes shows as ended until another record arrives.
+  Permission prompts are not distinguished.
+- Subagent (`task` tool) tokens appear only in `ui_telemetry` and are not counted.
+- A `runtimeBaseDir` set in Qwen's settings, rather than the environment, is not followed.
+- Plan limits are not read.
+- As with Grok, a component swapped for a symlink between its check and opening the file
+  could still be followed.
+
 ## OpenCode
 
 Store: `$XDG_DATA_HOME/opencode/opencode.db`, else `~/.local/share/opencode/opencode.db`

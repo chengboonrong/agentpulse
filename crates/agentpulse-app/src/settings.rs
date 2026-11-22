@@ -53,6 +53,7 @@ pub struct Looks {
     codex: Look,
     open_code: Look,
     grok: Look,
+    qwen: Look,
 }
 
 impl Default for Looks {
@@ -62,6 +63,7 @@ impl Default for Looks {
             codex: Look::default_for(Provider::Codex),
             open_code: Look::default_for(Provider::OpenCode),
             grok: Look::default_for(Provider::Grok),
+            qwen: Look::default_for(Provider::Qwen),
         }
     }
 }
@@ -73,6 +75,7 @@ impl Looks {
             Provider::Codex => self.codex,
             Provider::OpenCode => self.open_code,
             Provider::Grok => self.grok,
+            Provider::Qwen => self.qwen,
         }
     }
 
@@ -82,6 +85,7 @@ impl Looks {
             Provider::Codex => self.codex = look,
             Provider::OpenCode => self.open_code = look,
             Provider::Grok => self.grok = look,
+            Provider::Qwen => self.qwen = look,
         }
     }
 }
@@ -696,7 +700,7 @@ mod tests {
     #[test]
     fn each_agent_keeps_its_own_look() {
         let mut looks = Looks::default();
-        let coats = ["calico", "tuxedo", "van"];
+        let coats = ["calico", "tuxedo", "van", "black", "lilac"];
         for (p, id) in Provider::ALL.into_iter().zip(coats) {
             looks.set(
                 p,
@@ -720,6 +724,7 @@ mod tests {
         assert_eq!(v["cats"]["claude-code"]["coat"], "ginger-tabby");
         assert_eq!(v["cats"]["codex"]["coat"], "codex-night");
         assert_eq!(v["cats"]["opencode"]["eye"], Value::Null);
+        assert_eq!(v["cats"]["qwen-code"]["coat"], "lilac");
         assert_eq!(state(&v.to_string()), State::default());
     }
 
@@ -727,6 +732,10 @@ mod tests {
     fn a_cats_only_file_loads_with_default_animation_and_updates() {
         let s = state(r#"{"cats": {"codex": {"coat": "tuxedo", "eye": null}}}"#);
         assert_eq!(s.looks.get(Provider::Codex).coat.id, "tuxedo");
+        assert_eq!(
+            s.looks.get(Provider::Qwen),
+            Look::default_for(Provider::Qwen)
+        );
         assert_eq!(s.animation, Animation::default());
         assert_eq!(s.updates, Updates::default());
         assert_eq!(s.phones, Phones::default());
