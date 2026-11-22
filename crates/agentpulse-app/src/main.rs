@@ -19,7 +19,9 @@ use agentpulse_core::{AgentAdapter, ProcessIdentity};
 use agentpulse_cost::PriceBook;
 use agentpulse_process::{Pressure, ProcDetails, Signal};
 use agentpulse_storage::Store;
-use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
+use agentpulse_telemetry::{
+    ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter, QwenAdapter,
+};
 use anyhow::{Context, bail};
 use cleanup::{Host, SystemHost};
 use collector::Collector;
@@ -85,6 +87,10 @@ fn open_collector() -> anyhow::Result<Collector> {
     adapters.extend(
         OpenCodeAdapter::default_root()
             .map(|r| Box::new(OpenCodeAdapter::new(r)) as Box<dyn AgentAdapter>),
+    );
+    adapters.extend(
+        QwenAdapter::default_root()
+            .map(|root| Box::new(QwenAdapter::new(root)) as Box<dyn AgentAdapter>),
     );
     Collector::new(adapters, store, prices, errors)
 }

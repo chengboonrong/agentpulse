@@ -44,6 +44,7 @@ fn main() {
         Provider::Codex,
         Provider::OpenCode,
         Provider::Grok,
+        Provider::Qwen,
     ];
     let first = &frames(CatState::Sitting)[0];
     let (cw, ch) = (first.width() * SCALE, first.height() * SCALE);

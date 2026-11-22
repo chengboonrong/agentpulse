@@ -3,6 +3,8 @@
 //! canvas. Unknown is never drawn as zero: days before an agent's first stored
 //! event are "no data", unpriced requests are counted beside the estimates.
 
+use std::collections::BTreeSet;
+
 use agentpulse_core::{Provider, RateLimits, RateWindow};
 use chrono::{DateTime, Local, Offset, TimeZone};
 use gpui::{
@@ -207,6 +209,7 @@ fn day_x_axis(days: &[Day], t: Theme) -> Div {
 
 pub(super) fn usage(
     s: &Snapshot,
+    hidden: &BTreeSet<Provider>,
     notes: Vec<Div>,
     t: Theme,
     scroll: &ScrollHandle,
@@ -234,7 +237,7 @@ pub(super) fn usage(
             .child(card(t).mt(px(sp::XL)).child(daily_cost(u, t)))
             .child(card(t).mt(px(sp::L)).child(cache(u, t)))
             .child(card(t).mt(px(sp::L)).child(timeline(u, s.taken_at_ms, t)))
-            .child(card(t).mt(px(sp::L)).child(limits(s, t))),
+            .children(limits(s, hidden, t).map(|l| card(t).mt(px(sp::L)).child(l))),
     }
 }
 
@@ -695,13 +698,21 @@ fn limit_row(p: Provider, w: &RateWindow, l: &RateLimits, now: i64, t: Theme) ->
         }))
 }
 
-fn limits(s: &Snapshot, t: Theme) -> Div {
+/// None when every agent with plan limits is hidden.
+fn limits(s: &Snapshot, hidden: &BTreeSet<Provider>, t: Theme) -> Option<Div> {
+    let shown: Vec<Provider> = [Provider::ClaudeCode, Provider::Codex]
+        .into_iter()
+        .filter(|p| !hidden.contains(p))
+        .collect();
+    if shown.is_empty() {
+        return None;
+    }
     let section = div()
         .flex()
         .flex_col()
         .gap(px(sp::M))
         .child(section_label("Plan limits", t));
-    section.children([Provider::ClaudeCode, Provider::Codex].map(|p| {
+    Some(section.children(shown.into_iter().map(|p| {
         let body = match s.limits.get(&p) {
             None if p == Provider::ClaudeCode => secondary(
                 "No Claude Code limit data. Claude Code shares it only with a status line command; the README shows how to add one.",
@@ -731,7 +742,7 @@ fn limits(s: &Snapshot, t: Theme) -> Div {
             .gap(px(sp::S))
             .child(div().font_weight(FontWeight::BOLD).child(p.label()))
             .child(body)
-    }))
+    })))
 }
 
 // ---------------------------------------------------------- session detail

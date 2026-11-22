@@ -126,6 +126,18 @@ figcaption strong, .row p strong { color: var(--ink); }
 .widgets picture { display: block; min-width: 0; }
 .widgets img { display: block; border-radius: 22px; box-shadow: 0 8px 24px var(--shadow); }
 
+/* iPhone and iPad */
+.devices { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 20px; align-items: end; }
+.devices .ipad { grid-column: 1 / -1; max-width: 360px; }
+.device { display: block; border: 1px solid var(--keyline); border-radius: 28px; box-shadow: 0 8px 24px var(--shadow); }
+.ipad .device { border-radius: 20px; }
+@media (min-width: 760px) {
+  .devices { grid-template-columns: minmax(0, 220px) minmax(0, 220px) minmax(0, 360px); }
+  .devices .ipad { grid-column: auto; }
+}
+.store { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin: 32px 0 0; color: var(--muted); font-size: 15px; }
+.store img { display: block; }
+
 /* Private and light */
 .facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin: 28px 0 48px; }
 .facts li { background: var(--card); border-radius: 14px; padding: 16px 18px; color: var(--muted); font-size: 15px; line-height: 1.45; }
