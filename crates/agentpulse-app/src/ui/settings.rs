@@ -1,7 +1,9 @@
-//! The Settings screen: the animation, the update check and the phones. Also the
-//! banner that announces a new release on the other screens.
+//! The Settings screen: the agents shown, the animation, clean-up, the update
+//! check and the phones. Also the banner that announces a new release on the
+//! other screens.
 
 use agentpulse_platform_macos::reduce_motion;
+use agentpulse_telemetry::{ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter};
 use gpui::ClickEvent;
 
 use super::cats::toggled;
@@ -14,6 +16,8 @@ use crate::updates::{self, CURRENT, Check, Release};
 const CARD_MAX_W: f32 = 640.;
 const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
 const DIRECT_DETAIL: &str = "Phones on the same Wi-Fi get updates straight from this Mac.";
+const AGENTS_DETAIL: &str =
+    "A hidden agent is still recorded, so its history is complete when you show it again.";
 const CLEANUP_DETAIL: &str =
     "AgentPulse only ends processes it saw an agent start. Idle sessions are never ended for you.";
 const PHONES_PRIVACY: &str =
@@ -53,10 +57,48 @@ pub(super) fn screen(
         .flex()
         .flex_col()
         .child(heading("Settings"))
-        .child(animation_card(hub, entity, t).mt(px(sp::XL)))
+        .child(agents_card(hub, entity, t).mt(px(sp::XL)))
+        .child(animation_card(hub, entity, t).mt(px(sp::L)))
         .child(cleanup_card(hub, entity, t).mt(px(sp::L)))
         .child(updates_card(hub, entity, t).mt(px(sp::L)))
         .child(phones_card(hub, entity, phone, t).mt(px(sp::L)))
+}
+
+fn agents_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
+    let a = hub.settings.agents();
+    let rows = Provider::ALL.map(|p| {
+        switch(
+            p.as_str(),
+            p.label(),
+            (!detected(p)).then_some("Not detected"),
+            !a.is_hidden(p),
+            t,
+            on_hub(entity, move |h, cx| {
+                h.settings.set_hidden(p, !h.settings.agents().is_hidden(p));
+                // Wakes the collector, so every surface follows at once.
+                cx.global::<Shared>().details.send(Command::Refresh).ok();
+                cx.notify();
+            }),
+        )
+    });
+    card(t)
+        .max_w(px(CARD_MAX_W))
+        .gap(px(sp::M))
+        .child(card_title("Agents"))
+        .children(rows)
+        .child(secondary(AGENTS_DETAIL, t).px(px(sp::S)))
+}
+
+/// Whether the agent's data folder (its adapter's default root) exists: one
+/// metadata call, made when the screen renders.
+fn detected(p: Provider) -> bool {
+    match p {
+        Provider::ClaudeCode => ClaudeCodeAdapter::default_root(),
+        Provider::Codex => CodexAdapter::default_root(),
+        Provider::OpenCode => OpenCodeAdapter::default_root(),
+        Provider::Grok => GrokAdapter::default_root(),
+    }
+    .is_some_and(|root| root.exists())
 }
 
 fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {

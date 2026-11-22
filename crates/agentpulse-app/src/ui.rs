@@ -1208,7 +1208,9 @@ impl Render for AppView {
                     .into_any_element(),
             },
             (Screen::Usage, Some(s)) => {
-                charts::usage(s, notes(s, hub.stopped, t), t, &self.page_scroll).into_any_element()
+                let hidden = hub.settings.agents().hidden();
+                charts::usage(s, &hidden, notes(s, hub.stopped, t), t, &self.page_scroll)
+                    .into_any_element()
             }
             (Screen::Cleanup, Some(s)) => self
                 .cleanup_screen(s, notes(s, hub.stopped, t), t, view)
