@@ -10,7 +10,9 @@ from pathlib import Path
 
 SITE = Path(__file__).resolve().parent.parent / "site"
 DMG = "https://github.com/chengboonrong/agentpulse/releases/latest/download/AgentPulse.dmg"
-EXPECTED = ["cats", "answers", "menubar", "private", "agents", "download"]
+EXPECTED = ["cats", "answers", "menubar", "iphone", "private", "agents", "download"]
+# Fill in when Apple approves the iPhone app; until then test_app_store_link fails on purpose.
+APP_STORE = re.compile(r"^https://apps\.apple\.com/app/(?:[a-z0-9-]+/)?id\d+$")
 REDUCED = "(prefers-reduced-motion: reduce)"
 
 
@@ -129,6 +131,11 @@ class SiteRules(unittest.TestCase):
         hrefs = [h for h, classes in self.page.anchors if "download" in classes]
         self.assertGreaterEqual(len(hrefs), 2)
         self.assertTrue(all(h == DMG for h in hrefs), hrefs)
+
+    def test_app_store_link(self):
+        hrefs = [h for h, classes in self.page.anchors if "appstore" in classes]
+        self.assertGreaterEqual(len(hrefs), 1)
+        self.assertTrue(all(APP_STORE.match(h) for h in hrefs), hrefs)
 
     def test_no_version_number(self):
         self.assertIsNone(re.search(r"\bv?\d+\.\d+\.\d+\b", self.visible_text))
