@@ -4,7 +4,7 @@ import AgentPulsePhone
 import CryptoKit
 import Foundation
 
-/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|settings|pair-confirm|pair-code|empty>`: each screen from fixture
+/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|settings|notifications|notifications-denied|notifications-undetermined|pair-confirm|pair-code|empty>`: each screen from fixture
 /// data, without network, for screenshots. Debug builds only.
 @MainActor
 enum Fixtures {
@@ -20,6 +20,12 @@ enum Fixtures {
                 studio, pairing("MacBook Pro", minutesAgo: 42, payload: quiet), pairing("Mac mini", minutesAgo: nil),
             ]
             model.direct = [studio.id]
+        case "notifications", "notifications-denied", "notifications-undetermined":
+            model.pairings = [studio]
+            model.notifyChoices = .defaults
+            model.notificationStatus = name == "notifications" ? .authorized : name == "notifications-denied" ? .denied : .notDetermined
+            model.settingsShown = true
+            model.notificationsShown = true
         case "settings":
             model.pairings = [studio, pairing("MacBook Pro", minutesAgo: 42, payload: quiet)]
             model.settingsShown = true

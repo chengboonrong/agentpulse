@@ -190,8 +190,9 @@ token used and returns 410. Other APNs failures return 502 with `{error, reason}
 Alerts set `apns-expiration` to now + 300 seconds (Unix seconds). Live Activity
 pushes send no `apns-expiration`.
 
-In phase 2, the phone sends its alert token with every `PUT push-tokens` (which
-replaces all tokens), then resends `notify` after every PUT and with each `seen`.
+The phone syncs `notify` on foreground, on a choice change, after pairing, and
+after a direct connection opens. When choices are on, it sends its alert token
+with `PUT push-tokens` (which replaces all tokens) before `notify`.
 This re-enables alerts after token changes or relay errors disabled them. Alerts
 carry no pairing id; the Notification Service Extension tries each paired Mac's
 key until one opens the message.
@@ -309,6 +310,44 @@ pushes only go through the relay. Widgets use the relay only.
 - While open: a direct connection to each paired Mac on the same network, else fetches
   `down` every 10 s; widgets (small, medium) fetch in their timeline
   provider and show "as of".
+- Notifications: one set of choices for all Macs, stored as JSON in the phone's
+  `notifyChoices` UserDefaults. Waiting and failed default on; finished defaults off.
+  Settings shows the effective choices. Unless permission is authorized, provisional
+  or ephemeral, switches are off and disabled and the Settings summary says "Off".
+  When permission is not determined, the page says "Allow notifications to get alerts
+  from your Macs." and offers "Allow Notifications", requesting alert and sound
+  permission, then refreshing status and syncing. Request errors appear on this page.
+  Switches only store choices. Denied permission links to the app's notification settings.
+- Effective choices are all off unless permission is authorized, provisional or
+  ephemeral. The phone syncs them on each foreground, on a choice change, after
+  pairing a Mac, and after a direct connection opens. When any is on it registers
+  for remote notifications and sends nothing until the token callback (delivered
+  on every registration); each Mac then gets `PUT push-tokens` before `notify`.
+  After a direct connection opens, only that pairing is synced through the relay,
+  using the known token, so its `notify` seq is above the direct `seen`. Removed
+  pairings are skipped. When all effective choices are off, only `notify` is sent
+  immediately, without registration. The PUT includes the lowercase hex alert token.
+  Debug builds use `development`; TestFlight and App Store builds use `production`,
+  because export rewrites `aps-environment`. The `development` value in the app
+  entitlements file is intended. A Release build run from Xcode must not be used
+  to test alerts: development signing gives it a sandbox token while the app sends
+  `production`.
+- The notification service extension shares the App Group and Keychain with the app
+  and widgets. It tries `m` against each stored Mac's key using direction `alert`
+  and that pairing's id. The first open wins; only a valid `alert` with a newer seq
+  is shown, with `alertSeq` checked and saved under the store's lock. Unknown keys,
+  old or replayed seqs, malformed messages, errors and extension timeout keep the
+  relay's fixed fallback content.
+- Alert text: a single waiting event says "<agent> is waiting" / "<project> needs
+  your answer."; finished says "<agent> finished" / "<project> is ready for your
+  next prompt."; failed says "<agent> failed" / "<project> stopped with an error."
+  Several events say "<n> agents need you" if any is waiting, otherwise "<n> agents
+  updated", with a line per event ("<project>: waiting", "finished" or "failed"),
+  followed by "and <more> more" when present. The title count is
+  `events.count + (more ?? 0)`. The Mac name is the subtitle only when more than
+  one Mac is paired. The pairing id is the thread identifier.
+  Choices and alert text are end-to-end encrypted; the relay and Apple see only
+  that an alert was sent.
 - The Live Activity: started from the app, or by push when an agent starts; ended by
   push or after 8 hours (the system's limit).
 - Reuses `macos/Shared/Payload.swift` and the cat drawing from `WidgetViews.swift`.

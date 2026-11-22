@@ -17,6 +17,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
     public var lastStateAt: Date?
     /// The `down` `SeqGuard` record: the last accepted state's seq.
     public internal(set) var downSeq: UInt64?
+    public internal(set) var alertSeq: UInt64?
     /// The last `up` seq sent; the hello is 0.
     public internal(set) var upSeq: UInt64 = 0
 
@@ -37,6 +38,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
         lastState = try c.decodeIfPresent(Data.self, forKey: .lastState)
         lastStateAt = try c.decodeIfPresent(Date.self, forKey: .lastStateAt)
         downSeq = try c.decodeIfPresent(UInt64.self, forKey: .downSeq)
+        alertSeq = try c.decodeIfPresent(UInt64.self, forKey: .alertSeq)
         upSeq = try c.decodeIfPresent(UInt64.self, forKey: .upSeq) ?? 0
     }
 }
