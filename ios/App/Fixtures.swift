@@ -4,7 +4,7 @@ import AgentPulsePhone
 import CryptoKit
 import Foundation
 
-/// `-AgentPulseFixture <macs|mac|session|pair-confirm|pair-code|empty>`: each screen from fixture
+/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|pair-confirm|pair-code|empty>`: each screen from fixture
 /// data, without network, for screenshots. Debug builds only.
 @MainActor
 enum Fixtures {
@@ -22,6 +22,15 @@ enum Fixtures {
             model.pairings = [studio]
             model.direct = [studio.id]
             model.path = [studio.id]
+        case "mac-old-format", "mac-new-format", "mac-update":
+            let mac = pairing("Studio", minutesAgo: 1) { ms in
+                payload(ms, agents: (0, 0, 0), sessions: "",
+                    version: name == "mac-old-format" ? 0 : name == "mac-new-format" ? 2 : 1,
+                    update: name == "mac-update" ? "0.0.12" : nil)
+            }
+            model.pairings = [mac]
+            model.direct = [mac.id]
+            model.path = [mac.id]
         case "session":
             // A session column needs regular width (iPad); an iPhone shows the Mac.
             model.pairings = [studio]
@@ -66,9 +75,9 @@ enum Fixtures {
 
     static func quiet(_ ms: Int64) -> String { payload(ms, agents: (0, 0, 0), sessions: "") }
 
-    static func payload(_ ms: Int64, agents: (Int, Int, Int), sessions: String) -> String {
+    static func payload(_ ms: Int64, agents: (Int, Int, Int), sessions: String, version: Int = 1, update: String? = nil) -> String {
         """
-        {"version":1,"generated_at_ms":\(ms),"stopped":false,
+        {"version":\(version),"app_version":"0.0.11",\(update.map { "\"update\":\"\($0)\"," } ?? "")"generated_at_ms":\(ms),"stopped":false,
         "agents":{"active":\(agents.0),"waiting":\(agents.1),"idle":\(agents.2)},
         "today":{"tokens":"2.1M","cost":"$6.40","cost_note":"Estimated from list prices.","unpriced":0},
         "output_rate":"38 tok/s",

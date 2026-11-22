@@ -49,6 +49,7 @@ const MIN_WAIT_MS: i64 = 100;
 pub enum Msg {
     Command(Command),
     Publish(Box<Payload>),
+    Update(Option<String>),
     /// A listener event from the bridge.
     Event(Value),
     /// Settings changed; re-read them.
@@ -197,6 +198,10 @@ impl PhoneLink {
         self.send(Msg::Command(Command::SetRelayKey(key)));
     }
 
+    pub fn set_update(&self, version: Option<String>) {
+        self.send(Msg::Update(version));
+    }
+
     /// Call after changing the `phones` settings.
     pub fn settings_changed(&self) {
         self.send(Msg::Wake);
@@ -315,6 +320,7 @@ struct Core {
     pairings: Vec<Pairing>,
     live: HashMap<String, Live>,
     payload: Option<Payload>,
+    update: Option<String>,
     pending: Option<Started>,
     error: Option<String>,
     /// The pairings the listener was last set to (id, phone key); None when off.
@@ -350,6 +356,7 @@ impl Core {
             dir,
             live: HashMap::new(),
             payload: None,
+            update: None,
             pending: None,
             error: None,
             listener: None,
@@ -376,7 +383,19 @@ impl Core {
     fn handle(&mut self, msg: Msg, now: i64) {
         match msg {
             // The phone contract has no plan limit: it stays on this Mac's widget.
-            Msg::Publish(p) => self.payload = Some(Payload { limit: None, ..*p }),
+            Msg::Publish(p) => {
+                self.payload = Some(Payload {
+                    limit: None,
+                    update: self.update.clone(),
+                    ..*p
+                });
+            }
+            Msg::Update(version) => {
+                self.update = version;
+                if let Some(p) = &mut self.payload {
+                    p.update = self.update.clone();
+                }
+            }
             Msg::Event(e) => self.event(&e, now),
             Msg::Wake => {}
             Msg::Command(Command::StartPairing(reply)) => {

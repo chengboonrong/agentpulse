@@ -1126,3 +1126,46 @@ fn a_failed_listener_set_is_tried_again_every_30_s() {
     r.core.tick(t + 80_000);
     assert_eq!(set(&r).len(), 4);
 }
+
+#[test]
+fn update_changes_are_sent_and_survive_publishes() {
+    let mut r = rig("update");
+    let id = r.pair();
+    let t = T0 + 60_000;
+    r.publish(payload(1, 1), t);
+    r.core.handle(Msg::Update(Some("0.0.12".into())), t + 1);
+    assert_eq!(
+        r.core.publish_due(&r.core.live[&id]),
+        Some(t + PUBLISH_EVERY_MS)
+    );
+    r.core.tick(t + PUBLISH_EVERY_MS - 1);
+    assert!(
+        r.relay.down(&id).unwrap().1["payload"]
+            .get("update")
+            .is_none()
+    );
+    r.core.tick(t + PUBLISH_EVERY_MS);
+    assert_eq!(r.relay.down(&id).unwrap().1["payload"]["update"], "0.0.12");
+    r.publish(payload(2, 2), t + 2 * PUBLISH_EVERY_MS);
+    let sent = &r.relay.down(&id).unwrap().1["payload"];
+    assert_eq!(sent["agents"]["active"], 2, "the new payload was sent");
+    assert_eq!(sent["update"], "0.0.12");
+    r.core
+        .handle(Msg::Update(None), t + 2 * PUBLISH_EVERY_MS + 1);
+    r.core.tick(t + 3 * PUBLISH_EVERY_MS);
+    assert!(
+        r.relay.down(&id).unwrap().1["payload"]
+            .get("update")
+            .is_none()
+    );
+}
+
+#[test]
+fn update_before_first_payload_is_kept() {
+    let mut r = rig("update-first");
+    let id = r.pair();
+    r.core
+        .handle(Msg::Update(Some("0.0.12".into())), T0 + 3_000);
+    r.publish(payload(1, 1), T0 + 60_000);
+    assert_eq!(r.relay.down(&id).unwrap().1["payload"]["update"], "0.0.12");
+}

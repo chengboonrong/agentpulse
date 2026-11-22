@@ -262,6 +262,8 @@ impl Hub {
         );
         self.item
             .set_update(self.available().map(|r| r.version.as_str()));
+        self.phones
+            .set_update(self.available().map(|r| r.version.clone()));
         self.schedule_check(cx);
         cx.notify();
     }

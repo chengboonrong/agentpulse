@@ -52,6 +52,9 @@ const BRIDGE_SYMBOL: &CStr = c"agentpulse_reload_widgets";
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Payload {
     pub version: u32,
+    pub app_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
     pub generated_at_ms: i64,
     pub stopped: bool,
     pub agents: Agents,
@@ -234,6 +237,8 @@ pub fn payload(snap: &Snapshot, stopped: bool, looks: &Looks) -> Payload {
     let count = |st| snap.sessions.iter().filter(|s| s.status == st).count();
     Payload {
         version: VERSION,
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        update: None,
         generated_at_ms: snap.taken_at_ms,
         stopped,
         agents: Agents {
@@ -616,6 +621,7 @@ mod tests {
             keys(&v),
             [
                 "agents",
+                "app_version",
                 "cat",
                 "generated_at_ms",
                 "output_rate",
@@ -646,6 +652,8 @@ mod tests {
             ]
         );
         assert_eq!(v["version"], 1);
+        assert_eq!(v["app_version"], env!("CARGO_PKG_VERSION"));
+        assert!(v.get("update").is_none());
         assert_eq!(v["output_rate"], "28.8 tok/s");
         assert_eq!(v["sessions"][0]["status"], "Active");
         assert_eq!(

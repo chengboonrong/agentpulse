@@ -1,6 +1,6 @@
 // The widget.json contract (version 1), written by
 // crates/agentpulse-app/src/widget_export.rs. Shared by the widget extension
-// and the preview renderer.
+// and the preview renderer. The phone also reads the optional update (a newer Mac release).
 
 import Foundation
 
@@ -69,11 +69,12 @@ struct WidgetPayload: Decodable {
     let cat: Cat
     let sessions: [Session]
     let limit: Limit?
+    let update: String?
 
     var generatedAt: Date { Date(timeIntervalSince1970: Double(generatedAtMs) / 1000) }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAtMs, stopped, agents, today, outputRate, cat, sessions, limit
+        case version, generatedAtMs, stopped, agents, today, outputRate, cat, sessions, limit, update
     }
 
     init(from decoder: Decoder) throws {
@@ -88,6 +89,7 @@ struct WidgetPayload: Decodable {
         sessions = try c.decode([Session].self, forKey: .sessions)
         // Optional and lenient: a malformed limit drops the bar, not the whole widget.
         limit = try? c.decodeIfPresent(Limit.self, forKey: .limit)
+        update = try? c.decodeIfPresent(String.self, forKey: .update)
     }
 }
 
@@ -118,6 +120,8 @@ enum WidgetState {
 
 extension WidgetPayload {
     /// Version 1 only; nil for anything else or anything undecodable.
+    /// Keep in step with `PayloadFormat.supported` (link/Sources/AgentPulsePhone), which
+    /// the phone uses to explain a payload this rejects.
     static func decode(_ data: Data) -> WidgetPayload? {
         struct Version: Decodable { let version: Int }
         let decoder = JSONDecoder()

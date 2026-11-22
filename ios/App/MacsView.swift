@@ -102,6 +102,11 @@ private struct MacRow: View {
             Group {
                 if let problem {
                     Text(problem).foregroundStyle(.red)
+                } else if payload == nil,
+                    let check = pairing.lastState.map(PayloadFormat.check),
+                    check == .macTooOld || check == .phoneTooOld
+                {
+                    Text("Needs an update")
                 } else if let at = pairing.lastStateAt {
                     Text("Updated \(at, format: .relative(presentation: .named))\(direct ? " · Direct" : "")")
                 } else {

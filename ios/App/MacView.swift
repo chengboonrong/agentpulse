@@ -29,6 +29,12 @@ struct MacView: View {
                 }
             }
             if let p = payload {
+                if let update = p.update {
+                    Section {
+                        Label("AgentPulse \(update) is available for \(pairing.macName).", systemImage: "arrow.down.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Section {
                     CatView(cat: p.cat, silhouette: false)
                         .frame(height: 120)
@@ -66,8 +72,17 @@ struct MacView: View {
                 }
             } else {
                 Section {
-                    Text("Waiting for your Mac to send its first update.")
-                        .foregroundStyle(.secondary)
+                    switch pairing.lastState.map(PayloadFormat.check) {
+                    case .macTooOld:
+                        Label("Update AgentPulse on \(pairing.macName) to see its sessions.", systemImage: "arrow.down.circle")
+                            .foregroundStyle(.secondary)
+                    case .phoneTooOld:
+                        Label("Update this app to see \(pairing.macName)'s sessions.", systemImage: "arrow.down.circle")
+                            .foregroundStyle(.secondary)
+                    default:
+                        Text("Waiting for your Mac to send its first update.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             Section {
