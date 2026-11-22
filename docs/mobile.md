@@ -54,9 +54,9 @@ HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305). macOS 14 and iOS 17 have it.
   Removing a pairing deletes its keys.
 - Every message is one HPKE single-shot seal: `enc (32 bytes) || ciphertext`, base64url.
 - `info` = `"agentpulse/1 " + direction + " " + pairing id`, direction `down` (Mac to
-  phone) or `up` (phone to Mac), so a message can't be replayed in the other direction
-  or another pairing.
-- After pairing, both directions use auth mode (sealed with the sender's private key,
+  phone state), `up` (phone to Mac) or `alert` (Mac to phone notification), so a message
+  can't be replayed in another direction or pairing.
+- After pairing, all directions use auth mode (sealed with the sender's private key,
   opened with its public key), so the phone knows its data came from that Mac.
 - The phone's hello is the only base-mode message; it proves the QR was seen by
   carrying the pairing secret inside the ciphertext.
@@ -71,7 +71,9 @@ HKDF-SHA256, HKDF-SHA256, ChaCha20-Poly1305). macOS 14 and iOS 17 have it.
   widgets and the Live Activity, so none of them accepts a state older than one already
   shown. The hello is `up` seq 0; the phone's later messages continue from 1.
 - Every plaintext carries `seq`, a counter per pairing and direction; a receiver drops
-  anything not newer than the last it accepted.
+  anything not newer than the last it accepted. The `alert` direction has its own seq
+  per pairing, persisted by the Mac, independent of `down`; opening a notification
+  never advances the app's or widgets' state seq.
 
 ## Messages
 
@@ -82,9 +84,19 @@ JSON objects with `seq` (a counter per pairing and direction, from 0) and `type`
 | down | `state` | `payload`: the widget payload |
 | down | `heartbeat` | `sentAtMs`; direct connections only, with the `seq` of the latest `state`, so it never advances a receiver's record |
 | up | `seen` | `sentAtMs`; sent when the app opens, every 6 hours from background refresh, and as the first frame of a direct connection |
+| up | `notify` | `waiting`, `finished`, `failed`: booleans; latest notification choices, saved per pairing on the Mac |
 | up | `unpair` | none; the Mac removes the pairing, and deletes it at the relay |
+| alert | `alert` | `events`: array of objects with `kind` (`waiting`, `finished` or `failed`), `agent` (provider label), `project` (folder name) |
 
 The phone's pairing hello is the one message without `type`; it is described below.
+The phone sends the same `notify` choices to each paired Mac. Until one arrives, that
+pairing receives no alerts. Choices and alert contents travel only inside ciphertext.
+The relay sees the `urgent` flag and ciphertext length.
+
+The phone includes `alert` on every `PUT push-tokens`, which replaces all tokens.
+It PUTs tokens before sending `notify`, so an event cannot disable alerts with a 409.
+If the extension receives an alert whose seq is not newer than the last seen, it shows
+the fixed fallback text instead of replaying old content.
 
 Removing a pairing on the phone: it posts `unpair` and, once that succeeds, does nothing
 more; the Mac, on reading it, removes the pairing and deletes it at the relay. If the post
@@ -134,8 +146,8 @@ stores only SHA-256 hashes of tokens. One Durable Object per pairing id.
 | `GET /v1/pairings/{id}/down` | phone | Latest state; `If-None-Match: <seq>` returns 304 |
 | `POST /v1/pairings/{id}/up` `{message}` | phone | Queues a message for the Mac (at most 32 queued) |
 | `GET /v1/pairings/{id}/up` | Mac | Returns and deletes queued messages, the hello first |
-| `PUT /v1/pairings/{id}/push-tokens` `{activity?, start?, environment}` | phone | Apple push tokens for the Live Activity |
-| `POST /v1/pairings/{id}/push` `{event: "update" \| "start" \| "end", message, urgent}` | Mac | Sends a Live Activity push |
+| `PUT /v1/pairings/{id}/push-tokens` `{activity?, start?, alert?, environment}` | phone | Apple push tokens for the Live Activity and notifications |
+| `POST /v1/pairings/{id}/push` `{event: "update" \| "start" \| "end" \| "alert", message, urgent}` | Mac | Sends a Live Activity or alert push |
 | `DELETE /v1/pairings/{id}` | either | Removes the pairing and everything stored for it |
 
 Limits:
@@ -155,12 +167,34 @@ anyone can create pairings, which expire after 10 minutes unanswered.
 Part of the same Worker, holding the APNs key as Worker secrets (`APNS_KEY_P8`,
 `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`). For a push it signs an ES256 JWT with
 WebCrypto and posts to `api.push.apple.com` (or the sandbox for development tokens),
-type `liveactivity`, with content state `{"m": "<message>"}`. The Live Activity's views
+using the push type for the event. Live Activity pushes use type `liveactivity`, with content state `{"m": "<message>"}`. The Live Activity's views
 decrypt `m` when they draw, with the key the App Group shares. Priority 10 only when
 `urgent` (an agent starts waiting for you), else 5. A relay without APNs secrets still
 relays; its `push` answers 501. A `start` push carries a fixed alert, because Apple
 requires one when a push starts a Live Activity (ActivityKit, "Starting and updating
 Live Activities with ActivityKit push notifications").
+
+For `event: "alert"`, the gateway uses the `alert` token, `apns-push-type: alert`
+and `apns-topic: <APNS_TOPIC>`. Its body is:
+
+```json
+{"aps":{"alert":{"title":"AgentPulse","body":"An agent needs your attention"},
+"mutable-content":1,"sound":"default"},"m":"<message>"}
+```
+
+The phone's Notification Service Extension opens `m` and writes the text; the fixed
+text is the fallback if decryption fails. Priority is 10 when `urgent`, else 5.
+Alerts and Live Activity pushes share the hourly limits. Missing tokens return 409;
+APNs 410, or 400 with `BadDeviceToken` or `DeviceTokenNotForTopic`, removes only the
+token used and returns 410. Other APNs failures return 502 with `{error, reason}`.
+Alerts set `apns-expiration` to now + 300 seconds (Unix seconds). Live Activity
+pushes send no `apns-expiration`.
+
+In phase 2, the phone sends its alert token with every `PUT push-tokens` (which
+replaces all tokens), then resends `notify` after every PUT and with each `seen`.
+This re-enables alerts after token changes or relay errors disabled them. Alerts
+carry no pairing id; the Notification Service Extension tries each paired Mac's
+key until one opens the message.
 
 ## Direct connection (same network)
 
@@ -236,12 +270,32 @@ pushes only go through the relay. Widgets use the relay only.
   always a state.
 - An own relay that sets `RELAY_KEY`: Settings takes the key, kept in the Keychain and sent
   only when creating a pairing on that relay, never to the AgentPulse relay.
-- Live Activity pushes, when the phone has sent tokens:
-  - `start` when the first agent becomes active (iOS 17.2 push-to-start);
-  - `update` when the glance changes, at most once a minute unless urgent;
-  - `end` when no agent is live for 10 minutes.
-  The glance is small, to fit APNs' 4 KB: counts, the project that needs you, today's
-  cost, the output rate and the cat sprite.
+- Live Activity pushes are not sent yet; they are part of build step 4.
+- Notifications track each provider and session id. A new status must hold for 10 s
+  of snapshot time before firing, once per stretch:
+  - `waiting`: enters Waiting from any other status; urgent.
+  - `finished`: Active becomes Idle or Completed. Idle and Completed share a stretch.
+    Waiting to Idle does not count.
+  - `failed`: a live status becomes Failed.
+  A short status blip cancels the pending hold; returning starts a new 10 s hold.
+  Returning within 10 s to a stretch that already fired keeps it fired (Idle and
+  Completed count as the same status). A snapshot gap over 30 s restarts every 10 s
+  hold at wake, so sleep can't trigger an alert the moment the lid opens; a stretch's
+  start and fired flag stay, so a long turn across the gap still counts as a turn, not a
+  blip. First-seen sessions only record their state. Missing sessions are forgotten; returning sessions are first-seen again.
+  Hidden agents do not notify. Qwen Code uses transcript age, so each 30 s pause can
+  produce `finished` after the hold.
+- Each batch sends one sealed `alert` per confirmed pairing with allowed events:
+  `{"seq": n, "type": "alert", "events": [{"kind", "agent", "project"}, …]}`.
+  Each alert includes the first 8 allowed events; `"more": n` reports the number
+  dropped and is omitted when none were dropped. The agent is the provider label
+  and the project is only the folder name.
+  The Mac persists the pairing's alert seq before sealing. Empty filtered batches
+  spend no seq. `urgent` is true only if the filtered batch contains `waiting`.
+  Pushes always use the relay, even when connected directly.
+  A 409, 410 or 501 disables alerts until the pairing's next `notify`.
+  A 429, 502 or no answer drops that batch. A pairing in relay backoff is skipped
+  without spending a seq. There is no retry queue.
 - Last seen: when the phone's last `up` message arrived (the phone sends one when it
   opens and every 6 hours from background refresh).
 - Network use stays in the README and telemetry spec, beside the update check.

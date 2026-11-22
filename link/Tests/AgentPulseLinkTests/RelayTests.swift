@@ -27,6 +27,16 @@ struct RelayTests {
         #expect(Data(base64URLEncoded: down)?.count == 32 + text.count + 16)
     }
 
+    @Test func alertHasItsOwnDirection() throws {
+        let alert = try RelayMessage.seal(text, to: phone.publicKey, from: mac, direction: .alert, pairingId: id)
+        #expect(try RelayMessage.open(alert, with: phone, from: mac.publicKey, direction: .alert, pairingId: id) == text)
+        for direction in [Direction.down, .up] {
+            #expect(throws: (any Error).self) {
+                try RelayMessage.open(alert, with: phone, from: mac.publicKey, direction: direction, pairingId: id)
+            }
+        }
+    }
+
     @Test func wrongContextFails() throws {
         let down = try RelayMessage.seal(text, to: phone.publicKey, from: mac, direction: .down, pairingId: id)
         #expect(throws: (any Error).self) {

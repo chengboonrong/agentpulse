@@ -398,6 +398,45 @@ describe("push", () => {
       Object.assign(env, { APNS_KEY_P8: undefined, APNS_KEY_ID: undefined, APNS_TEAM_ID: undefined, APNS_TOPIC: undefined });
     });
 
+    it("stores and validates alert tokens and sends encrypted alerts", async () => {
+      const alert = "ef".repeat(40);
+      const p = await withTokens("production", { activity, alert });
+      expect(((await stored(p.id)).get("meta") as { push: { alert: string } }).push.alert).toBe(alert);
+      for (const bad of [5, "zz", "a".repeat(63), "a".repeat(201)]) {
+        expect((await req("PUT", `/v1/pairings/${p.id}/push-tokens`, { token: p.phone, body: { alert: bad, environment: "production" } })).status).toBe(400);
+      }
+      const spy = mockApns();
+      for (const [i, urgent] of [false, true].entries()) {
+        expect((await push(p, { event: "alert", message: "c2VhbGVk", urgent })).status).toBe(200);
+        const { url, headers, body } = sent(spy, i);
+        expect(url).toBe(`https://api.push.apple.com/3/device/${alert}`);
+        expect(headers["apns-push-type"]).toBe("alert");
+        expect(headers["apns-expiration"]).toBe(String(Math.floor(clock / 1000) + 300));
+        expect(headers["apns-topic"]).toBe("app.agentpulse.ios");
+        expect(headers["apns-priority"]).toBe(urgent ? "10" : "5");
+        expect(body).toEqual({ aps: { alert: { title: "AgentPulse", body: "An agent needs your attention" }, "mutable-content": 1, sound: "default" }, m: "c2VhbGVk" });
+      }
+      const without = await withTokens();
+      expect((await push(without, { event: "alert", message: "m", urgent: false })).status).toBe(409);
+    });
+
+    it("removes a gone alert token without changing the activity token", async () => {
+      mockApns(() => Response.json({ reason: "Unregistered" }, { status: 410 }));
+      const p = await withTokens("development", { activity, alert: "ef".repeat(40) });
+      expect((await push(p, { event: "alert", message: "m", urgent: false })).status).toBe(410);
+      expect((await push(p, { event: "alert", message: "m", urgent: false })).status).toBe(409);
+      expect(((await stored(p.id)).get("meta") as { push: { activity: string } }).push.activity).toBe(activity);
+    });
+
+    it("shares hourly limits between alerts and Live Activity", async () => {
+      mockApns();
+      const p = await withTokens("development", { activity, alert: "ef".repeat(40) });
+      for (const [urgent, limit] of [[false, 60], [true, 12]] as const) {
+        for (let i = 0; i < limit; i++) expect((await push(p, { event: i % 2 ? "alert" : "update", message: "m", urgent })).status).toBe(200);
+        for (const event of ["alert", "update"]) expect((await push(p, { event, message: "m", urgent })).status).toBe(429);
+      }
+    });
+
     it("validates push tokens", async () => {
       const p = await pair();
       const path = `/v1/pairings/${p.id}/push-tokens`;
@@ -460,8 +499,8 @@ describe("push", () => {
         const p = await withTokens("production");
         apns.mockImplementationOnce(async () => Response.json({ reason }, { status: 403 }));
         const r = await push(p, { event: "update", message: "m", urgent: false });
-        expect(r.status).toBe(403);
-        expect(await r.json()).toEqual({ reason });
+        expect(r.status).toBe(502);
+        expect(await r.json()).toEqual({ error: "APNs rejected push", reason });
         await push(p, { event: "update", message: "m", urgent: false });
         await push(p, { event: "update", message: "m", urgent: false });
         const [a, b, c] = [0, 1, 2].map((i) => sent(apns, i).headers.authorization);
@@ -511,6 +550,7 @@ describe("push", () => {
         "apns-priority": "5",
       });
       expect(body).toEqual({ aps: { timestamp: Math.floor(clock / 1000), event: "update", "content-state": { m: "c2VhbGVk" } } });
+      expect(headers["apns-expiration"]).toBeUndefined();
       const jwt = await readJwt(headers.authorization);
       expect(jwt.valid).toBe(true);
       expect(jwt.header).toEqual({ alg: "ES256", kid: "KEY1234567" });
@@ -549,6 +589,29 @@ describe("push", () => {
       expect(r.status).toBe(410);
       expect(await r.json()).toEqual({ reason: "Unregistered" });
       expect((await push(p, { event: "update", message: "m", urgent: false })).status).toBe(409);
+    });
+
+    it.each(["BadDeviceToken", "DeviceTokenNotForTopic"])("removes invalid tokens: %s", async (reason) => {
+      mockApns(() => Response.json({ reason }, { status: 400 }));
+      for (const event of ["alert", "update"]) {
+        const p = await withTokens("production", { activity, alert: "ef".repeat(40) });
+        expect((await push(p, { event, message: "m", urgent: false })).status).toBe(410);
+        expect((await push(p, { event, message: "m", urgent: false })).status).toBe(409);
+      }
+    });
+
+    it.each([400, 403, 404, 429, 500])("maps APNs %s to 502", async (status) => {
+      const reason = status === 400 ? "BadPriority" : "Rejected";
+      mockApns(() => Response.json({ reason }, { status }));
+      for (const event of ["alert", "update"]) {
+        const p = await withTokens("production", { activity, alert: "ef".repeat(40) });
+        const r = await push(p, { event, message: "m", urgent: false });
+        expect(r.status).toBe(502);
+        expect(await r.json()).toEqual({ error: "APNs rejected push", reason });
+        const retry = await push(p, { event, message: "m", urgent: false });
+        expect(retry.status).toBe(502);
+        expect(await retry.json()).toEqual({ error: "APNs rejected push", reason });
+      }
     });
 
     it("answers 502 when APNs can't be reached", async () => {
