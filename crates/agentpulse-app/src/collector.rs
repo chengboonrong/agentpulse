@@ -38,15 +38,15 @@ const HISTORY_RETRY: Duration = Duration::from_secs(60);
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Snapshot {
     pub taken_at_ms: i64,
-    /// Every agent's sessions. Live first (Active, Waiting, Idle), then ended;
+    /// Every shown agent's sessions. Live first (Active, Waiting, Idle), then ended;
     /// each group newest activity first.
     pub sessions: Vec<AgentSession>,
-    /// Since local midnight, all agents.
+    /// Since local midnight, all shown agents.
     pub today_tokens: TokenUsage,
     /// Estimated, or Unavailable when there are events but none is priced.
     pub today_cost_usd: Reading<f64>,
     pub today_unpriced_events: u64,
-    /// Output tokens/s over the last 30 s, all sessions.
+    /// Output tokens/s over the last 30 s, all shown agents.
     pub output_rate: f32,
     /// One (unix ms, output tokens/s) sample per tick, most recent last, at most 120.
     pub rate_history: Vec<(i64, f32)>,
@@ -62,7 +62,7 @@ pub struct Snapshot {
     pub errors: Vec<String>,
     /// None until the history has been indexed and queried.
     pub usage: Option<UsageCharts>,
-    /// Each agent's newest plan-limit reading, in memory only.
+    /// Each shown agent's newest plan-limit reading, in memory only.
     pub limits: BTreeMap<Provider, RateLimits>,
     /// The session the window asked for with [`Collector::show_detail`].
     #[serde(skip)]
@@ -77,6 +77,8 @@ pub enum Command {
     Detail(Option<Key>),
     End(ProcessIdentity),
     Keep(ProcessIdentity),
+    /// Nothing but a tick now, such as after a setting changed.
+    Refresh,
 }
 
 /// What the Usage screen draws.
@@ -147,7 +149,7 @@ struct Cache {
     midnight: i64,
     live: BTreeSet<Key>,
     rows: Vec<Vec<SessionRow>>,
-    totals: Totals,
+    totals: BTreeMap<Provider, Totals>,
 }
 
 /// One adapter and its own errors, so a broken agent never hides another's data.
@@ -167,7 +169,8 @@ pub struct Collector {
     prices: PriceBook,
     sampler: Sampler,
     offsets: HashMap<String, u64>,
-    meter: ActivityMeter,
+    /// Per agent, so a hidden agent's output leaves the rate.
+    meters: BTreeMap<Provider, ActivityMeter>,
     session_meters: HashMap<Key, ActivityMeter>,
     /// Output tokens already fed to the meters per event (with the event's
     /// time), so a response re-read with fuller usage adds only the increase.
@@ -182,6 +185,10 @@ pub struct Collector {
     history: Option<History>,
     today: Option<Today>,
     limits: BTreeMap<Provider, RateLimits>,
+    /// Left out of the snapshots, still collected.
+    hidden: BTreeSet<Provider>,
+    /// The last tick saw a live session, hidden or not: the loop's pace.
+    live: bool,
     detail_key: Option<Key>,
     detail: Option<Arc<SessionDetail>>,
     tracker: Tracker,
@@ -223,7 +230,7 @@ impl Collector {
             store,
             prices,
             sampler: Sampler::new(),
-            meter: ActivityMeter::new(RATE_WINDOW_MS),
+            meters: BTreeMap::new(),
             session_meters: HashMap::new(),
             metered: HashMap::new(),
             table: None,
@@ -236,6 +243,8 @@ impl Collector {
             history: None,
             today: None,
             limits: BTreeMap::new(),
+            hidden: BTreeSet::new(),
+            live: false,
             detail_key: None,
             detail: None,
             last_sweep: None,
@@ -256,11 +265,18 @@ impl Collector {
         self.detail_key = key;
     }
 
+    /// Agents left out of the snapshots from the next tick on. Their data is
+    /// still collected and their processes still cleaned up.
+    pub fn set_hidden(&mut self, hidden: BTreeSet<Provider>) {
+        self.hidden = hidden;
+    }
+
     /// Applies one command from the window. After End or Keep the next tick
     /// sweeps, so the view shows the change at once.
     pub fn command(&mut self, c: Command, host: &mut dyn Host) {
         let done = match c {
             Command::Detail(key) => return self.show_detail(key),
+            Command::Refresh => return,
             Command::End(p) => {
                 let fresh;
                 let table = match &self.table {
@@ -331,7 +347,10 @@ impl Collector {
                                     }
                                     let added = e.usage.output - seen;
                                     self.metered.insert(key, (e.ts_ms, e.usage.output));
-                                    self.meter.record(e.ts_ms, added);
+                                    self.meters
+                                        .entry(provider)
+                                        .or_insert_with(|| ActivityMeter::new(RATE_WINDOW_MS))
+                                        .record(e.ts_ms, added);
                                     self.session_meters
                                         .entry((provider, e.session_id.clone()))
                                         .or_insert_with(|| ActivityMeter::new(RATE_WINDOW_MS))
@@ -424,7 +443,7 @@ impl Collector {
                 .iter()
                 .map(|s| self.store.sessions_since(s.adapter.provider(), cutoff))
                 .collect();
-            let totals = self.store.totals_since(midnight);
+            let totals = self.store.totals_by_provider(midnight);
             match rows
                 .and_then(|r| Ok((r, totals?)))
                 .and_then(|(r, t)| Ok((r, t, self.query_today(midnight)?)))
@@ -495,14 +514,16 @@ impl Collector {
             .iter_mut()
             .map(|(k, m)| (k.clone(), m.rate_per_sec(now) as f32))
             .collect();
-        let empty = Totals {
-            tokens: TokenUsage::default(),
-            cost_usd: 0.0,
-            priced_events: 0,
-            unpriced_events: 0,
-            sessions: 0,
-        };
-        let totals = self.cache.as_ref().map_or(&empty, |c| &c.totals);
+        // Summed here, so showing or hiding an agent needs no new query.
+        let mut totals = Totals::default();
+        for (_, t) in self
+            .cache
+            .iter()
+            .flat_map(|c| &c.totals)
+            .filter(|(p, _)| !self.hidden.contains(p))
+        {
+            totals += t;
+        }
         let groups: Vec<Group> = self
             .sources
             .iter()
@@ -517,14 +538,22 @@ impl Collector {
                 live: &s.live,
             })
             .collect();
-        let mut snap = build_snapshot(&groups, totals, table, &rates, now);
+        let mut snap = build_snapshot(&groups, &totals, table, &rates, now);
 
         self.session_meters.retain(|(p, id), _| {
             snap.sessions
                 .iter()
                 .any(|s| s.provider == *p && &s.session_id == id)
         });
-        snap.output_rate = self.meter.rate_per_sec(now) as f32;
+        let mut rate = 0.0;
+        for (p, m) in &mut self.meters {
+            // Read even when hidden, so its old samples age out.
+            let r = m.rate_per_sec(now);
+            if !self.hidden.contains(p) {
+                rate += r;
+            }
+        }
+        snap.output_rate = rate as f32;
         snap.system_gpu_percent = gpu_utilization().map_or(Reading::Unavailable, Reading::Measured);
         // The clock went back: older samples would land in the future.
         if self.rate_history.back().is_some_and(|&(at, _)| at > now) {
@@ -537,7 +566,12 @@ impl Collector {
         snap.rate_history = self.rate_history.iter().copied().collect();
         snap.indexing = indexing;
         snap.usage = self.usage_charts(now);
-        snap.limits = self.limits.clone();
+        snap.limits = self
+            .limits
+            .iter()
+            .filter(|(p, _)| !self.hidden.contains(p))
+            .map(|(p, l)| (*p, l.clone()))
+            .collect();
         snap.detail = self.detail.clone();
         if let Some((cfg, host)) = cleanup {
             if self
@@ -579,16 +613,25 @@ impl Collector {
             }
             snap.cleanup = self.cleanup.clone();
         }
+        // Only now: the per-session meters, the clean-up sweep and the pace see every agent.
+        self.live = snap.sessions.iter().any(|s| s.status.is_live());
+        snap.sessions.retain(|s| !self.hidden.contains(&s.provider));
+        (snap.agents_cpu_percent, snap.agents_rss_bytes) = resources(&snap.sessions);
         snap.errors = self
             .config_errors
             .iter()
             .cloned()
-            .chain(self.sources.iter().flat_map(|s| {
-                [&s.poll_error, &s.live_error, &s.apply_error]
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-            }))
+            .chain(
+                self.sources
+                    .iter()
+                    .filter(|s| !self.hidden.contains(&s.adapter.provider()))
+                    .flat_map(|s| {
+                        [&s.poll_error, &s.live_error, &s.apply_error]
+                            .into_iter()
+                            .flatten()
+                            .cloned()
+                    }),
+            )
             .chain(self.query_error.clone())
             .chain(self.history_error.as_ref().map(|e| e.1.clone()))
             .chain(self.detail_error.clone())
@@ -662,6 +705,7 @@ impl Collector {
                     .iter()
                     .zip(&h.days)
                     .zip(&t.days)
+                    .filter(|((s, _), _)| !self.hidden.contains(&s.adapter.provider()))
                     .map(|((s, (past, first)), today)| {
                         // The cached first event may predate today's first rows.
                         let has_data = first.is_some_and(|f| f < *end)
@@ -683,14 +727,24 @@ impl Collector {
                     .collect(),
             })
             .collect();
-        let (saved, unpriced) =
-            cache_saving(h.cache_reads.iter().chain(&t.cache_reads), &self.prices);
+        let (saved, unpriced) = cache_saving(
+            h.cache_reads
+                .iter()
+                .chain(&t.cache_reads)
+                .filter(|m| !self.hidden.contains(&m.provider)),
+            &self.prices,
+        );
         Some(UsageCharts {
             days,
             // History must end where today starts, or a day is missing or counted twice.
             cache_saved_usd: (h.midnight == t.midnight).then_some(saved),
             cache_saved_unpriced: unpriced,
-            today: t.lanes.clone(),
+            today: t
+                .lanes
+                .iter()
+                .filter(|(p, _)| !self.hidden.contains(p))
+                .cloned()
+                .collect(),
         })
     }
 }
@@ -848,10 +902,7 @@ pub fn build_snapshot(
             .then_with(|| a.provider.cmp(&b.provider))
     });
 
-    let measured: Vec<_> = sessions
-        .iter()
-        .filter_map(|s| s.resources.value())
-        .collect();
+    let (agents_cpu_percent, agents_rss_bytes) = resources(&sessions);
     Snapshot {
         taken_at_ms: now_ms,
         today_tokens: totals.tokens,
@@ -863,13 +914,8 @@ pub fn build_snapshot(
         today_unpriced_events: totals.unpriced_events,
         output_rate: 0.0,
         rate_history: Vec::new(),
-        agents_cpu_percent: if measured.is_empty() {
-            None
-        } else {
-            measured.iter().map(|u| u.cpu_percent).sum()
-        },
-        agents_rss_bytes: (!measured.is_empty())
-            .then(|| measured.iter().map(|u| u.rss_bytes).sum()),
+        agents_cpu_percent,
+        agents_rss_bytes,
         system_gpu_percent: Reading::Unavailable,
         indexing: false,
         errors: Vec::new(),
@@ -879,6 +925,22 @@ pub fn build_snapshot(
         cleanup: CleanupView::default(),
         sessions,
     }
+}
+
+/// The sessions' summed CPU and memory; None without a measured process, and
+/// CPU also while not yet valid.
+fn resources(sessions: &[AgentSession]) -> (Option<f32>, Option<u64>) {
+    let measured: Vec<_> = sessions
+        .iter()
+        .filter_map(|s| s.resources.value())
+        .collect();
+    if measured.is_empty() {
+        return (None, None);
+    }
+    (
+        measured.iter().map(|u| u.cpu_percent).sum(),
+        Some(measured.iter().map(|u| u.rss_bytes).sum()),
+    )
 }
 
 fn cost_reading(usd: f64, priced: u64, unpriced: u64) -> Reading<f64> {
@@ -939,8 +1001,8 @@ fn days_in<Tz: TimeZone>(now_ms: i64, n: usize, tz: &Tz) -> Vec<(String, i64, i6
 
 /// Runs the collector on its own thread until the receiver is dropped,
 /// publishing each snapshot to the widgets when `widgets` is set, and the same
-/// widget payload to paired phones through `phones`. Clean-up follows
-/// `settings` as they are at each tick. If the loop
+/// widget payload to paired phones through `phones`. Clean-up and the hidden
+/// agents follow `settings` as they are at each tick. If the loop
 /// panics, the widgets are marked stopped and the thread ends, which closes
 /// the channel.
 /// `host` is what the sweep observes and acts through; `cleanup`, when given,
@@ -963,9 +1025,10 @@ pub fn spawn(
             let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 loop {
                     let cfg = cleanup.unwrap_or_else(|| settings.cleanup());
+                    collector.set_hidden(settings.agents().hidden());
                     let snap = collector.tick_with(Some((&cfg, host.as_mut())));
                     let indexing = snap.indexing;
-                    let live = snap.sessions.iter().any(|s| s.status.is_live());
+                    let live = collector.live;
                     if let Some(w) = &mut widgets {
                         w.publish(&snap);
                     }
@@ -1033,6 +1096,7 @@ mod tests {
     struct Fake {
         provider: Provider,
         polls: Arc<Mutex<VecDeque<anyhow::Result<PollBatch>>>>,
+        live: Arc<Mutex<Vec<LiveSession>>>,
     }
 
     impl Fake {
@@ -1040,6 +1104,7 @@ mod tests {
             Self {
                 provider,
                 polls: Arc::default(),
+                live: Arc::default(),
             }
         }
     }
@@ -1058,7 +1123,7 @@ mod tests {
         }
 
         fn live_sessions(&self) -> anyhow::Result<Vec<LiveSession>> {
-            Ok(vec![])
+            Ok(self.live.lock().unwrap().clone())
         }
     }
 
@@ -1368,7 +1433,7 @@ mod tests {
             midnight: NOW,
             live: live.clone(),
             rows: vec![],
-            totals: totals(),
+            totals: BTreeMap::new(),
         };
         assert!(!cache_stale(Some(&cache), false, &live, NOW));
         assert!(cache_stale(Some(&cache), false, &live, NOW + DAY_MS));
@@ -1438,6 +1503,142 @@ mod tests {
         assert_eq!(s.errors.len(), 1);
         assert!(s.errors[0].starts_with("Codex: synthetic codex failure"));
         assert!(c.tick().errors.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_agent_leaves_the_snapshot_and_comes_back() {
+        let (claude, codex) = (Fake::new(Provider::ClaudeCode), Fake::new(Provider::Codex));
+        let mut c = Collector::new(
+            vec![Box::new(claude.clone()), Box::new(codex.clone())],
+            Store::open_in_memory().unwrap(),
+            PriceBook::builtin(),
+            vec![],
+        )
+        .unwrap();
+        let t = now_ms() - 1_000;
+        let limits = |ts_ms| RateLimits {
+            ts_ms,
+            plan_type: None,
+            primary: None,
+            secondary: None,
+        };
+        let mut e = event("e1", "s1", "claude-sonnet-5-5", t, 30);
+        e.usage.cache_read = 30;
+        let mut b = batch(vec![e], vec![delta("s1", &[t])]);
+        b.rate_limits = Some(limits(1));
+        claude.polls.lock().unwrap().push_back(Ok(b));
+        let mut e = event("e1", "s2", "claude-sonnet-5-5", t, 60);
+        e.usage.cache_read = 50;
+        let mut b = batch(vec![e], vec![delta("s2", &[t])]);
+        b.provider = Provider::Codex;
+        b.files[0].path = "/synthetic/codex.jsonl".into();
+        b.rate_limits = Some(limits(2));
+        codex.polls.lock().unwrap().push_back(Ok(b));
+        let usage = |s: &Snapshot| s.usage.clone().expect("queried once not indexing");
+        let agents = |s: &Snapshot| {
+            let u = usage(s);
+            let mut seen: BTreeSet<Provider> = u.today.iter().map(|(p, _)| *p).collect();
+            seen.extend(u.days.iter().flat_map(|d| d.agents.iter().map(|a| a.0)));
+            seen.extend(s.sessions.iter().map(|x| x.provider));
+            seen.extend(s.limits.keys());
+            seen
+        };
+        let saved = |s: &Snapshot| usage(s).cache_saved_usd.unwrap();
+
+        let both = c.tick();
+        let all = BTreeSet::from([Provider::ClaudeCode, Provider::Codex]);
+        assert_eq!(agents(&both), all);
+        assert_eq!((both.sessions.len(), both.today_tokens.output), (2, 90));
+        assert_eq!(both.output_rate, 3.0);
+        assert!((saved(&both) - 80.0 * 1.9 / 1e6).abs() < 1e-12);
+
+        c.set_hidden(BTreeSet::from([Provider::Codex]));
+        let s = c.tick();
+        assert_eq!(agents(&s), BTreeSet::from([Provider::ClaudeCode]));
+        assert_eq!(s.sessions.len(), 1);
+        assert_eq!(usage(&s).today.len(), 1);
+        assert!(usage(&s).days.iter().all(|d| d.agents.len() == 1));
+        assert_eq!(s.today_tokens, s.sessions[0].tokens);
+        assert_eq!(s.today_cost_usd, s.sessions[0].cost_usd);
+        assert_ne!(s.today_cost_usd, both.today_cost_usd);
+        assert_eq!(s.output_rate, 1.0);
+        assert!((saved(&s) - 30.0 * 1.9 / 1e6).abs() < 1e-12);
+        assert_eq!(s.limits[&Provider::ClaudeCode].ts_ms, 1);
+
+        // Shown again: everything is back on the next tick, without new data.
+        c.set_hidden(BTreeSet::new());
+        let again = c.tick();
+        assert_eq!(agents(&again), all);
+        assert_eq!(again.sessions.len(), 2);
+        assert_eq!(usage(&again).today.len(), 2);
+        assert!(usage(&again).days.iter().all(|d| d.agents.len() == 2));
+        assert_eq!(again.today_tokens, both.today_tokens);
+        assert_eq!(again.today_cost_usd, both.today_cost_usd);
+        assert_eq!(again.output_rate, 3.0);
+        assert_eq!(saved(&again), saved(&both));
+        assert_eq!(again.limits[&Provider::Codex].ts_ms, 2);
+    }
+
+    #[test]
+    fn a_hidden_agent_is_still_cleaned_up_and_keeps_the_pace() {
+        let (claude, codex) = (Fake::new(Provider::ClaudeCode), Fake::new(Provider::Codex));
+        let mut c = Collector::new(
+            vec![Box::new(claude.clone()), Box::new(codex.clone())],
+            Store::open_in_memory().unwrap(),
+            PriceBook::builtin(),
+            vec![],
+        )
+        .unwrap();
+        c.set_hidden(BTreeSet::from([Provider::Codex]));
+        // An idle Codex session, two hours silent, hosted by this test process.
+        let me = std::process::id();
+        let start = Sampler::new().sample().procs[&me].start_time_s;
+        let last = now_ms() - 2 * 3_600_000;
+        let mut b = batch(
+            vec![event("e1", "idle", "gpt-6.1-sol", last, 5)],
+            vec![delta("idle", &[last])],
+        );
+        b.provider = Provider::Codex;
+        codex.polls.lock().unwrap().push_back(Ok(b));
+        codex.live.lock().unwrap().push(LiveSession {
+            proc_start_s: Some(start),
+            ..live("idle", me, LiveState::Idle)
+        });
+        let cfg = Cleanup {
+            warn_after_hours: 1,
+            ..Cleanup::default()
+        };
+        let mut host = cleanup::tests::FakeHost::default();
+
+        let s = c.tick_with(Some((&cfg, &mut host)));
+        assert!(s.sessions.is_empty());
+        assert!(c.live, "a live hidden agent keeps the 1 s pace");
+        assert!(s.cleanup.items.iter().any(|i| i.reason
+            == cleanup::Reason::IdleSession {
+                provider: Provider::Codex,
+                session_id: "idle".into(),
+                waiting: false,
+            }));
+
+        codex
+            .polls
+            .lock()
+            .unwrap()
+            .push_back(Err(anyhow::anyhow!("synthetic codex failure")));
+        let s = c.tick_with(Some((&cfg, &mut host)));
+        assert!(s.errors.is_empty(), "{:?}", s.errors);
+        assert!(s.sessions.is_empty());
+        assert!(c.live);
+        // Shown again, its error is listed.
+        c.set_hidden(BTreeSet::new());
+        codex
+            .polls
+            .lock()
+            .unwrap()
+            .push_back(Err(anyhow::anyhow!("synthetic codex failure")));
+        let s = c.tick_with(Some((&cfg, &mut host)));
+        assert_eq!(s.sessions.len(), 1);
+        assert!(s.errors[0].starts_with("Codex: synthetic codex failure"));
     }
 
     #[test]
@@ -1555,6 +1756,7 @@ mod tests {
     fn cache_saving_is_net_of_write_premium_and_skips_unpriced() {
         let rows = [
             ModelCacheReads {
+                provider: P,
                 model: "claude-sonnet-5-5".into(),
                 cache_read: 1_000_000,
                 cache_write_5m: 1_000_000,
@@ -1564,6 +1766,7 @@ mod tests {
                 unpriced_events: 2,
             },
             ModelCacheReads {
+                provider: P,
                 model: "no-such-model".into(),
                 cache_read: 5_000_000,
                 cache_write_5m: 0,

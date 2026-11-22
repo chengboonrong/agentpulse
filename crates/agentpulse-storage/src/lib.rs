@@ -1,7 +1,8 @@
 //! SQLite store for session metadata and token usage. Never prompts, code or
 //! secrets: adapters do not pass any.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::AddAssign;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
@@ -116,13 +117,23 @@ pub struct SessionRow {
     pub recorded_cost: Option<RecordedCost>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Totals {
     pub tokens: TokenUsage,
     pub cost_usd: f64,
     pub priced_events: u64,
     pub unpriced_events: u64,
     pub sessions: u64,
+}
+
+impl AddAssign<&Totals> for Totals {
+    fn add_assign(&mut self, o: &Totals) {
+        self.tokens += o.tokens;
+        self.cost_usd += o.cost_usd;
+        self.priced_events += o.priced_events;
+        self.unpriced_events += o.unpriced_events;
+        self.sessions += o.sessions;
+    }
 }
 
 /// One provider's usage on one local calendar day.
@@ -140,10 +151,11 @@ pub struct DayUsage {
     pub cache_read: u64,
 }
 
-/// Cache use of one model's priced events (cost known, so model and tier
-/// priced), and how many cache-using events were unpriced.
+/// Cache use of one provider's priced events of one model (cost known, so
+/// model and tier priced), and how many cache-using events were unpriced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelCacheReads {
+    pub provider: Provider,
     pub model: String,
     pub cache_read: u64,
     pub cache_write_5m: u64,
@@ -570,12 +582,12 @@ impl Store {
             .query_row(FIRST_EVENT_SQL, params![provider.as_str()], |r| r.get(0))?)
     }
 
-    /// Cache tokens per model, all providers, for events in `[from_ms, to_ms)`
+    /// Cache tokens per provider and model for events in `[from_ms, to_ms)`
     /// that read or wrote the cache. Sums cover priced events only, as the
-    /// cost figures do.
+    /// cost figures do. Rows of a provider this version does not know are left out.
     pub fn cache_reads_by_model(&self, from_ms: i64, to_ms: i64) -> Result<Vec<ModelCacheReads>> {
         let mut stmt = self.conn.prepare(
-            "SELECT model,
+            "SELECT provider, model,
                     COALESCE(SUM(cache_read) FILTER (WHERE cost_usd IS NOT NULL), 0),
                     COALESCE(SUM(cache_write_5m) FILTER (WHERE cost_usd IS NOT NULL), 0),
                     COALESCE(SUM(cache_write_1h) FILTER (WHERE cost_usd IS NOT NULL), 0),
@@ -583,19 +595,27 @@ impl Store {
              FROM usage_events
              WHERE ts >= ?1 AND ts < ?2
                AND cache_read + cache_write_5m + cache_write_1h > 0
-             GROUP BY model ORDER BY model",
+             GROUP BY provider, model ORDER BY provider, model",
         )?;
         let rows = stmt.query_map(params![from_ms, to_ms], |r| {
-            Ok(ModelCacheReads {
-                model: r.get(0)?,
-                cache_read: r.get::<_, i64>(1)? as u64,
-                cache_write_5m: r.get::<_, i64>(2)? as u64,
-                cache_write_1h: r.get::<_, i64>(3)? as u64,
-                events: r.get::<_, i64>(4)? as u64,
-                unpriced_events: r.get::<_, i64>(5)? as u64,
-            })
+            let row = |provider| {
+                Ok(ModelCacheReads {
+                    provider,
+                    model: r.get(1)?,
+                    cache_read: r.get::<_, i64>(2)? as u64,
+                    cache_write_5m: r.get::<_, i64>(3)? as u64,
+                    cache_write_1h: r.get::<_, i64>(4)? as u64,
+                    events: r.get::<_, i64>(5)? as u64,
+                    unpriced_events: r.get::<_, i64>(6)? as u64,
+                })
+            };
+            // A newer build's agent is left out on purpose, as from sessions and Usage days.
+            Provider::parse(&r.get::<_, String>(0)?)
+                .map(row)
+                .transpose()
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let rows: Vec<Option<ModelCacheReads>> = rows.collect::<rusqlite::Result<_>>()?;
+        Ok(rows.into_iter().flatten().collect())
     }
 
     /// `provider`'s sessions with events at or after `since_ms`, each with its
@@ -637,32 +657,35 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn totals_since(&self, since_ms: i64) -> Result<Totals> {
-        Ok(self.conn.query_row(
-            "SELECT COALESCE(SUM(input), 0), COALESCE(SUM(output), 0),
-                    COALESCE(SUM(cache_write_5m), 0), COALESCE(SUM(cache_write_1h), 0),
-                    COALESCE(SUM(cache_read), 0),
+    /// Each provider's totals over events at or after `since_ms`. A provider
+    /// without such events, or one this version does not know, is absent.
+    pub fn totals_by_provider(&self, since_ms: i64) -> Result<BTreeMap<Provider, Totals>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, SUM(input), SUM(output),
+                    SUM(cache_write_5m), SUM(cache_write_1h), SUM(cache_read),
                     COALESCE(SUM(cost_usd), 0.0), COUNT(cost_usd),
-                    COUNT(*) - COUNT(cost_usd),
-                    COUNT(DISTINCT provider || char(31) || session_id)
-             FROM usage_events WHERE ts >= ?1",
-            params![since_ms],
-            |r| {
-                Ok(Totals {
-                    tokens: TokenUsage {
-                        input: r.get::<_, i64>(0)? as u64,
-                        output: r.get::<_, i64>(1)? as u64,
-                        cache_write_5m: r.get::<_, i64>(2)? as u64,
-                        cache_write_1h: r.get::<_, i64>(3)? as u64,
-                        cache_read: r.get::<_, i64>(4)? as u64,
-                    },
-                    cost_usd: r.get(5)?,
-                    priced_events: r.get::<_, i64>(6)? as u64,
-                    unpriced_events: r.get::<_, i64>(7)? as u64,
-                    sessions: r.get::<_, i64>(8)? as u64,
-                })
-            },
-        )?)
+                    COUNT(*) - COUNT(cost_usd), COUNT(DISTINCT session_id)
+             FROM usage_events WHERE ts >= ?1 GROUP BY provider",
+        )?;
+        let rows = stmt.query_map(params![since_ms], |r| {
+            let totals = Totals {
+                tokens: TokenUsage {
+                    input: r.get::<_, i64>(1)? as u64,
+                    output: r.get::<_, i64>(2)? as u64,
+                    cache_write_5m: r.get::<_, i64>(3)? as u64,
+                    cache_write_1h: r.get::<_, i64>(4)? as u64,
+                    cache_read: r.get::<_, i64>(5)? as u64,
+                },
+                cost_usd: r.get(6)?,
+                priced_events: r.get::<_, i64>(7)? as u64,
+                unpriced_events: r.get::<_, i64>(8)? as u64,
+                sessions: r.get::<_, i64>(9)? as u64,
+            };
+            // A newer build's agent is left out on purpose, as from sessions and Usage days.
+            Ok(Provider::parse(&r.get::<_, String>(0)?).map(|p| (p, totals)))
+        })?;
+        let rows: Vec<Option<(Provider, Totals)>> = rows.collect::<rusqlite::Result<_>>()?;
+        Ok(rows.into_iter().flatten().collect())
     }
 }
 
@@ -800,6 +823,15 @@ mod tests {
         Some(1.0)
     }
 
+    /// Every provider's totals added up.
+    fn all(s: &Store, since_ms: i64) -> Totals {
+        let mut t = Totals::default();
+        for p in s.totals_by_provider(since_ms).unwrap().values() {
+            t += p;
+        }
+        t
+    }
+
     #[test]
     fn applying_a_batch_twice_equals_once() {
         let b = batch(
@@ -818,12 +850,9 @@ mod tests {
             once.sessions_since(P, 0).unwrap(),
             twice.sessions_since(P, 0).unwrap()
         );
-        assert_eq!(
-            once.totals_since(0).unwrap(),
-            twice.totals_since(0).unwrap()
-        );
+        assert_eq!(all(&once, 0), all(&twice, 0));
         assert_eq!(once.offsets().unwrap(), twice.offsets().unwrap());
-        assert_eq!(twice.totals_since(0).unwrap().tokens, tokens(11, 6));
+        assert_eq!(all(&twice, 0).tokens, tokens(11, 6));
     }
 
     #[test]
@@ -837,7 +866,7 @@ mod tests {
             for b in order {
                 s.apply(b, &flat).unwrap();
             }
-            let t = s.totals_since(0).unwrap();
+            let t = all(&s, 0);
             assert_eq!(t.tokens, tokens(10, 20));
             assert_eq!(t.priced_events, 1);
             let model: String = s
@@ -869,8 +898,8 @@ mod tests {
         let b = rows.iter().find(|r| r.session_id == "b").unwrap();
         assert_eq!(a.tokens, tokens(50, 50));
         assert_eq!(b.tokens, TokenUsage::default());
-        assert_eq!(s.totals_since(0).unwrap().tokens, tokens(50, 50));
-        assert_eq!(s.totals_since(0).unwrap().sessions, 1);
+        assert_eq!(all(&s, 0).tokens, tokens(50, 50));
+        assert_eq!(all(&s, 0).sessions, 1);
     }
 
     #[test]
@@ -945,7 +974,7 @@ mod tests {
             (r.cost_usd, r.priced_events, r.unpriced_events),
             (5.0, 2, 1)
         );
-        let t = s.totals_since(0).unwrap();
+        let t = all(&s, 0);
         assert_eq!(
             (t.cost_usd, t.priced_events, t.unpriced_events),
             (5.0, 2, 1)
@@ -955,7 +984,7 @@ mod tests {
             &|_| None,
         )
         .unwrap();
-        assert_eq!(s.totals_since(0).unwrap().unpriced_events, 2);
+        assert_eq!(all(&s, 0).unpriced_events, 2);
     }
 
     #[test]
@@ -972,9 +1001,58 @@ mod tests {
             &flat,
         )
         .unwrap();
-        assert_eq!(s.totals_since(100).unwrap().tokens, tokens(2, 0));
-        assert_eq!(s.totals_since(101).unwrap().tokens, TokenUsage::default());
-        assert_eq!(s.totals_since(101).unwrap().sessions, 0);
+        assert_eq!(all(&s, 100).tokens, tokens(2, 0));
+        assert_eq!(all(&s, 101).tokens, TokenUsage::default());
+        assert_eq!(all(&s, 101).sessions, 0);
+    }
+
+    #[test]
+    fn totals_and_cache_use_are_split_by_provider() {
+        let mut s = Store::open_in_memory().unwrap();
+        s.apply(
+            &batch(
+                vec![
+                    ev("a", "s1", 100, full(1, 0, 0, 10)),
+                    ev("b", "s2", 100, full(2, 0, 0, 0)),
+                ],
+                vec![],
+            ),
+            &flat,
+        )
+        .unwrap();
+        let mut codex = batch(vec![ev("a", "s1", 100, full(4, 5, 0, 20))], vec![]);
+        codex.provider = Provider::Codex;
+        codex.files[0].path = "/codex.jsonl".into();
+        s.apply(&codex, &|_| None).unwrap();
+        // A newer build's agent: left out, never an error.
+        s.conn
+            .execute(
+                "INSERT INTO usage_events VALUES ('future', 'x', 's', 'm', 100, 1, 1, 1, 1, 1, 1.0)",
+                [],
+            )
+            .unwrap();
+        let t = s.totals_by_provider(0).unwrap();
+        assert_eq!(t.keys().copied().collect::<Vec<_>>(), [P, Provider::Codex]);
+        let claude = &t[&P];
+        assert_eq!(
+            (claude.tokens.input, claude.cost_usd, claude.sessions),
+            (3, 2.0, 2)
+        );
+        let codex = &t[&Provider::Codex];
+        assert_eq!(
+            (
+                codex.tokens.cache_read,
+                codex.unpriced_events,
+                codex.sessions
+            ),
+            (20, 1, 1)
+        );
+        let r = s.cache_reads_by_model(0, 200).unwrap();
+        let got: Vec<_> = r
+            .iter()
+            .map(|m| (m.provider, m.cache_read, m.events, m.unpriced_events))
+            .collect();
+        assert_eq!(got, [(P, 10, 1, 0), (Provider::Codex, 0, 0, 1)]);
     }
 
     #[test]
@@ -1031,7 +1109,7 @@ mod tests {
             (codex.tokens, codex.model.as_deref()),
             (tokens(10, 20), Some("codex-m"))
         );
-        let t = s.totals_since(0).unwrap();
+        let t = all(&s, 0);
         assert_eq!((t.tokens, t.sessions), (tokens(11, 22), 2));
     }
 
@@ -1108,7 +1186,7 @@ mod tests {
                 .input
         };
         assert_eq!((by("a"), by("b"), by("c")), (1, 2, 7));
-        assert_eq!(s.totals_since(0).unwrap().sessions, 3);
+        assert_eq!(all(&s, 0).sessions, 3);
     }
 
     #[test]
@@ -1218,7 +1296,7 @@ mod tests {
         assert_eq!(r.tokens, tokens(3, 4));
         assert_eq!(r.active_ms, 0);
         assert_eq!(r.recorded_cost, Some(cost(0.5, 9, false)));
-        assert_eq!(old.totals_since(0).unwrap().priced_events, 1);
+        assert_eq!(all(&old, 0).priced_events, 1);
     }
 
     /// Local wall-clock time as Unix ms, for day-boundary tests that hold in any time zone.
@@ -1473,9 +1551,6 @@ mod tests {
         assert_eq!(mode(&dir), 0o700);
         drop(s);
         // Reopening an existing database works and keeps the data.
-        assert_eq!(
-            Store::open(&file).unwrap().totals_since(0).unwrap().tokens,
-            tokens(1, 1)
-        );
+        assert_eq!(all(&Store::open(&file).unwrap(), 0).tokens, tokens(1, 1));
     }
 }

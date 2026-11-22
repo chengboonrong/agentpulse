@@ -161,6 +161,13 @@ not been measured.
   `settings.json` beside the coats; the `AGENTPULSE_ANIMATION` variables still win, and
   Reduce Motion still stops the cats. Rendered through screenshot mode; clicks and keyboard
   use not exercised by a person.
+- Done: agent switches (part 1 of #59). Settings, Agents: one switch per agent, "Not
+  detected" when its data folder is missing, saved as `agents.hidden` in `settings.json`
+  (unknown keys kept). Hiding is display only: collection goes on, and the collector leaves
+  the agent out of each snapshot (sessions, CPU and memory, today's tokens and cost, output
+  rate, Usage days, lanes and caching saving, plan limits), so the menu-bar cat, widgets and
+  phones follow. Clean-up still sees every agent. Applied on the next tick, no restart.
+  Next: more adapters (#59 part 2).
 - Alerts and thresholds.
 - Distribution outside the App Store (owner's choice, 2026-11-13). Done:
   `scripts/bundle.sh` signs with the hardened runtime and builds a DMG; `--release` signs

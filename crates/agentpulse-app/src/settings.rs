@@ -1,13 +1,14 @@
 //! `settings.json` in the data directory: each agent's cat coat and eye colour,
-//! the animation, the update check, the phone link, and the clean-up of idle
-//! and orphaned processes.
+//! the animation, the update check, the phone link, the clean-up of idle
+//! and orphaned processes, and the agents left out of what AgentPulse shows.
 //!
 //! ```json
 //! {"cats": {"claude-code": {"coat": "calico", "eye": "blue"}, "codex": {"coat": "tuxedo", "eye": null}},
 //!  "animation": {"enabled": true, "speed": 1.0},
 //!  "updates": {"auto": true, "last_checked_ms": 0, "dismissed": "0.0.5"},
 //!  "phones": {"relay": "https://relay.example", "direct": true},
-//!  "cleanup": {"warn_after_hours": 3, "clean_after_hours": 24, "auto_clean": true}}
+//!  "cleanup": {"warn_after_hours": 3, "clean_after_hours": 24, "auto_clean": true},
+//!  "agents": {"hidden": ["codex"]}}
 //! ```
 //!
 //! `eye: null` keeps the coat's own eyes. A missing file, section, entry or
@@ -17,7 +18,8 @@
 //! unknown coat (that agent's default look); an unknown eye (the coat's own);
 //! a field of the wrong type (that field); a speed outside 0.25 to 3 is clamped;
 //! a clean-up hours value that is 0 or not a whole number (that field); a
-//! `clean_after_hours` below `warn_after_hours` is raised to it.
+//! `clean_after_hours` below `warn_after_hours` is raised to it; a `hidden`
+//! that is not a list of strings (none hidden).
 //! A file that is read whole but is not a JSON object is moved to
 //! `settings.json.bad-<unix ms>`, never over an earlier one, and the defaults
 //! are used. A file that cannot be read is left alone: the defaults are used
@@ -25,11 +27,13 @@
 //!
 //! Every change first takes up what is on disk (another instance may have
 //! written it), then writes back only what it changed: one agent's entry in
-//! `cats`, or the whole `animation`, `updates`, `phones` or `cleanup` section. Unknown
-//! top-level keys and the other entries in `cats`, including agents this version
-//! does not know, are kept; unknown fields inside `animation`, `updates`,
-//! `phones` or `cleanup` are dropped when that section is saved. A blank relay is null.
+//! `cats`, or the whole `animation`, `updates`, `phones`, `cleanup` or `agents` section.
+//! Unknown top-level keys and the other entries in `cats`, including agents this
+//! version does not know, are kept, as are unknown agents in `hidden`; unknown fields
+//! inside `animation`, `updates`, `phones`, `cleanup` or `agents` are dropped when that
+//! section is saved. A blank relay is null.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -41,12 +45,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const FILE_NAME: &str = "settings.json";
-const PROVIDERS: [Provider; 4] = [
-    Provider::ClaudeCode,
-    Provider::Codex,
-    Provider::OpenCode,
-    Provider::Grok,
-];
 
 /// Each agent's look.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,6 +178,35 @@ impl Cleanup {
 pub const WARN_CHOICES: [u32; 4] = [1, 3, 6, 12];
 pub const CLEAN_CHOICES: [u32; 4] = [12, 24, 48, 72];
 
+/// The agents left out of everything AgentPulse shows; their data is still collected.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Agents {
+    /// [`Provider::as_str`] keys, with those this version does not know, so a
+    /// newer build's choice is never lost.
+    hidden: Vec<String>,
+}
+
+impl Agents {
+    pub fn is_hidden(&self, p: Provider) -> bool {
+        self.hidden.iter().any(|k| k == p.as_str())
+    }
+
+    /// The hidden agents this version knows.
+    pub fn hidden(&self) -> BTreeSet<Provider> {
+        self.hidden
+            .iter()
+            .filter_map(|k| Provider::parse(k))
+            .collect()
+    }
+
+    fn set_hidden(&mut self, p: Provider, hidden: bool) {
+        self.hidden.retain(|k| k != p.as_str());
+        if hidden {
+            self.hidden.push(p.as_str().into());
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct State {
     looks: Looks,
@@ -187,6 +214,7 @@ struct State {
     updates: Updates,
     phones: Phones,
     cleanup: Cleanup,
+    agents: Agents,
 }
 
 /// What one change touches; only that part of the file is rewritten.
@@ -197,6 +225,7 @@ enum Part {
     Updates,
     Phones,
     Cleanup,
+    Agents,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -235,7 +264,7 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
         v.as_object()
     };
     let (cats, animation, updates) = (section("cats"), section("animation"), section("updates"));
-    let (phones, cleanup) = (section("phones"), section("cleanup"));
+    let (phones, cleanup, agents) = (section("phones"), section("cleanup"), section("agents"));
     let (a, u, p) = (Animation::default(), Updates::default(), Phones::default());
     let c = Cleanup::default();
     let hours = |name: &str| {
@@ -277,6 +306,15 @@ fn parse(bytes: &[u8]) -> Option<(Map<String, Value>, State)> {
                 .unwrap_or(c.auto_clean),
         }
         .raised(),
+        agents: Agents {
+            hidden: field(agents, "agents", "hidden", |v| {
+                v.as_array()?
+                    .iter()
+                    .map(|k| k.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        },
     };
     Some((map, state))
 }
@@ -321,7 +359,7 @@ fn field<T>(
 fn parse_cats(cats: &Map<String, Value>) -> Looks {
     let mut looks = Looks::default();
     for (key, value) in cats {
-        let Some(p) = PROVIDERS.into_iter().find(|p| p.as_str() == key) else {
+        let Some(p) = Provider::ALL.into_iter().find(|p| p.as_str() == key) else {
             tracing::warn!(agent = %key, "unknown agent in {FILE_NAME}, ignored");
             continue;
         };
@@ -350,7 +388,7 @@ fn parse_cats(cats: &Map<String, Value>) -> Looks {
 
 /// Every section as written to the file.
 fn sections(state: &State) -> Map<String, Value> {
-    let cats = PROVIDERS
+    let cats = Provider::ALL
         .into_iter()
         .map(|p| (p.as_str().to_string(), Choice::of(state.looks.get(p))))
         .collect();
@@ -371,6 +409,10 @@ fn sections(state: &State) -> Map<String, Value> {
         (
             "cleanup".into(),
             serde_json::to_value(state.cleanup).expect("plain values"),
+        ),
+        (
+            "agents".into(),
+            serde_json::to_value(&state.agents).expect("plain values"),
         ),
     ])
 }
@@ -422,6 +464,10 @@ impl Settings {
         self.read().cleanup
     }
 
+    pub fn agents(&self) -> Agents {
+        self.read().agents.clone()
+    }
+
     pub fn set(&self, p: Provider, look: Look) {
         self.change(Part::Cat(p), |s| s.looks.set(p, look));
     }
@@ -444,6 +490,11 @@ impl Settings {
 
     pub fn set_cleanup(&self, c: Cleanup) {
         self.change(Part::Cleanup, |s| s.cleanup = c.raised());
+    }
+
+    /// Hides or shows one agent, keeping what is on disk for the others.
+    pub fn set_hidden(&self, p: Provider, hidden: bool) {
+        self.change(Part::Agents, |s| s.agents.set_hidden(p, hidden));
     }
 
     /// Applies at once and saves the part it changed; a failed save is warned
@@ -495,12 +546,13 @@ impl Settings {
                 cats.insert(p.as_str().into(), Choice::of(state.looks.get(p)));
                 file.insert("cats".into(), Value::Object(cats));
             }
-            Part::Animation | Part::Updates | Part::Phones | Part::Cleanup => {
+            Part::Animation | Part::Updates | Part::Phones | Part::Cleanup | Part::Agents => {
                 let name = match part {
                     Part::Animation => "animation",
                     Part::Updates => "updates",
                     Part::Phones => "phones",
-                    _ => "cleanup",
+                    Part::Cleanup => "cleanup",
+                    _ => "agents",
                 };
                 file.insert(name.into(), sections(state)[name].clone());
             }
@@ -645,7 +697,7 @@ mod tests {
     fn each_agent_keeps_its_own_look() {
         let mut looks = Looks::default();
         let coats = ["calico", "tuxedo", "van"];
-        for (p, id) in PROVIDERS.into_iter().zip(coats) {
+        for (p, id) in Provider::ALL.into_iter().zip(coats) {
             looks.set(
                 p,
                 Look {
@@ -654,10 +706,10 @@ mod tests {
                 },
             );
         }
-        for (p, id) in PROVIDERS.into_iter().zip(coats) {
+        for (p, id) in Provider::ALL.into_iter().zip(coats) {
             assert_eq!(looks.get(p).coat.id, id, "{p:?}");
         }
-        for p in PROVIDERS {
+        for p in Provider::ALL {
             assert_eq!(Looks::default().get(p), Look::default_for(p), "{p:?}");
         }
     }
@@ -926,6 +978,39 @@ mod tests {
         });
         assert_eq!(s.cleanup().clean_after_hours, 12);
         assert_eq!(Settings::load(&dir).cleanup().clean_after_hours, 12);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hidden_agents_round_trip_and_unknown_ones_are_kept() {
+        assert_eq!(state("{}").agents, Agents::default());
+        assert_eq!(
+            state(r#"{"agents": {"hidden": ["codex", 3]}}"#).agents,
+            Agents::default(),
+            "not a list of strings"
+        );
+        let dir = temp_dir("settings-agents");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(FILE_NAME),
+            r#"{"agents": {"hidden": ["future-agent", "grok"]}}"#,
+        )
+        .unwrap();
+        let s = Settings::load(&dir);
+        assert!(s.agents().is_hidden(Provider::Grok));
+        assert_eq!(s.agents().hidden(), BTreeSet::from([Provider::Grok]));
+        s.set_hidden(Provider::Codex, true);
+        s.set_hidden(Provider::Grok, false);
+        s.set_hidden(Provider::Codex, true);
+        let v: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(FILE_NAME)).unwrap()).unwrap();
+        assert_eq!(
+            v["agents"],
+            serde_json::json!({"hidden": ["future-agent", "codex"]})
+        );
+        let again = Settings::load(&dir).agents();
+        assert_eq!(again.hidden(), BTreeSet::from([Provider::Codex]));
+        assert!(!again.is_hidden(Provider::ClaudeCode));
         fs::remove_dir_all(&dir).unwrap();
     }
 

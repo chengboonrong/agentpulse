@@ -6,13 +6,6 @@ use gpui::{ClickEvent, Stateful, Toggled, WeakEntity};
 
 use super::*;
 
-/// Agents AgentPulse reads today, in the order of the switch.
-const AGENTS: [Provider; 4] = [
-    Provider::ClaudeCode,
-    Provider::Codex,
-    Provider::Grok,
-    Provider::OpenCode,
-];
 const PREVIEW_SCALE: f32 = 4.;
 const SWATCH_SCALE: f32 = 2.;
 /// The 64-point cat plus padding, and room for a two-line name.
@@ -162,7 +155,7 @@ fn agent_switch(agent: Provider, t: Theme, this: &WeakEntity<AppView>) -> Statef
         .bg(rgb(t.chrome))
         .border_1()
         .border_color(rgb(t.border))
-        .children(AGENTS.map(|a| {
+        .children(Provider::ALL.map(|a| {
             let this = this.clone();
             div()
                 .id(a.as_str())
