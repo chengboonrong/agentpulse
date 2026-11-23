@@ -24,7 +24,7 @@ object DebugHooks {
     fun fixture(context: Context, intent: Intent): AppModel? {
         val name = intent.getStringExtra("fixture") ?: return null
         val store = PhoneStore(File(context.cacheDir, "fixtures"), Memory())
-        val model = AppModel(PhoneClient(store), offline = true)
+        val model = AppModel(PhoneClient(store), offline = true, context = context)
         val studio = pairing("Studio", minutesAgo = 1, payload = ::busy)
         // As on iPhone: Studio is connected directly, the others through the relay.
         if (name in setOf("macs", "mac", "session")) model.direct = setOf(studio.id)
