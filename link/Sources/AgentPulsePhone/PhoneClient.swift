@@ -190,19 +190,28 @@ public struct PhoneClient: Sendable {
         if events.count == 1, let event = events.first {
             switch event.kind {
             case "waiting":
-                title = "\(event.agent) is waiting"
-                body = "\(event.project) needs your answer."
+                title = String(localized: "\(event.agent) is waiting", bundle: .module)
+                body = String(localized: "\(event.project) needs your answer.", bundle: .module)
             case "finished":
-                title = "\(event.agent) finished"
-                body = "\(event.project) is ready for your next prompt."
+                title = String(localized: "\(event.agent) finished", bundle: .module)
+                body = String(localized: "\(event.project) is ready for your next prompt.", bundle: .module)
             default:
-                title = "\(event.agent) failed"
-                body = "\(event.project) stopped with an error."
+                title = String(localized: "\(event.agent) failed", bundle: .module)
+                body = String(localized: "\(event.project) stopped with an error.", bundle: .module)
             }
         } else {
-            title = "\(events.count + (more ?? 0)) agents " + (events.contains { $0.kind == "waiting" } ? "need you" : "updated")
-            body = events.map { "\($0.project): \($0.kind)" }.joined(separator: "\n")
-            if let more { body += "\nand \(more) more" }
+            let count = events.count + (more ?? 0)
+            title = events.contains { $0.kind == "waiting" }
+                ? String(localized: "\(count) agents need you", bundle: .module)
+                : String(localized: "\(count) agents updated", bundle: .module)
+            body = events.map { event in
+                switch event.kind {
+                case "waiting": String(localized: "\(event.project): waiting", bundle: .module)
+                case "finished": String(localized: "\(event.project): finished", bundle: .module)
+                default: String(localized: "\(event.project): failed", bundle: .module)
+                }
+            }.joined(separator: "\n")
+            if let more { body += "\n" + String(localized: "and \(more) more", bundle: .module) }
         }
         return AlertContent(title: title, subtitle: pairingCount > 1 ? macName : "", body: body, thread: thread)
     }

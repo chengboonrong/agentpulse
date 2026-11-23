@@ -45,16 +45,16 @@ struct SettingsView: View {
 
     private var notificationSummary: String {
         // Show the effective choices sent to the Macs.
-        guard model.notificationsAllowed else { return "Off" }
+        guard model.notificationsAllowed else { return String(localized: "Off") }
         let choices = model.notifyChoices
-        let names = [(choices.waiting, "Waiting"), (choices.finished, "Finished"), (choices.failed, "Failed")]
+        let names = [(choices.waiting, String(localized: "Waiting")), (choices.finished, String(localized: "Finished")), (choices.failed, String(localized: "Failed"))]
             .filter { $0.0 }.map { $0.1 }
-        return names.isEmpty ? "Off" : names.joined(separator: ", ")
+        return names.isEmpty ? String(localized: "Off") : names.formatted(.list(type: .and))
     }
 
     private var relayHosts: String {
         let hosts = Set(model.pairings.compactMap { $0.relay.host() }).sorted()
-        return hosts.isEmpty ? "None" : hosts.joined(separator: ", ")
+        return hosts.isEmpty ? String(localized: "None") : hosts.formatted(.list(type: .and))
     }
 }
 
