@@ -7,8 +7,10 @@
 //! ```
 //!
 //! `downSeq` is the next `down` seq to send, `upSeq` the last `up` seq accepted (the
-//! hello is 0). A file that is not this is moved to `phones.json.bad-<unix ms>` and
-//! no pairings are used.
+//! hello is 0). `alertSeq` is the next independent alert seq; `notify` holds the
+//! phone's latest choices and `alertsOff` disables sending until its next `notify`.
+//! Older files default to no choices and no alerts. A malformed file is moved to
+//! `phones.json.bad-<unix ms>` and no pairings are used.
 
 use std::fs;
 use std::io::Write;
@@ -48,6 +50,12 @@ pub struct Pairing {
     pub down_seq: u64,
     #[serde(default)]
     pub up_seq: u64,
+    #[serde(default)]
+    pub alert_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<super::notify::Choices>,
+    #[serde(default)]
+    pub alerts_off: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]

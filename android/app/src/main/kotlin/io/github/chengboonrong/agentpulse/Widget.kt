@@ -18,6 +18,7 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
+import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
@@ -105,7 +106,7 @@ class AgentPulseWidget : GlanceAppWidget() {
             val pairing by produceState(first, redraw) { value = load(context) }
             val state = WidgetState.of(pairing, System.currentTimeMillis())
             val cat = remember(state) { (state as? WidgetState.Live)?.payload?.cat?.let(::catBitmap) }
-            Content(state, cat, context)
+            Content(state, cat, LocalContext.current)
         }
     }
 
@@ -190,13 +191,13 @@ private fun Content(state: WidgetState, cat: Bitmap?, context: Context) {
         contentAlignment = Alignment.BottomStart,
     ) {
         when (state) {
-            WidgetState.Unpaired -> Title("Pair a Mac in AgentPulse")
-            is WidgetState.Waiting -> Title("Waiting for ${state.mac}")
-            WidgetState.NotRunning -> Sleeping("AgentPulse isn't running", "Open the app to resume", medium)
-            is WidgetState.Stale -> Sleeping("No update since ${time(context, state.sinceMs)}", "Open AgentPulse to refresh", medium)
+            WidgetState.Unpaired -> Title(context.getString(R.string.widget_pair))
+            is WidgetState.Waiting -> Title(context.getString(R.string.waiting_for, state.mac))
+            WidgetState.NotRunning -> Sleeping(context.getString(R.string.not_running), context.getString(R.string.resume), medium)
+            is WidgetState.Stale -> Sleeping(context.getString(R.string.no_update, time(context, state.sinceMs)), context.getString(R.string.refresh), medium)
             is WidgetState.Live -> if (medium) {
                 Row(GlanceModifier.fillMaxSize()) {
-                    Summary(state.payload, cat, context, GlanceModifier.width(150.dp).fillMaxHeight())
+                    Summary(state.payload, cat, context, GlanceModifier.defaultWeight().fillMaxHeight())
                     Spacer(GlanceModifier.width(14.dp))
                     Detail(state.payload, GlanceModifier.defaultWeight().fillMaxHeight())
                 }
@@ -220,7 +221,7 @@ private fun Sleeping(title: String, subtitle: String, medium: Boolean) = Column 
 private fun Summary(p: WidgetPayload, cat: Bitmap?, context: Context, modifier: GlanceModifier) = Column(modifier) {
     if (cat != null) {
         Image(
-            ImageProvider(cat), "Cat, ${p.cat.state.replace('_', ' ')}",
+            ImageProvider(cat), p.cat.description(context.resources),
             GlanceModifier.defaultWeight().fillMaxWidth().background(WidgetColors.stage).cornerRadius(12.dp).padding(6.dp),
             contentScale = ContentScale.Fit,
         )
@@ -229,20 +230,21 @@ private fun Summary(p: WidgetPayload, cat: Bitmap?, context: Context, modifier: 
         Spacer(GlanceModifier.defaultWeight())
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(p.agents.headline, style = TextStyle(WidgetColors.primary, 15.sp, FontWeight.Bold), maxLines = 1)
+        Text(p.agents.headline(context.resources), style = TextStyle(WidgetColors.primary, 15.sp, FontWeight.Bold), maxLines = 1)
         lead(p.agents)?.let { (status, n) ->
             Spacer(GlanceModifier.width(6.dp))
             Ribbon(status, n)
         }
     }
-    Text("${p.today.cost} today", style = TextStyle(WidgetColors.secondary, 13.sp), maxLines = 1)
-    Text("As of ${time(context, p.generatedAtMs)}", style = TextStyle(WidgetColors.secondary, 11.sp), maxLines = 1)
+    Text(context.getString(R.string.cost_today, p.today.cost), style = TextStyle(WidgetColors.secondary, 13.sp), maxLines = 1)
+    Text(context.getString(R.string.as_of, time(context, p.generatedAtMs)), style = TextStyle(WidgetColors.secondary, 11.sp), maxLines = 1)
 }
 
 @Composable
 private fun Detail(p: WidgetPayload, modifier: GlanceModifier) = Column(modifier) {
+    val context = LocalContext.current
     if (p.sessions.isEmpty()) {
-        Text("No live sessions", style = TextStyle(WidgetColors.secondary, 12.sp))
+        Text(context.getString(R.string.no_sessions), style = TextStyle(WidgetColors.secondary, 12.sp))
     } else {
         // A column each: Glance drops a column's children past ten.
         p.sessions.take(3).forEach { s ->
@@ -253,17 +255,20 @@ private fun Detail(p: WidgetPayload, modifier: GlanceModifier) = Column(modifier
         }
     }
     Spacer(GlanceModifier.defaultWeight())
-    Text("Today ${p.today.tokens} tokens", style = TextStyle(WidgetColors.secondary, 12.sp), maxLines = 1)
+    Text(context.getString(R.string.today_tokens, p.today.tokens), style = TextStyle(WidgetColors.secondary, 12.sp), maxLines = 1)
 }
 
 /** A state's ribbon, white on its colour; with [count], as beside the headline. */
 @Composable
 private fun Ribbon(status: String, count: Int? = null) {
-    val (color, label) = Palette.ribbon(status)
+    val context = LocalContext.current
+    val (color, label) = Palette.ribbon(status, context.resources)
     val text = when {
         count == null -> label
-        count > 1 && status == "Waiting" -> "$count need you"
-        else -> "$count $label"
+        count > 1 && status == "Waiting" -> context.getString(R.string.need_count, count)
+        status == "Waiting" -> context.getString(R.string.needs_count, count)
+        status == "Active" -> context.getString(R.string.working_count, count)
+        else -> context.getString(R.string.idle_count, count)
     }
     Text(
         text, GlanceModifier.background(color).cornerRadius(8.dp).padding(horizontal = 6.dp, vertical = 1.dp),

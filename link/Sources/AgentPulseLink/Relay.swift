@@ -17,9 +17,9 @@ public enum LinkError: Error, Equatable, Sendable {
     case timeout
 }
 
-/// `down` is Mac to phone, `up` is phone to Mac.
+/// `down` and `alert` are Mac to phone, `up` is phone to Mac.
 public enum Direction: String, Sendable {
-    case down, up
+    case down, up, alert
 }
 
 /// HPKE single-shot sealing for relay messages (docs/mobile.md, "Cryptography").

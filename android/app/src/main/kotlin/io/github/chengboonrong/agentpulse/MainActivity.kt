@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
                 DebugHooks.fixture(this@MainActivity, intent) ?: AppModel(
                     phoneClient(applicationContext),
                     finder = MacFinder(applicationContext),
+                    context = applicationContext,
                 ).also { DebugHooks.e2e(it, intent) }
             }
         }

@@ -1043,6 +1043,7 @@ pub fn spawn(
         .spawn(move || {
             // The collector is dropped right after a panic, so its state is never reused.
             let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut notifications = crate::phones::notify::Detector::default();
                 loop {
                     let cfg = cleanup.unwrap_or_else(|| settings.cleanup());
                     collector.set_hidden(settings.agents().hidden());
@@ -1053,7 +1054,10 @@ pub fn spawn(
                         w.publish(&snap);
                     }
                     if let Some(p) = phones.as_ref().filter(|p| p.wants_payload()) {
+                        p.notices(notifications.events(&snap.sessions, snap.taken_at_ms));
                         p.publish(widget_export::payload(&snap, false, &p.looks()));
+                    } else {
+                        notifications = crate::phones::notify::Detector::default();
                     }
                     if sender.send_blocking(snap).is_err() {
                         return;

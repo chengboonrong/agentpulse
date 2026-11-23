@@ -122,6 +122,7 @@ struct FakeRelay(Arc<Mutex<RelayState>>);
 
 #[derive(Default)]
 struct RelayState {
+    now_ms: i64,
     requests: Vec<(String, String)>,
     /// Each request's relay, beside `requests`.
     relays: Vec<String>,
@@ -141,6 +142,8 @@ struct Mailbox {
     secret_hash: Option<String>,
     down: Option<(u64, String)>,
     up: Vec<String>,
+    pushes: Vec<Value>,
+    last_push_ms: Option<i64>,
 }
 
 impl FakeRelay {
@@ -205,6 +208,7 @@ impl Relay for FakeRelay {
         body: Option<&Value>,
     ) -> Result<Reply, String> {
         let mut s = self.0.lock().unwrap();
+        let now = s.now_ms;
         let (relay, path) = [RELAY, PUBLIC_RELAY]
             .into_iter()
             .find_map(|r| Some((r, url.strip_prefix(r)?.to_owned())))
@@ -270,6 +274,14 @@ impl Relay for FakeRelay {
                 reply(204, Value::Null)
             }
             ("GET", "up") => reply(200, json!({"messages": std::mem::take(&mut b.up)})),
+            ("POST", "push") => {
+                if b.last_push_ms.is_some_and(|last| now - last < 1_000) {
+                    return reply(429, Value::Null);
+                }
+                b.last_push_ms = Some(now);
+                b.pushes.push(body);
+                reply(200, Value::Null)
+            }
             ("PUT", "down") => {
                 let seq = body["seq"].as_u64().unwrap();
                 if b.down.as_ref().is_some_and(|(last, _)| seq <= *last) {
@@ -289,6 +301,13 @@ struct Rig {
     relay: FakeRelay,
     settings: Settings,
     dir: PathBuf,
+}
+
+impl Rig {
+    fn notices(&mut self, notices: Vec<notify::Notice>, now: i64) {
+        self.relay.0.lock().unwrap().now_ms = now;
+        self.core.handle(Msg::Notices(notices), now);
+    }
 }
 
 impl Drop for Rig {
@@ -849,6 +868,9 @@ fn phones_json_round_trips_and_a_corrupt_one_is_kept() {
             last_seen_ms: Some(2),
             down_seq: 3,
             up_seq: 4,
+            alert_seq: 0,
+            notify: None,
+            alerts_off: false,
         },
         Pairing {
             id: "b".into(),
@@ -860,6 +882,9 @@ fn phones_json_round_trips_and_a_corrupt_one_is_kept() {
             last_seen_ms: None,
             down_seq: 0,
             up_seq: 0,
+            alert_seq: 0,
+            notify: None,
+            alerts_off: false,
         },
     ];
     store::save(&r.dir, &pairings).unwrap();
@@ -1168,4 +1193,264 @@ fn update_before_first_payload_is_kept() {
         .handle(Msg::Update(Some("0.0.12".into())), T0 + 3_000);
     r.publish(payload(1, 1), T0 + 60_000);
     assert_eq!(r.relay.down(&id).unwrap().1["payload"]["update"], "0.0.12");
+}
+
+fn notice(kind: notify::Kind) -> notify::Notice {
+    notify::Notice {
+        kind,
+        agent: "Claude Code".into(),
+        project: "project".into(),
+    }
+}
+
+fn choices(r: &mut Rig, id: &str, seq: u64, waiting: bool, finished: bool, failed: bool) {
+    r.relay.post_up(
+        id,
+        json!({"seq": seq, "type": "notify",
+        "waiting": waiting, "finished": finished, "failed": failed}),
+    );
+    r.core.poll(id, T0 + 3_000);
+}
+
+#[test]
+fn notifications_are_opt_in_filtered_sealed_and_persisted_per_pairing() {
+    use notify::Kind::*;
+    let mut r = rig("notices");
+    let a = r.pair();
+    let b = r.pair();
+    let _old = r.pair();
+    r.notices(vec![notice(Waiting)], T0 + 3_000);
+    assert_eq!(r.relay.count("POST", "push"), 0);
+    choices(&mut r, &a, 1, true, false, true);
+    choices(&mut r, &b, 1, false, true, true);
+    let saved = store::load(&r.dir);
+    assert_eq!(saved, r.core.pairings);
+    assert!(saved.iter().find(|p| p.id == a).unwrap().notify.is_some());
+    r.core = Core::new(
+        Some(Box::new(r.bridge.clone())),
+        Box::new(r.relay.clone()),
+        r.settings.clone(),
+        r.dir.clone(),
+        Shared {
+            view: Arc::default(),
+            changed: async_channel::bounded(1).0,
+            publishing: Arc::default(),
+        },
+    );
+    r.notices(
+        vec![notice(Waiting), notice(Finished), notice(Failed)],
+        T0 + 4_000,
+    );
+    let s = r.relay.0.lock().unwrap();
+    let alerts = |id: &str| {
+        s.pairings[id]
+            .pushes
+            .iter()
+            .map(|body| {
+                assert_eq!(body["event"], "alert");
+                let sealed = body["message"].as_str().unwrap();
+                let text = from_b64url(sealed.strip_prefix("sealed|alert|").unwrap()).unwrap();
+                (
+                    serde_json::from_slice::<Value>(&text).unwrap(),
+                    body["urgent"].as_bool().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let aa = alerts(&a);
+    let bb = alerts(&b);
+    assert_eq!(aa.len(), 1);
+    assert_eq!(bb.len(), 1);
+    assert_eq!(
+        aa[0],
+        (
+            json!({"seq":0,"type":"alert","events":[{"kind":"waiting","agent":"Claude Code","project":"project"},{"kind":"failed","agent":"Claude Code","project":"project"}]}),
+            true
+        )
+    );
+    assert_eq!(
+        bb[0].0,
+        json!({"seq":0,"type":"alert","events":[
+        {"kind":"finished","agent":"Claude Code","project":"project"},
+        {"kind":"failed","agent":"Claude Code","project":"project"}]})
+    );
+    assert!(!bb[0].1);
+    drop(s);
+    let saved = store::load(&r.dir);
+    assert_eq!(saved.iter().find(|p| p.id == a).unwrap().alert_seq, 1);
+    assert_eq!(saved.iter().find(|p| p.id == b).unwrap().alert_seq, 1);
+    assert_eq!(saved.iter().find(|p| p.id == a).unwrap().down_seq, 0);
+    r.core.pairings = saved;
+    r.notices(vec![notice(Waiting)], T0 + 5_000);
+    assert_eq!(r.core.pairing(&b).unwrap().alert_seq, 1);
+    let s = r.relay.0.lock().unwrap();
+    let sealed = s.pairings[&a].pushes.last().unwrap()["message"]
+        .as_str()
+        .unwrap();
+    let text = from_b64url(sealed.strip_prefix("sealed|alert|").unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&text).unwrap()["seq"], 1);
+}
+
+#[test]
+fn alerts_cap_events_and_report_the_dropped_count() {
+    let mut r = rig("alert-cap");
+    let id = r.pair();
+    choices(&mut r, &id, 1, true, true, true);
+    // The one waiting comes last: the cap must keep it, and the push stays urgent.
+    let notices = (0..10)
+        .map(|i| {
+            let mut n = notice(if i == 9 {
+                notify::Kind::Waiting
+            } else {
+                notify::Kind::Finished
+            });
+            n.project = format!("project-{i}");
+            n
+        })
+        .collect();
+    r.notices(notices, T0 + 4_000);
+    let s = r.relay.0.lock().unwrap();
+    let push = &s.pairings[&id].pushes[0];
+    assert_eq!(push["urgent"], true);
+    let sealed = push["message"].as_str().unwrap();
+    let text = from_b64url(sealed.strip_prefix("sealed|alert|").unwrap()).unwrap();
+    let msg: Value = serde_json::from_slice(&text).unwrap();
+    assert_eq!(msg["events"].as_array().unwrap().len(), 8);
+    assert_eq!(msg["events"][0]["kind"], "waiting");
+    assert_eq!(msg["events"][1]["project"], "project-0");
+    assert_eq!(msg["events"][7]["project"], "project-6");
+    assert_eq!(msg["more"], 2);
+}
+
+#[test]
+fn incomplete_notify_preserves_choices() {
+    let mut r = rig("invalid-notify");
+    let id = r.pair();
+    choices(&mut r, &id, 1, true, false, true);
+    r.relay.post_up(
+        &id,
+        json!({"seq": 2, "type": "notify", "waiting": false, "finished": true}),
+    );
+    r.core.poll(&id, T0 + 4_000);
+    assert_eq!(
+        r.core.pairing(&id).unwrap().notify,
+        Some(notify::Choices {
+            waiting: true,
+            finished: false,
+            failed: true
+        })
+    );
+    assert_eq!(
+        store::load(&r.dir)[0].notify,
+        r.core.pairing(&id).unwrap().notify
+    );
+}
+
+#[test]
+fn disabled_alerts_wait_for_notify_but_other_errors_drop_only_one() {
+    for status in [409, 410, 501, 429, 502] {
+        let mut r = rig(&format!("alert-error-{status}"));
+        let id = r.pair();
+        choices(&mut r, &id, 1, true, true, true);
+        r.relay.force(status, None);
+        r.notices(vec![notice(notify::Kind::Waiting)], T0 + 4_000);
+        r.notices(vec![notice(notify::Kind::Waiting)], T0 + 6_000);
+        let disabled = matches!(status, 409 | 410 | 501);
+        assert_eq!(store::load(&r.dir)[0].alerts_off, disabled);
+        assert_eq!(r.relay.count("POST", "push"), if disabled { 1 } else { 2 });
+        choices(&mut r, &id, 2, true, true, true);
+        r.notices(vec![notice(notify::Kind::Waiting)], T0 + 8_000);
+        assert_eq!(r.relay.count("POST", "push"), if disabled { 2 } else { 3 });
+    }
+}
+
+#[test]
+fn old_pairing_records_load_without_notification_choices() {
+    let mut r = rig("old-notify");
+    r.pair();
+    let path = r.dir.join(store::FILE_NAME);
+    let mut file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for p in file["pairings"].as_array_mut().unwrap() {
+        p.as_object_mut().unwrap().remove("notify");
+        p.as_object_mut().unwrap().remove("alertSeq");
+        p.as_object_mut().unwrap().remove("alertsOff");
+    }
+    fs::write(path, file.to_string()).unwrap();
+    let loaded = store::load(&r.dir);
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded[0].notify.is_none());
+    assert_eq!(loaded[0].alert_seq, 0);
+}
+
+#[test]
+fn alert_seal_failure_drops_the_event_and_unconfirmed_phones_do_not_receive_it() {
+    let mut r = rig("alert-seal");
+    let id = r.pair();
+    choices(&mut r, &id, 1, true, true, true);
+    r.core.pairing_mut(&id).unwrap().state = State::Confirming;
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 4_000);
+    assert_eq!(r.relay.count("POST", "push"), 0);
+    r.core.pairing_mut(&id).unwrap().state = State::Paired;
+    r.bridge.fail("seal", Some("keychain locked"));
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 5_000);
+    assert_eq!(r.relay.count("POST", "push"), 0);
+    assert_eq!(store::load(&r.dir)[0].alert_seq, 1);
+    r.bridge.fail("seal", None);
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 6_000);
+    assert_eq!(r.relay.count("POST", "push"), 1);
+    assert_eq!(r.core.pairing(&id).unwrap().alert_seq, 2);
+}
+
+#[test]
+fn alerts_skip_backoff_and_disallowed_batches_without_spending_seq() {
+    let mut r = rig("alert-backoff");
+    let a = r.pair();
+    let b = r.pair();
+    choices(&mut r, &a, 1, true, false, false);
+    choices(&mut r, &b, 1, false, false, false);
+    r.core.live_mut(&a).backoff_until_ms = T0 + 10_000;
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 4_000);
+    assert_eq!(r.relay.count("POST", "push"), 0);
+    assert_eq!(r.core.pairing(&a).unwrap().alert_seq, 0);
+    assert_eq!(r.core.pairing(&b).unwrap().alert_seq, 0);
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 10_000);
+    assert_eq!(r.relay.count("POST", "push"), 1);
+    assert_eq!(r.core.pairing(&a).unwrap().alert_seq, 1);
+    assert_eq!(r.core.pairing(&b).unwrap().alert_seq, 0);
+}
+
+#[test]
+fn unanswered_alerts_drop_only_that_batch() {
+    let mut r = rig("alert-offline");
+    let id = r.pair();
+    choices(&mut r, &id, 1, true, true, true);
+    r.relay.0.lock().unwrap().online = false;
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 4_000);
+    r.relay.0.lock().unwrap().online = true;
+    r.notices(vec![notice(notify::Kind::Finished)], T0 + 6_000);
+    let s = r.relay.0.lock().unwrap();
+    let pushes = &s.pairings[&id].pushes;
+    assert_eq!(pushes.len(), 1);
+    let sealed = pushes[0]["message"].as_str().unwrap();
+    let text = from_b64url(sealed.strip_prefix("sealed|alert|").unwrap()).unwrap();
+    let msg: Value = serde_json::from_slice(&text).unwrap();
+    assert_eq!(msg["seq"], 1);
+    assert_eq!(msg["events"].as_array().unwrap().len(), 1);
+    assert_eq!(msg["events"][0]["kind"], "finished");
+    assert!(!r.core.pairing(&id).unwrap().alerts_off);
+}
+
+#[test]
+fn fake_relay_limits_pushes_to_one_per_second_per_pairing() {
+    let mut r = rig("alert-rate");
+    let id = r.pair();
+    choices(&mut r, &id, 1, true, true, true);
+    r.notices(vec![notice(notify::Kind::Waiting)], T0 + 4_000);
+    r.notices(vec![notice(notify::Kind::Finished)], T0 + 4_500);
+    assert_eq!(r.relay.0.lock().unwrap().pairings[&id].pushes.len(), 1);
+    assert_eq!(r.core.live_mut(&id).backoff_until_ms, T0 + 5_500);
+    r.notices(vec![notice(notify::Kind::Failed)], T0 + 5_000);
+    assert_eq!(r.core.pairing(&id).unwrap().alert_seq, 2);
+    r.notices(vec![notice(notify::Kind::Finished)], T0 + 5_500);
+    assert_eq!(r.relay.0.lock().unwrap().pairings[&id].pushes.len(), 2);
 }

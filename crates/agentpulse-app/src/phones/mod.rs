@@ -12,6 +12,7 @@
 mod bridge;
 #[cfg(feature = "e2e")]
 pub mod e2e;
+pub mod notify;
 mod relay;
 mod store;
 #[cfg(test)]
@@ -49,6 +50,7 @@ const MIN_WAIT_MS: i64 = 100;
 pub enum Msg {
     Command(Command),
     Publish(Box<Payload>),
+    Notices(Vec<notify::Notice>),
     Update(Option<String>),
     /// A listener event from the bridge.
     Event(Value),
@@ -232,6 +234,12 @@ impl PhoneLink {
         }
     }
 
+    pub fn notices(&self, notices: Vec<notify::Notice>) {
+        if !notices.is_empty() && self.wants_payload() {
+            self.send(Msg::Notices(notices));
+        }
+    }
+
     fn send(&self, msg: Msg) {
         // Only fails once the worker is gone, and then there is nothing to tell.
         self.tx.send(msg).ok();
@@ -396,6 +404,7 @@ impl Core {
                     p.update = self.update.clone();
                 }
             }
+            Msg::Notices(notices) => self.notices(notices, now),
             Msg::Event(e) => self.event(&e, now),
             Msg::Wake => {}
             Msg::Command(Command::StartPairing(reply)) => {
@@ -463,6 +472,9 @@ impl Core {
             last_seen_ms: None,
             down_seq: 0,
             up_seq: 0,
+            alert_seq: 0,
+            notify: None,
+            alerts_off: false,
         });
         if !self.save() {
             self.forget(&id, false, now);
@@ -743,6 +755,74 @@ impl Core {
         Some((seq, msg.to_string().into_bytes()))
     }
 
+    fn notices(&mut self, notices: Vec<notify::Notice>, now: i64) {
+        let ids: Vec<String> = self
+            .pairings
+            .iter()
+            .filter(|p| {
+                p.state == State::Paired
+                    && !p.alerts_off
+                    && p.notify.is_some()
+                    && p.phone_key.is_some()
+            })
+            .map(|p| p.id.clone())
+            .collect();
+        for id in ids {
+            if self.live_mut(&id).backoff_until_ms > now {
+                continue;
+            }
+            let Some(p) = self.pairing_mut(&id) else {
+                continue;
+            };
+            let Some(choices) = p.notify.as_ref() else {
+                continue;
+            };
+            let Some(phone_key) = p.phone_key.clone() else {
+                continue;
+            };
+            let mut events: Vec<_> = notices.iter().filter(|n| choices.allows(n.kind)).collect();
+            if events.is_empty() {
+                continue;
+            }
+            // Waiting first, so the cap never drops the one that needs you.
+            events.sort_by_key(|n| n.kind != notify::Kind::Waiting);
+            let urgent = events[0].kind == notify::Kind::Waiting;
+            let more = events.len().saturating_sub(8);
+            events.truncate(8);
+            let seq = p.alert_seq;
+            p.alert_seq += 1;
+            // Persist before sealing or sending: a seq is never sent twice.
+            if !self.save() {
+                continue;
+            }
+            let mut plaintext = json!({"seq": seq, "type": "alert", "events": events});
+            if more > 0 {
+                plaintext["more"] = json!(more);
+            }
+            let sealed = self.bridge(&json!({
+                "op": "seal", "id": id, "phoneKey": phone_key, "direction": "alert",
+                "plaintext": b64url(plaintext.to_string().as_bytes()),
+            }));
+            let message = match sealed {
+                Ok(v) => v["message"].clone(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot seal an alert for a phone");
+                    continue;
+                }
+            };
+            let body = json!({"event": "alert", "message": message, "urgent": urgent});
+            // A push 429 also backs off this pairing's other relay requests (1 s today).
+            if let Some(r) = self.request(&id, "POST", "push", Some(&body), now)
+                && matches!(r.status, 409 | 410 | 501)
+            {
+                if let Some(p) = self.pairing_mut(&id) {
+                    p.alerts_off = true;
+                }
+                self.save();
+            }
+        }
+    }
+
     /// `GET up`: the hello while waiting, the phone's messages after that.
     fn poll(&mut self, id: &str, now: i64) {
         if let Some(hello) = self.live_mut(id).hello.take() {
@@ -901,6 +981,14 @@ impl Core {
         p.up_seq = seq;
         match msg["type"].as_str() {
             Some("seen") => p.last_seen_ms = Some(now),
+            Some("notify") => {
+                if let Ok(choices) = serde_json::from_value::<notify::Choices>(msg.clone()) {
+                    p.notify = Some(choices);
+                    p.alerts_off = false;
+                } else {
+                    tracing::warn!("a phone sent invalid notification choices");
+                }
+            }
             // The phone removed the pairing; the Mac removes it at the relay too.
             Some("unpair") => return self.forget(id, true, now),
             _ => {}
