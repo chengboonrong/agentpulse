@@ -283,7 +283,12 @@ pub struct StatusItem {
 }
 
 impl StatusItem {
-    pub fn new(mtm: MainThreadMarker, on_action: Box<dyn Fn(MenuAction)>) -> Self {
+    pub fn new(
+        mtm: MainThreadMarker,
+        on_action: Box<dyn Fn(MenuAction)>,
+        open_label: &str,
+        quit_label: &str,
+    ) -> Self {
         let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
         let target = Target::new(mtm, on_action);
         let menu = NSMenu::new(mtm);
@@ -292,8 +297,8 @@ impl StatusItem {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let entries = [
             ("", sel!(openUpdate:), ""),
-            ("Open AgentPulse", sel!(openDashboard:), ""),
-            ("Quit AgentPulse", sel!(quit:), "q"),
+            (open_label, sel!(openDashboard:), ""),
+            (quit_label, sel!(quit:), "q"),
         ]
         .map(|(title, action, key)| {
             let entry = menu_item(mtm, title, Some(action), key);
@@ -422,16 +427,14 @@ impl StatusItem {
     }
 
     /// Shows "Update Available: AgentPulse <version>…", or hides it with None.
-    pub fn set_update(&self, version: Option<&str>) {
-        if !replace_if_changed(&self.update_version, version.map(str::to_owned)) {
+    pub fn set_update(&self, title: Option<&str>) {
+        if !replace_if_changed(&self.update_version, title.map(str::to_owned)) {
             return;
         }
-        if let Some(v) = version {
-            self.update.setTitle(&NSString::from_str(&format!(
-                "Update Available: AgentPulse {v}…"
-            )));
+        if let Some(title) = title {
+            self.update.setTitle(&NSString::from_str(title));
         }
-        self.update.setHidden(version.is_none());
+        self.update.setHidden(title.is_none());
     }
 }
 

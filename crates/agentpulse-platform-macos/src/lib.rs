@@ -34,3 +34,15 @@ pub fn secure_event_input(on: bool) {
 pub fn reduce_motion() -> bool {
     objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
+
+/// Best supported language according to macOS, including per-app preferences.
+pub fn preferred_locale() -> String {
+    use objc2_foundation::{NSArray, NSBundle, NSString};
+    let supported = NSArray::from_retained_slice(
+        &["en", "zh-Hans", "zh-Hant", "ja", "ms"].map(NSString::from_str),
+    );
+    NSBundle::preferredLocalizationsFromArray_forPreferences(&supported, None)
+        .firstObject()
+        .map(|locale| locale.to_string())
+        .unwrap_or_else(|| "en".into())
+}

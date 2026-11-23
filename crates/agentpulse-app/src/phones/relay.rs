@@ -51,7 +51,8 @@ impl Relay for Http {
             headers.push(("Content-Type", "application/json"));
         }
         let r =
-            agentpulse_platform_macos::request(method, url, &headers, body.as_deref(), TIMEOUT_S)?;
+            agentpulse_platform_macos::request(method, url, &headers, body.as_deref(), TIMEOUT_S)
+                .map_err(crate::localization::network_error)?;
         Ok(Reply {
             status: r.status,
             body: serde_json::from_slice(&r.body).unwrap_or(Value::Null),

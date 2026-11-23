@@ -11,7 +11,11 @@ use crate::cleanup::{CleanupItem, Reason};
 /// How long a clicked End waits for its "Confirm end".
 pub(super) const CONFIRM: Duration = Duration::from_secs(5);
 
-const GROUPS: [&str; 3] = ["Leftover processes", "Idle sessions", "Other leftovers"];
+const GROUPS: [&str; 3] = [
+    "cleanup.leftovers",
+    "cleanup.idle_sessions",
+    "cleanup.other_leftovers",
+];
 
 fn group(r: &Reason) -> usize {
     match r {
@@ -25,9 +29,9 @@ fn group(r: &Reason) -> usize {
 fn span(ms: i64) -> String {
     let m = (ms / 60_000).max(1);
     if m < 60 {
-        format!("{m} min")
+        rust_i18n::t!("cleanup.minutes", n = m).to_string()
     } else {
-        format!("{} h", m / 60)
+        rust_i18n::t!("cleanup.hours", n = m / 60).to_string()
     }
 }
 
@@ -44,13 +48,17 @@ pub(super) fn why(item: &CleanupItem, project: Option<&str>, now_ms: i64) -> Str
         Reason::Orphan {
             provider,
             session_id,
-        } => format!(
-            "From {} · ended {since} ago",
-            source(*provider, session_id, project)
-        ),
-        Reason::IdleSession { waiting: true, .. } => format!("Waiting on you for {since}"),
-        Reason::IdleSession { .. } => format!("Idle for {since}"),
-        Reason::Untracked => "Not started by an agent AgentPulse saw".into(),
+        } => rust_i18n::t!(
+            "cleanup.from_ended",
+            source = source(*provider, session_id, project),
+            since = since
+        )
+        .to_string(),
+        Reason::IdleSession { waiting: true, .. } => {
+            rust_i18n::t!("cleanup.waiting_for", since = since).to_string()
+        }
+        Reason::IdleSession { .. } => rust_i18n::t!("cleanup.idle_for", since = since).to_string(),
+        Reason::Untracked => rust_i18n::t!("cleanup.untracked").into(),
     }
 }
 
@@ -60,9 +68,9 @@ fn ends(item: &CleanupItem, now_ms: i64) -> Option<String> {
         return None;
     };
     Some(match item.clean_at_ms {
-        _ if item.kept => "Kept".into(),
-        Some(at) => format!("Ends in {}", span(at - now_ms)),
-        None => "Automatic end is off".into(),
+        _ if item.kept => rust_i18n::t!("cleanup.kept").into(),
+        Some(at) => rust_i18n::t!("cleanup.ends_in", since = span(at - now_ms)).to_string(),
+        None => rust_i18n::t!("cleanup.auto_off").into(),
     })
 }
 
@@ -90,7 +98,7 @@ impl AppView {
         let c = &s.cleanup;
         let armed = self.armed.map(|(p, _)| p);
         let mut page = charts::scroll_page("cleanup", &self.page_scroll)
-            .child(heading("Clean-up"))
+            .child(heading(rust_i18n::t!("cleanup.title").as_ref()))
             .children(notes.into_iter().map(|n| n.mt(px(sp::M))))
             .when(c.memory_low, |d| {
                 d.child(
@@ -103,7 +111,7 @@ impl AppView {
                         .border_1()
                         .border_color(rgb(t.banner_border))
                         .text_size(px(ty::LABEL))
-                        .child("Memory is low. Ending leftover processes can free some."),
+                        .child(rust_i18n::t!("cleanup.memory_low").to_string()),
                 )
             });
         let mut gap = sp::XL;
@@ -138,20 +146,20 @@ impl AppView {
                 card(t)
                     .mt(px(gap))
                     .gap(px(sp::M))
-                    .child(card_title(title))
+                    .child(card_title(&rust_i18n::t!(title)))
                     .children(rows),
             );
             gap = sp::L;
         }
         if c.items.is_empty() {
-            page = page.child(secondary("Nothing left behind.", t).mt(px(sp::XL)));
+            page = page.child(secondary(rust_i18n::t!("cleanup.empty").as_ref(), t).mt(px(sp::XL)));
         }
         page.when(!c.log.is_empty(), |d| {
             d.child(
                 card(t)
                     .mt(px(sp::L))
                     .gap(px(sp::M))
-                    .child(card_title("Recently ended"))
+                    .child(card_title(rust_i18n::t!("cleanup.recent").as_ref()))
                     .children(c.log.iter().map(|e| {
                         let from = e
                             .provider
@@ -193,7 +201,7 @@ impl AppView {
 }
 
 /// An armed button's second click, which cannot be undone: the fail ribbon's red.
-pub(super) fn danger(id: impl Into<ElementId>, label: &'static str, t: Theme) -> Stateful<Div> {
+pub(super) fn danger(id: impl Into<ElementId>, label: &str, t: Theme) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -206,7 +214,7 @@ pub(super) fn danger(id: impl Into<ElementId>, label: &'static str, t: Theme) ->
         .text_color(rgb(ON_RIBBON))
         .font_weight(FontWeight::MEDIUM)
         .hover(|s| s.opacity(0.9))
-        .child(label)
+        .child(label.to_string())
 }
 
 /// A name over one muted line, then memory, then whatever the caller adds.
@@ -255,48 +263,58 @@ fn item_row(
 ) -> Div {
     let row = line_row(&i.name, line, i.rss_bytes, t);
     let Some(p) = i.process else {
-        return row.child(secondary("Shared with other sessions", t).flex_none());
+        return row.child(secondary(rust_i18n::t!("cleanup.shared").as_ref(), t).flex_none());
     };
     // SIGTERM sent: a second End or a Keep would do nothing.
     if i.ending {
-        return row.child(secondary("Ending…", t).flex_none());
+        return row.child(secondary(rust_i18n::t!("cleanup.ending").as_ref(), t).flex_none());
     }
     let confirm = armed == Some(p);
-    let label = if confirm { "Confirm end" } else { "End" };
-    let end = if confirm {
-        danger(("end", n), label, t)
+    let label = rust_i18n::t!(if confirm {
+        "cleanup.confirm_end"
     } else {
-        button(("end", n), label, t)
+        "cleanup.end"
+    });
+    let end = if confirm {
+        danger(("end", n), &label, t)
+    } else {
+        button(("end", n), &label, t)
     };
     let (end_view, name) = (view.clone(), i.name.clone());
     row.when(keep, |d| {
         d.child(
-            button(("keep", n), "Keep", t)
-                .aria_label(format!("Keep {name}"))
+            button(("keep", n), rust_i18n::t!("cleanup.keep").as_ref(), t)
+                .aria_label(rust_i18n::t!("cleanup.keep_name", name = name).to_string())
                 .on_click(move |_, _, cx| send(Command::Keep(p), cx)),
         )
     })
     .child(
-        end.aria_label(format!("{label} {}", i.name))
-            .on_click(move |_, _, cx| {
-                end_view.update(cx, |v, cx| v.end(p, cx)).ok();
-            }),
+        end.aria_label(
+            rust_i18n::t!("cleanup.action_name", label = label, name = i.name).to_string(),
+        )
+        .on_click(move |_, _, cx| {
+            end_view.update(cx, |v, cx| v.end(p, cx)).ok();
+        }),
     )
 }
 
 /// How and when a log entry's process was ended, and from which session.
 fn log_line(e: &CleanupLogEntry, project: Option<&str>, now_ms: i64) -> String {
-    let by = if e.automatic {
-        "automatically"
-    } else {
-        "by you"
-    };
     let from = e
         .provider
         .zip(e.session_id.as_deref())
         .map(|(p, id)| format!(" · {}", source(p, id, project)))
         .unwrap_or_default();
-    format!("Ended {by}{from} · {} ago", ago(now_ms - e.at_ms))
+    rust_i18n::t!(
+        if e.automatic {
+            "cleanup.log_auto"
+        } else {
+            "cleanup.log_manual"
+        },
+        from = from,
+        ago = ago(now_ms - e.at_ms)
+    )
+    .to_string()
 }
 
 /// One row of each kind, the log, and low memory, for screenshots; the first

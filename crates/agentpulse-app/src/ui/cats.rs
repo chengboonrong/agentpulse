@@ -16,9 +16,10 @@ impl AppView {
     pub(super) fn cats_screen(&self, t: Theme, this: WeakEntity<Self>) -> impl IntoElement {
         let agent = self.cats_agent;
         let look = self.settings.looks().get(agent);
-        let eyes_text = look
-            .eye
-            .map_or("Coat's own eyes".into(), |e| format!("{} eyes", e.name));
+        let eyes_text = look.eye.map_or_else(
+            || rust_i18n::t!("cats.own_eyes").to_string(),
+            |e| rust_i18n::t!("cats.named_eyes", colour = eye_name(e.name)).to_string(),
+        );
         div()
             .id("cats")
             .flex_1()
@@ -29,25 +30,27 @@ impl AppView {
             .pb(px(sp::XL))
             .flex()
             .flex_col()
-            .child(heading("Cats"))
+            .child(heading(rust_i18n::t!("cats.title").to_string()))
+            .child(secondary(&rust_i18n::t!("cats.note"), t).mt(px(sp::XS)))
             .child(
-                secondary(
-                    "Each agent's cat on the Overview and in the widget. A choice applies at once and is saved.",
-                    t,
-                )
-                .mt(px(sp::XS)),
+                div()
+                    .mt(px(sp::XL))
+                    .flex()
+                    .child(agent_switch(agent, t, &this)),
             )
-            .child(div().mt(px(sp::XL)).flex().child(agent_switch(agent, t, &this)))
             .child(
                 div()
                     .id("preview")
                     .role(Role::Image)
-                    .aria_label(format!(
-                        "{}'s cat, {}, {}, sitting and running",
-                        agent.label(),
-                        look.coat.name,
-                        eyes_text.to_lowercase()
-                    ))
+                    .aria_label(
+                        rust_i18n::t!(
+                            "cats.preview",
+                            agent = agent.label(),
+                            coat = look.coat.name,
+                            eyes = eyes_text.to_lowercase()
+                        )
+                        .to_string(),
+                    )
                     .mt(px(sp::L))
                     .p(px(sp::L))
                     .rounded(px(CELL_RADIUS))
@@ -70,9 +73,11 @@ impl AppView {
                             .rounded(px(14.))
                             .bg(rgb(t.stage(agent)))
                             .children(self.preview.iter().map(|a| {
-                                div()
-                                    .ml(px(-cat_overhang(PREVIEW_SCALE)))
-                                    .child(cat(a.sprite(), look, PREVIEW_SCALE))
+                                div().ml(px(-cat_overhang(PREVIEW_SCALE))).child(cat(
+                                    a.sprite(),
+                                    look,
+                                    PREVIEW_SCALE,
+                                ))
                             })),
                     )
                     .child(
@@ -86,15 +91,20 @@ impl AppView {
                                     .font_weight(FontWeight::EXTRA_BOLD)
                                     .child(look.coat.name),
                             )
-                            .child(div().text_color(rgb(t.muted)).child(format!(
-                                "{}'s cat · {} · {}",
-                                agent.label(),
-                                look.coat.group,
-                                eyes_text
-                            ))),
+                            .child(
+                                div().text_color(rgb(t.muted)).child(
+                                    rust_i18n::t!(
+                                        "cats.description",
+                                        agent = agent.label(),
+                                        group = group_name(look.coat.group),
+                                        eyes = eyes_text
+                                    )
+                                    .to_string(),
+                                ),
+                            ),
                     ),
             )
-            .child(section_label("Eyes", t).mt(px(sp::GROUP)))
+            .child(section_label(rust_i18n::t!("cats.eyes").to_string(), t).mt(px(sp::GROUP)))
             .child(eyes(agent, look, t, &this).mt(px(sp::S)))
             .children(GROUPS.iter().enumerate().map(|(i, &group)| {
                 div()
@@ -102,12 +112,12 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap(px(sp::S))
-                    .child(div().font_weight(FontWeight::BOLD).child(group))
+                    .child(div().font_weight(FontWeight::BOLD).child(group_name(group)))
                     .child(
                         div()
                             .id(group)
                             .role(Role::RadioGroup)
-                            .aria_label(group)
+                            .aria_label(group_name(group))
                             .flex()
                             .flex_wrap()
                             .gap(px(sp::S))
@@ -147,7 +157,7 @@ fn agent_switch(agent: Provider, t: Theme, this: &WeakEntity<AppView>) -> Statef
     div()
         .id("agents")
         .role(Role::TabList)
-        .aria_label("Agent")
+        .aria_label(rust_i18n::t!("cats.agent").to_string())
         .flex()
         .gap(px(sp::XS))
         .p(px(3.))
@@ -182,12 +192,17 @@ fn agent_switch(agent: Provider, t: Theme, this: &WeakEntity<AppView>) -> Statef
 
 /// "Coat's own" and the seven eye colours.
 fn eyes(agent: Provider, look: Look, t: Theme, this: &WeakEntity<AppView>) -> Stateful<Div> {
-    let own = (None, "Coat's own", look.coat.palette.eye);
-    let options = std::iter::once(own).chain(EYES.iter().map(|e| (Some(e), e.name, e.color)));
+    let own = (
+        None,
+        rust_i18n::t!("cats.own").to_string(),
+        look.coat.palette.eye,
+    );
+    let options =
+        std::iter::once(own).chain(EYES.iter().map(|e| (Some(e), eye_name(e.name), e.color)));
     div()
         .id("eyes")
         .role(Role::RadioGroup)
-        .aria_label("Eye colour")
+        .aria_label(rust_i18n::t!("cats.eye_colour").to_string())
         .flex()
         .flex_wrap()
         .gap(px(sp::S))
@@ -196,7 +211,7 @@ fn eyes(agent: Provider, look: Look, t: Theme, this: &WeakEntity<AppView>) -> St
             div()
                 .id(("eye", i))
                 .role(Role::RadioButton)
-                .aria_label(name)
+                .aria_label(name.clone())
                 .aria_toggled(toggled(on))
                 .flex()
                 .items_center()
@@ -278,4 +293,29 @@ fn swatch(
                 .child(coat.name),
         )
         .on_click(choose(this, agent, shown))
+}
+
+fn group_name(group: &str) -> String {
+    match group {
+        "Classic coats" => rust_i18n::t!("cats.group_0").to_string(),
+        "Tabbies" => rust_i18n::t!("cats.group_1").to_string(),
+        "White markings" => rust_i18n::t!("cats.group_2").to_string(),
+        "Tortoiseshell and calico" => rust_i18n::t!("cats.group_3").to_string(),
+        "Colourpoints" => rust_i18n::t!("cats.group_4").to_string(),
+        "Spotted and ticked" => rust_i18n::t!("cats.group_5").to_string(),
+        "Fantasy" => rust_i18n::t!("cats.group_6").to_string(),
+        _ => group.to_string(),
+    }
+}
+fn eye_name(name: &str) -> String {
+    match name {
+        "Green" => rust_i18n::t!("cats.eye_green").to_string(),
+        "Gold" => rust_i18n::t!("cats.eye_gold").to_string(),
+        "Amber" => rust_i18n::t!("cats.eye_amber").to_string(),
+        "Copper" => rust_i18n::t!("cats.eye_copper").to_string(),
+        "Blue" => rust_i18n::t!("cats.eye_blue").to_string(),
+        "Hazel" => rust_i18n::t!("cats.eye_hazel").to_string(),
+        "Dark" => rust_i18n::t!("cats.eye_dark").to_string(),
+        _ => name.to_string(),
+    }
 }

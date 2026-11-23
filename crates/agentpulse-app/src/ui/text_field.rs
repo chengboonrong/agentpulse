@@ -416,8 +416,8 @@ impl Focusable for TextField {
 
 impl TextField {
     pub fn new(
-        label: &'static str,
-        placeholder: &'static str,
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
         secure: bool,
         window: &mut Window,
         cx: &mut Context<Self>,

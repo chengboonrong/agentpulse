@@ -16,14 +16,6 @@ use crate::settings::{CLEAN_CHOICES, Cleanup, PUBLIC_RELAY, SPEEDS, WARN_CHOICES
 use crate::updates::{self, CURRENT, Check, Release};
 
 const CARD_MAX_W: f32 = 640.;
-const AUTO_DETAIL: &str = "Every 2 hours AgentPulse asks GitHub for its latest release. Nothing about you or your agents is sent.";
-const DIRECT_DETAIL: &str = "Phones on the same Wi-Fi get updates straight from this Mac.";
-const AGENTS_DETAIL: &str =
-    "A hidden agent is still recorded, so its history is complete when you show it again.";
-const CLEANUP_DETAIL: &str =
-    "AgentPulse only ends processes it saw an agent start. Idle sessions are never ended for you.";
-const PHONES_PRIVACY: &str =
-    "Updates go through the relay sealed for your phone: the relay can't read them.";
 /// The QR code's side, about; modules are whole points so none blur.
 const QR_SIDE: f32 = 220.;
 /// Light modules added around the code: with the generator's own 1-module margin, the
@@ -112,7 +104,7 @@ pub(super) fn screen(
         .pb(px(sp::XL))
         .flex()
         .flex_col()
-        .child(heading("Settings"))
+        .child(heading(rust_i18n::t!("settings.title").to_string()))
         .child(agents_card(hub, entity, t).mt(px(sp::XL)))
         .child(animation_card(hub, entity, t).mt(px(sp::L)))
         .child(cleanup_card(hub, entity, t).mt(px(sp::L)))
@@ -125,7 +117,9 @@ fn agents_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
         switch(
             p.as_str(),
             p.label(),
-            (!detected(p)).then_some("Not detected"),
+            (!detected(p))
+                .then(|| rust_i18n::t!("settings.not_detected").to_string())
+                .as_deref(),
             !a.is_hidden(p),
             t,
             on_hub(entity, move |h, cx| {
@@ -139,9 +133,9 @@ fn agents_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Agents"))
+        .child(card_title(&rust_i18n::t!("settings.agents")))
         .children(rows)
-        .child(secondary(AGENTS_DETAIL, t).px(px(sp::S)))
+        .child(secondary(&rust_i18n::t!("settings.agents_detail"), t).px(px(sp::S)))
 }
 
 /// Whether the agent's data folder (its adapter's default root) exists: one
@@ -167,9 +161,9 @@ fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
             .total_cmp(&(y - hub.motion.speed).abs())
     });
     let why = if reduce_motion() {
-        Some("Reduce Motion is on in System Settings, so the cats stay still.")
+        Some(rust_i18n::t!("settings.reduce_motion").to_string())
     } else if hub::env_overrides_animation() {
-        Some("Set by AGENTPULSE_ANIMATION / AGENTPULSE_ANIMATION_SPEED.")
+        Some(rust_i18n::t!("settings.env_animation").to_string())
     } else {
         None
     };
@@ -192,21 +186,21 @@ fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                         .on_click(on_hub(entity, move |h, cx| h.set_speed(speed, cx)))
                 } else {
                     // Inert while the cats do not move: no focus, no click.
-                    d.aria_description("Animation is off")
+                    d.aria_description(rust_i18n::t!("settings.animation_off").to_string())
                         .border_1()
                         .border_color(transparent_black())
                         .text_color(rgb(t.muted))
                 }
             })
-            .child(label)
+            .child(label.to_string())
     });
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Animation"))
+        .child(card_title(&rust_i18n::t!("settings.animation")))
         .child(switch(
             "animate",
-            "Animate cats",
+            &rust_i18n::t!("settings.animate"),
             None,
             a.enabled,
             t,
@@ -222,13 +216,13 @@ fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                     div()
                         .font_weight(FontWeight::MEDIUM)
                         .when(!live, |d| d.text_color(rgb(t.muted)))
-                        .child("Speed"),
+                        .child(rust_i18n::t!("settings.speed").to_string()),
                 )
                 .child(
                     div()
                         .id("speed")
                         .role(Role::RadioGroup)
-                        .aria_label("Speed")
+                        .aria_label(rust_i18n::t!("settings.speed").to_string())
                         .flex()
                         .gap(px(sp::XS))
                         .p(px(3.))
@@ -239,7 +233,7 @@ fn animation_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                         .children(speeds),
                 ),
         )
-        .children(why.map(|w| secondary(w, t).px(px(sp::S))))
+        .children(why.map(|w| secondary(&w, t).px(px(sp::S))))
 }
 
 fn cleanup_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
@@ -247,17 +241,17 @@ fn cleanup_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Clean-up"))
-        .child(row("Warn after").child(hours(
-            "Warn after",
+        .child(card_title(&rust_i18n::t!("settings.cleanup")))
+        .child(row(&rust_i18n::t!("settings.warn_after")).child(hours(
+            "settings.warn_after",
             &WARN_CHOICES,
             c.warn_after_hours,
             t,
             entity,
             |c, h| c.warn_after_hours = h,
         )))
-        .child(row("End after").child(hours(
-            "End after",
+        .child(row(&rust_i18n::t!("settings.end_after")).child(hours(
+            "settings.end_after",
             &CLEAN_CHOICES,
             c.clean_after_hours,
             t,
@@ -266,7 +260,7 @@ fn cleanup_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
         )))
         .child(switch(
             "auto-clean",
-            "End leftover processes automatically",
+            &rust_i18n::t!("settings.auto_clean"),
             None,
             c.auto_clean,
             t,
@@ -276,7 +270,7 @@ fn cleanup_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                 h.set_cleanup(c, cx);
             }),
         ))
-        .child(secondary(CLEANUP_DETAIL, t).px(px(sp::S)))
+        .child(secondary(&rust_i18n::t!("settings.cleanup_detail"), t).px(px(sp::S)))
 }
 
 /// A radio group of hours, styled as the Speed group; a click saves `set(c, hours)`.
@@ -290,7 +284,7 @@ fn hours(
 ) -> Stateful<Div> {
     let options = choices.iter().enumerate().map(|(i, &h)| {
         let chosen = h == on;
-        let text = format!("{h} h");
+        let text = rust_i18n::t!("settings.hours", h = h).to_string();
         div()
             .id((label, i))
             .role(Role::RadioButton)
@@ -312,12 +306,12 @@ fn hours(
                 set(&mut c, h);
                 hub.set_cleanup(c, cx);
             }))
-            .child(text)
+            .child(text.to_string())
     });
     div()
         .id(label)
         .role(Role::RadioGroup)
-        .aria_label(label)
+        .aria_label(rust_i18n::t!(label).to_string())
         .flex()
         .gap(px(sp::XS))
         .p(px(3.))
@@ -333,28 +327,39 @@ fn updates_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     let now = now_ms();
     let at = |ms: i64| format::start_time(ms, now);
     let status = if hub.checking {
-        "Checking…".to_string()
+        rust_i18n::t!("settings.checking").to_string()
     } else {
         match &hub.last_check {
-            Some(Ok(Check::UpToDate)) => format!(
-                "AgentPulse {CURRENT} is up to date · checked {}",
-                at(hub.checked_at_ms)
-            ),
-            Some(Ok(Check::Available(_))) => format!("Checked {}", at(hub.checked_at_ms)),
-            Some(Err(e)) => format!("Couldn't check: {e} · {}", at(hub.checked_at_ms)),
+            Some(Ok(Check::UpToDate)) => rust_i18n::t!(
+                "settings.current",
+                version = CURRENT,
+                time = at(hub.checked_at_ms)
+            )
+            .to_string(),
+            Some(Ok(Check::Available(_))) => {
+                rust_i18n::t!("settings.checked", time = at(hub.checked_at_ms)).to_string()
+            }
+            Some(Err(e)) => rust_i18n::t!(
+                "settings.check_error",
+                error = e,
+                time = at(hub.checked_at_ms)
+            )
+            .to_string(),
             // Checked in an earlier run, not yet in this one.
-            None if u.last_checked_ms > 0 => format!("Last checked {}", at(u.last_checked_ms)),
-            None => "Never checked".to_string(),
+            None if u.last_checked_ms > 0 => {
+                rust_i18n::t!("settings.last_checked", time = at(u.last_checked_ms)).to_string()
+            }
+            None => rust_i18n::t!("settings.never_checked").to_string(),
         }
     };
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Updates"))
+        .child(card_title(&rust_i18n::t!("settings.updates")))
         .child(switch(
             "auto-updates",
-            "Check for updates automatically",
-            Some(AUTO_DETAIL),
+            &rust_i18n::t!("settings.auto_updates"),
+            Some(&rust_i18n::t!("settings.auto_detail")),
             u.auto,
             t,
             on_hub(entity, |h, cx| h.toggle_auto_updates(cx)),
@@ -366,7 +371,7 @@ fn updates_card(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
                 .gap(px(sp::M))
                 .px(px(sp::S))
                 .child(
-                    button("check-now", "Check Now", t)
+                    button("check-now", &rust_i18n::t!("settings.check_now"), t)
                         .on_click(on_hub(entity, |h, cx| h.check_now(cx))),
                 )
                 .child(div().min_w_0().text_color(rgb(t.muted)).child(status)),
@@ -426,11 +431,9 @@ pub(super) fn phones_screen(
         .pb(px(sp::XL))
         .flex()
         .flex_col()
-        .child(heading("Phones"))
+        .child(heading(rust_i18n::t!("phones.title").to_string()))
         .when(!v.available, |d| {
-            d.child(
-                secondary("Phones need AgentPulse.app (run scripts/bundle.sh).", t).mt(px(sp::XL)),
-            )
+            d.child(secondary(&rust_i18n::t!("phones.bundle_required"), t).mt(px(sp::XL)))
         })
         .when(v.available, |d| {
             d.child(
@@ -457,7 +460,8 @@ fn phone_errors<'a>(
 }
 
 fn app_store_link(t: Theme) -> Stateful<Div> {
-    button("open-app-store", "Open App Store", t).on_click(|_, _, cx| cx.open_url(APP_STORE_URL))
+    button("open-app-store", &rust_i18n::t!("phones.open_store"), t)
+        .on_click(|_, _, cx| cx.open_url(APP_STORE_URL))
 }
 
 fn guide_step(number: &'static str, content: Div) -> Div {
@@ -474,41 +478,44 @@ fn guide_step(number: &'static str, content: Div) -> Div {
 }
 
 fn guide_card(hub: &Hub, entity: &Entity<Hub>, v: &crate::phones::View, t: Theme) -> Div {
-    let install = div().child("Install AgentPulse from the App Store.").child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(sp::L))
-            .child(qr_code(
-                &app_store_qr(),
-                "app-store-qr",
-                "App Store QR code",
-            ))
-            .child(app_store_link(t)),
-    );
+    let install = div()
+        .child(rust_i18n::t!("phones.install").to_string())
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(sp::L))
+                .child(qr_code(
+                    &app_store_qr(),
+                    "app-store-qr",
+                    &rust_i18n::t!("phones.store_qr"),
+                ))
+                .child(app_store_link(t)),
+        );
     let pair = div()
-        .child("Click Pair a Phone.")
+        .child(rust_i18n::t!("phones.click_pair").to_string())
         .child(pair_button(hub, entity, t));
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::L))
-        .child(card_title("Get AgentPulse on your iPhone or iPad"))
+        .child(card_title(&rust_i18n::t!("phones.get_app")))
         .child(guide_step("1", install))
         .children(phone_errors(hub, v, t))
         .child(guide_step("2", pair))
-        .child(guide_step("3", div().child(
-            "On your phone, tap Pair a Mac, scan the code, and check that both screens show the same code.",
-        )))
+        .child(guide_step(
+            "3",
+            div().child(rust_i18n::t!("phones.scan_guide").to_string()),
+        ))
 }
 
 fn pair_button(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
     let label = if hub.pairing_starting {
-        "Pairing…"
+        rust_i18n::t!("phones.pairing").to_string()
     } else {
-        "Pair a Phone"
+        rust_i18n::t!("phones.pair").to_string()
     };
     let pair = if !hub.pairing_starting {
-        button("pair", label, t)
+        button("pair", &label, t)
             .on_click(on_hub(entity, |h, cx| h.pair_phone(cx)))
             .into_any_element()
     } else {
@@ -522,7 +529,7 @@ fn pair_button(hub: &Hub, entity: &Entity<Hub>, t: Theme) -> Div {
             .bg(rgb(t.card))
             .text_color(rgb(t.muted))
             .font_weight(FontWeight::MEDIUM)
-            .child(label)
+            .child(label.to_string())
             .into_any_element()
     };
     div().px(px(sp::S)).flex().child(pair)
@@ -533,7 +540,7 @@ fn pairing_card(hub: &Hub, entity: &Entity<Hub>, v: &crate::phones::View, t: The
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Phones"))
+        .child(card_title(&rust_i18n::t!("phones.title")))
         .children(phone_errors(hub, v, t))
         .child(match &v.pending {
             Some(s) => pairing_sheet(s, entity, t, now),
@@ -551,10 +558,7 @@ fn pairing_card(hub: &Hub, entity: &Entity<Hub>, v: &crate::phones::View, t: The
                 .flex()
                 .items_center()
                 .gap(px(sp::S))
-                .child(secondary(
-                    "Another device? Get AgentPulse from the App Store.",
-                    t,
-                ))
+                .child(secondary(&rust_i18n::t!("phones.another"), t))
                 .child(app_store_link(t))
         }))
 }
@@ -572,19 +576,19 @@ fn connection_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: The
     card(t)
         .max_w(px(CARD_MAX_W))
         .gap(px(sp::M))
-        .child(card_title("Connection"))
+        .child(card_title(&rust_i18n::t!("phones.connection")))
         .child(
-            row("Relay")
+            row(&rust_i18n::t!("phones.relay"))
                 .child(relay_field.clone())
                 .child(
-                    button("save-relay", "Save", t)
-                        .aria_label("Save relay address")
+                    button("save-relay", &rust_i18n::t!("common.save"), t)
+                        .aria_label(rust_i18n::t!("phones.save_relay").to_string())
                         .on_click(move |_, _, cx| save_relay(&save.0, &save.1, cx)),
                 )
                 .when(relay_set, |d| {
                     d.child(
-                        button("clear-relay", "Clear", t)
-                            .aria_label("Clear relay address")
+                        button("clear-relay", &rust_i18n::t!("common.clear"), t)
+                            .aria_label(rust_i18n::t!("phones.clear_relay").to_string())
                             .on_click(on_hub(entity, move |h, cx| {
                                 h.clear_relay(cx);
                                 clear.update(cx, |f, cx| f.reset("", cx));
@@ -594,47 +598,46 @@ fn connection_card(hub: &Hub, entity: &Entity<Hub>, phone: PhoneControls, t: The
         )
         .when(!relay_set, |d| {
             let host = PUBLIC_RELAY.trim_start_matches("https://");
-            d.child(
-                secondary(
-                    &format!(
-                        "Using the AgentPulse relay ({host}). To use your own, enter its address."
-                    ),
-                    t,
-                )
-                .px(px(sp::S)),
-            )
+            d.child(secondary(&rust_i18n::t!("phones.public_relay", host = host), t).px(px(sp::S)))
         })
         // Known only once a relay is set: with none, nothing touches the Keychain.
         .when(relay_set, |d| {
             d.child(if v.relay_key == Some(true) {
-                field("Relay key", "Key saved", t).child(
-                    button("forget-key", "Forget Key", t)
+                field(
+                    &rust_i18n::t!("phones.relay_key"),
+                    &rust_i18n::t!("phones.key_saved"),
+                    t,
+                )
+                .child(
+                    button("forget-key", &rust_i18n::t!("phones.forget_key"), t)
                         .track_focus(forget)
                         .on_click(on_hub(entity, |h, _| h.phones.set_relay_key(None))),
                 )
             } else {
-                row("Relay key").child(key_field.clone()).child(
-                    button("save-key", "Save", t)
-                        .aria_label("Save relay key")
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |v, cx| v.save_key(cx)).ok();
-                        }),
-                )
+                row(&rust_i18n::t!("phones.relay_key"))
+                    .child(key_field.clone())
+                    .child(
+                        button("save-key", &rust_i18n::t!("common.save"), t)
+                            .aria_label(rust_i18n::t!("phones.save_key").to_string())
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |v, cx| v.save_key(cx)).ok();
+                            }),
+                    )
             })
         })
         .child(switch(
             "direct",
-            "Direct connection",
-            Some(DIRECT_DETAIL),
+            &rust_i18n::t!("phones.direct"),
+            Some(&rust_i18n::t!("settings.direct_detail")),
             p.direct,
             t,
             on_hub(entity, |h, cx| h.toggle_direct(cx)),
         ))
-        .child(secondary(PHONES_PRIVACY, t).px(px(sp::S)))
+        .child(secondary(&rust_i18n::t!("settings.phones_privacy"), t).px(px(sp::S)))
 }
 
 /// A label, then whatever the caller adds.
-fn row(label: &'static str) -> Div {
+fn row(label: &str) -> Div {
     div()
         .flex()
         .items_center()
@@ -642,15 +645,15 @@ fn row(label: &'static str) -> Div {
         .px(px(sp::S))
         .child(
             div()
-                .w(px(76.))
+                .min_w(px(76.))
                 .flex_none()
                 .font_weight(FontWeight::MEDIUM)
-                .child(label),
+                .child(label.to_string()),
         )
 }
 
 /// A label, its value, then whatever buttons the caller adds.
-fn field(label: &'static str, value: &str, t: Theme) -> Div {
+fn field(label: &str, value: &str, t: Theme) -> Div {
     row(label).child(
         div()
             .flex_1()
@@ -673,7 +676,7 @@ fn pairing_sheet(s: &Started, entity: &Entity<Hub>, t: Theme, now: i64) -> Div {
         .flex()
         .items_center()
         .gap(px(sp::XL))
-        .child(qr_code(&s.qr, "pair-qr", "Pairing QR code"))
+        .child(qr_code(&s.qr, "pair-qr", &rust_i18n::t!("phones.pair_qr")))
         .child(
             div()
                 .flex()
@@ -683,16 +686,20 @@ fn pairing_sheet(s: &Started, entity: &Entity<Hub>, t: Theme, now: i64) -> Div {
                     div()
                         .text_size(px(ty::ROW_TITLE))
                         .font_weight(FontWeight::BOLD)
-                        .child("Scan with AgentPulse on your iPhone"),
+                        .child(rust_i18n::t!("phones.scan").to_string()),
                 )
                 .child(secondary(
-                    &format!("Expires in {}:{:02}", left / 60, left % 60),
+                    &rust_i18n::t!(
+                        "phones.expires",
+                        minutes = left / 60,
+                        seconds = format!("{:02}", left % 60)
+                    ),
                     t,
                 ))
                 .child(
                     div().flex().child(
-                        button("cancel-pairing", "Cancel", t)
-                            .aria_label("Cancel pairing")
+                        button("cancel-pairing", &rust_i18n::t!("common.cancel"), t)
+                            .aria_label(rust_i18n::t!("phones.cancel_pairing").to_string())
                             .on_click(on_hub(entity, |h, _| h.phones.cancel_pairing())),
                     ),
                 ),
@@ -700,14 +707,14 @@ fn pairing_sheet(s: &Started, entity: &Entity<Hub>, t: Theme, now: i64) -> Div {
 }
 
 /// Black modules on a white square in both themes, so any camera reads it.
-fn qr_code(qr: &Qr, id: &'static str, label: &'static str) -> Stateful<Div> {
+fn qr_code(qr: &Qr, id: &'static str, label: &str) -> Stateful<Div> {
     let qr = qr.clone();
     let n = qr.size + 2 * QR_QUIET;
     let module = (QR_SIDE / n as f32).round().max(1.);
     div()
         .id(id)
         .role(Role::Image)
-        .aria_label(label)
+        .aria_label(label.to_string())
         .flex_none()
         .size(px(module * n as f32))
         .child(
@@ -748,11 +755,12 @@ fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> O
                     .child(
                         div()
                             .font_weight(FontWeight::BOLD)
-                            .child(format!("Pair with {name}?")),
+                            .child(rust_i18n::t!("phones.pair_with", name = name).to_string()),
                     )
                     .child(secondary(
-                        &code.map_or("Working out the code…".into(), |c| {
-                            format!("Check that your phone shows {} {}.", &c[..3], &c[3..])
+                        &code.map_or(rust_i18n::t!("phones.code_pending").to_string(), |c| {
+                            rust_i18n::t!("phones.check_code", first = &c[..3], last = &c[3..])
+                                .to_string()
                         }),
                         t,
                     )),
@@ -764,7 +772,7 @@ fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> O
                     div()
                         .id(("confirm", i))
                         .role(Role::Button)
-                        .aria_label(format!("Confirm pairing with {name}"))
+                        .aria_label(rust_i18n::t!("phones.confirm_pair", name = name).to_string())
                         .flex_none()
                         .px(px(sp::M))
                         .py(px(sp::XS))
@@ -774,27 +782,29 @@ fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> O
                         .text_color(rgb(ON_RIBBON))
                         .font_weight(FontWeight::MEDIUM)
                         .hover(|s| s.opacity(0.9))
-                        .child("Confirm")
+                        .child(rust_i18n::t!("common.confirm").to_string())
                         .on_click(on_hub(entity, move |h, _| h.phones.confirm(&id))),
                 )
             })
             .child(
-                button(("decline", i), "Decline", t)
-                    .aria_label(format!("Decline pairing with {name}"))
+                button(("decline", i), &rust_i18n::t!("common.decline"), t)
+                    .aria_label(rust_i18n::t!("phones.decline_pair", name = name).to_string())
                     .on_click(on_hub(entity, move |h, _| h.phones.decline(&decline))),
             ),
         );
     }
     let lines: Vec<String> = match p.state {
         State::Waiting => return None,
-        State::Gone => vec!["The relay no longer has this pairing.".into()],
+        State::Gone => vec![rust_i18n::t!("phones.gone").to_string()],
         _ => {
             let seen = match p.last_seen_ms {
-                Some(ms) if now - ms < 60_000 => "Last seen just now".to_string(),
-                Some(ms) => format!("Last seen {} ago", ago(now - ms)),
-                None => "Not seen yet".to_string(),
+                Some(ms) if now - ms < 60_000 => rust_i18n::t!("phones.seen_now").to_string(),
+                Some(ms) => rust_i18n::t!("phones.seen", time = ago(now - ms)).to_string(),
+                None => rust_i18n::t!("phones.not_seen").to_string(),
             };
-            let direct = p.direct.then(|| "Connected on this network".to_string());
+            let direct = p
+                .direct
+                .then(|| rust_i18n::t!("phones.connected").to_string());
             [seen].into_iter().chain(direct).collect()
         }
     };
@@ -815,8 +825,8 @@ fn phone_row(i: usize, p: &Phone, entity: &Entity<Hub>, t: Theme, now: i64) -> O
                 .children(lines.iter().map(|l| secondary(l, t))),
         )
         .child(
-            button(("remove", i), "Remove", t)
-                .aria_label(format!("Remove {name}"))
+            button(("remove", i), &rust_i18n::t!("common.remove"), t)
+                .aria_label(rust_i18n::t!("phones.remove", name = name).to_string())
                 .on_click(on_hub(entity, move |h, _| h.phones.remove(&id))),
         ),
     )
@@ -834,12 +844,12 @@ fn release(r: &Release, t: Theme) -> Div {
             div()
                 .text_size(px(ty::ROW_TITLE))
                 .font_weight(FontWeight::BOLD)
-                .child(format!("AgentPulse {} is available", r.version)),
+                .child(rust_i18n::t!("settings.available", version = r.version).to_string()),
         )
         .children(
             r.published
                 .as_ref()
-                .map(|d| secondary(&format!("Released {d}"), t)),
+                .map(|d| secondary(&rust_i18n::t!("settings.released", date = d), t)),
         )
         .child(
             div()
@@ -850,14 +860,14 @@ fn release(r: &Release, t: Theme) -> Div {
                 .border_color(rgb(t.keyline))
                 .text_size(px(ty::LABEL))
                 .child(if r.notes.is_empty() {
-                    "No release notes.".to_string()
+                    rust_i18n::t!("settings.no_notes").to_string()
                 } else {
                     r.notes.clone()
                 }),
         )
         .child(
             div().flex().child(
-                button("install", "Install Update", t)
+                button("install", &rust_i18n::t!("settings.install_update"), t)
                     .on_click(move |_, _, cx| updates::install(&release, cx)),
             ),
         )
@@ -894,25 +904,33 @@ pub(super) fn banner(
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(format!("AgentPulse {version} is available.")),
+                    .child(
+                        rust_i18n::t!("settings.available_banner", version = version).to_string(),
+                    ),
             )
             .child(
-                button("whats-new", "What's New", t).on_click(move |_, _, cx| {
-                    view.update(cx, |v, cx| {
-                        v.screen = Screen::Settings;
-                        v.show_detail(None, cx);
-                        v.schedule_animation(cx);
-                    })
-                    .ok();
-                }),
+                button("whats-new", &rust_i18n::t!("settings.whats_new"), t).on_click(
+                    move |_, _, cx| {
+                        view.update(cx, |v, cx| {
+                            v.screen = Screen::Settings;
+                            v.show_detail(None, cx);
+                            v.schedule_animation(cx);
+                        })
+                        .ok();
+                    },
+                ),
             )
             .child(
-                button("banner-install", "Install Update", t)
-                    .on_click(move |_, _, cx| updates::install(&release, cx)),
+                button(
+                    "banner-install",
+                    &rust_i18n::t!("settings.install_update"),
+                    t,
+                )
+                .on_click(move |_, _, cx| updates::install(&release, cx)),
             )
             .child(
-                button("dismiss", "Dismiss", t)
-                    .aria_label("Dismiss update notice")
+                button("dismiss", &rust_i18n::t!("settings.dismiss"), t)
+                    .aria_label(rust_i18n::t!("settings.dismiss_notice").to_string())
                     .on_click(move |_, _, cx| {
                         entity.update(cx, |h, cx| h.dismiss(&version, cx));
                     }),
@@ -920,18 +938,18 @@ pub(super) fn banner(
     )
 }
 
-pub(super) fn card_title(text: &'static str) -> Div {
+pub(super) fn card_title(text: &str) -> Div {
     div()
         .text_size(px(ty::ROW_TITLE))
         .font_weight(FontWeight::BOLD)
-        .child(text)
+        .child(text.to_string())
 }
 
-pub(super) fn button(id: impl Into<ElementId>, label: &'static str, t: Theme) -> Stateful<Div> {
+pub(super) fn button(id: impl Into<ElementId>, label: &str, t: Theme) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(label.to_string())
         .flex_none()
         .px(px(sp::M))
         .py(px(sp::XS))
@@ -941,14 +959,14 @@ pub(super) fn button(id: impl Into<ElementId>, label: &'static str, t: Theme) ->
         .bg(rgb(t.card))
         .font_weight(FontWeight::MEDIUM)
         .hover(|s| s.bg(rgb(t.surface)))
-        .child(label)
+        .child(label.to_string())
 }
 
 /// A labelled on/off switch; the whole row toggles it.
 fn switch(
     id: &'static str,
-    label: &'static str,
-    detail: Option<&'static str>,
+    label: &str,
+    detail: Option<&str>,
     on: bool,
     t: Theme,
     click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -956,9 +974,9 @@ fn switch(
     div()
         .id(id)
         .role(Role::Switch)
-        .aria_label(label)
+        .aria_label(label.to_string())
         .aria_toggled(toggled(on))
-        .when_some(detail, |d, text| d.aria_description(text))
+        .when_some(detail, |d, text| d.aria_description(text.to_string()))
         .flex()
         .items_center()
         .gap(px(sp::L))
@@ -973,7 +991,11 @@ fn switch(
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().font_weight(FontWeight::MEDIUM).child(label))
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label.to_string()),
+                )
                 .children(detail.map(|text| secondary(text, t))),
         )
         .child(

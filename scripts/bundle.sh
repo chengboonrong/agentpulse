@@ -187,6 +187,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array><string>en</string><string>zh-Hans</string><string>zh-Hant</string><string>ja</string><string>ms</string></array>
 	<key>CFBundleExecutable</key><string>agentpulse</string>
 	<key>CFBundleIdentifier</key><string>$APP_ID</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>

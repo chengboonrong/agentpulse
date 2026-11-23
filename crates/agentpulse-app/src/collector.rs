@@ -293,7 +293,7 @@ impl Collector {
         self.last_sweep = None;
         self.command_error = done.err().map(|e| {
             tracing::error!(error = %format!("{e:#}"), "clean-up command failed");
-            format!("Clean-up: {e:#}")
+            rust_i18n::t!("common.cleanup_error", error = format!("{e:#}")).to_string()
         });
     }
 
@@ -359,7 +359,10 @@ impl Collector {
                             }
                             Err(e) => {
                                 tracing::error!(error = %format!("{e:#}"), "cannot store poll batch");
-                                src.apply_error = Some(format!("Storage: {e:#}"));
+                                src.apply_error = Some(
+                                    rust_i18n::t!("common.storage_error", error = format!("{e:#}"))
+                                        .to_string(),
+                                );
                                 // The same batch would be re-read at once; wait for the next tick instead.
                                 src.more = false;
                             }
@@ -380,7 +383,14 @@ impl Collector {
                 }
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:#}"), provider = provider.label(), "cannot read live sessions");
-                    src.live_error = Some(format!("{} live sessions: {e:#}", provider.label()));
+                    src.live_error = Some(
+                        rust_i18n::t!(
+                            "common.live_error",
+                            provider = provider.label(),
+                            error = format!("{e:#}")
+                        )
+                        .to_string(),
+                    );
                     Vec::new()
                 }
             };
@@ -421,7 +431,7 @@ impl Collector {
                 .err()
                 .map(|e| {
                     tracing::error!(error = %format!("{e:#}"), "cannot track agent processes");
-                    format!("Clean-up: {e:#}")
+                    rust_i18n::t!("common.cleanup_error", error = format!("{e:#}")).to_string()
                 });
         }
         let live_ids: BTreeSet<Key> = verified
@@ -461,7 +471,9 @@ impl Collector {
                 }
                 Err(e) => {
                     tracing::error!(error = %format!("{e:#}"), "cannot query sessions");
-                    self.query_error = Some(format!("Storage: {e:#}"));
+                    self.query_error = Some(
+                        rust_i18n::t!("common.storage_error", error = format!("{e:#}")).to_string(),
+                    );
                 }
             }
         }
@@ -480,7 +492,10 @@ impl Collector {
                 }
                 Err(e) => {
                     tracing::error!(error = %format!("{e:#}"), "cannot query usage history");
-                    self.history_error = Some((Instant::now(), format!("Storage: {e:#}")));
+                    self.history_error = Some((
+                        Instant::now(),
+                        rust_i18n::t!("common.storage_error", error = format!("{e:#}")).to_string(),
+                    ));
                 }
             }
         }
@@ -504,7 +519,9 @@ impl Collector {
                 }
                 Err(e) => {
                     tracing::error!(error = %format!("{e:#}"), "cannot query session requests");
-                    self.detail_error = Some(format!("Storage: {e:#}"));
+                    self.detail_error = Some(
+                        rust_i18n::t!("common.storage_error", error = format!("{e:#}")).to_string(),
+                    );
                 }
             }
         }
@@ -607,7 +624,10 @@ impl Collector {
                     }
                     Err(e) => {
                         tracing::error!(error = %format!("{e:#}"), "clean-up sweep failed");
-                        self.sweep_error = Some(format!("Clean-up: {e:#}"));
+                        self.sweep_error = Some(
+                            rust_i18n::t!("common.cleanup_error", error = format!("{e:#}"))
+                                .to_string(),
+                        );
                     }
                 }
             }

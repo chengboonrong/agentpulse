@@ -88,7 +88,10 @@ fn git(bin: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// "Exit 1 · <last line of stderr>".
 fn failure(code: Option<i32>, stderr: &str) -> String {
-    let status = code.map_or_else(|| "Stopped by a signal".into(), |c| format!("Exit {c}"));
+    let status = code.map_or_else(
+        || rust_i18n::t!("cleanup.signal").into(),
+        |c| rust_i18n::t!("cleanup.exit", code = c).to_string(),
+    );
     match stderr.lines().map(str::trim).rfind(|l| !l.is_empty()) {
         Some(line) => format!("{status} · {line}"),
         None => status,
@@ -117,14 +120,6 @@ pub fn parse_du(out: &str) -> Option<u64> {
     Some(kb * 1024)
 }
 
-pub fn plural(n: usize, one: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {one}s")
-    }
-}
-
 // Disk caches.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -139,12 +134,12 @@ pub enum Cache {
 impl Cache {
     const ALL: [Cache; 4] = [Cache::Brew, Cache::BrewFormulae, Cache::Uv, Cache::Npm];
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            Cache::Brew => "Homebrew",
-            Cache::BrewFormulae => "Homebrew unused formulae",
-            Cache::Uv => "uv",
-            Cache::Npm => "npm",
+            Cache::Brew => "Homebrew".into(),
+            Cache::BrewFormulae => rust_i18n::t!("cleanup.unused_formulae").to_string(),
+            Cache::Uv => "uv".into(),
+            Cache::Npm => "npm".into(),
         }
     }
 
@@ -230,7 +225,8 @@ pub fn parse_autoremove(out: &str) -> Vec<String> {
 
 /// Bytes freed: the folder's size before minus after.
 fn clean_cache(cache: Cache) -> Result<u64, String> {
-    let bin = tool(cache.tool()).ok_or_else(|| format!("{} not found", cache.tool()))?;
+    let bin = tool(cache.tool())
+        .ok_or_else(|| rust_i18n::t!("cleanup.not_found", name = cache.tool()).to_string())?;
     let dir = cache.dir(&bin)?;
     let before = dir.as_deref().map_or(0, size);
     // A running `uvx` tool holds uv's cache lock, and uv waits 300 s for it by default.
@@ -284,7 +280,11 @@ impl Worktree {
     fn label(&self) -> String {
         match &self.branch {
             Some(b) if !self.detached => b.clone(),
-            _ => format!("Detached at {}", &self.head[..self.head.len().min(7)]),
+            _ => rust_i18n::t!(
+                "cleanup.detached",
+                head = &self.head[..self.head.len().min(7)]
+            )
+            .to_string(),
         }
     }
 }
@@ -354,26 +354,42 @@ impl Safety {
     /// Why the worktree can't be removed safely, if it can't.
     fn blocker(&self) -> Option<String> {
         if self.nested {
-            return Some("Holds another worktree".into());
+            return Some(rust_i18n::t!("cleanup.nested").into());
         }
         if self.dirty {
-            return Some("Uncommitted changes".into());
+            return Some(rust_i18n::t!("cleanup.dirty").into());
         }
         match self.unpushed {
             Some(0) => {}
-            Some(n) => return Some(format!("{} not pushed", plural(n, "commit"))),
-            None => return Some("Couldn't check what's pushed".into()),
+            Some(n) => {
+                return Some(
+                    rust_i18n::t!(
+                        if n == 1 {
+                            "cleanup.not_pushed_one"
+                        } else {
+                            "cleanup.not_pushed_other"
+                        },
+                        n = n
+                    )
+                    .to_string(),
+                );
+            }
+            None => return Some(rust_i18n::t!("cleanup.cannot_check_pushed").into()),
         }
         match self.ignored.as_deref() {
             Some([]) => None,
             Some(files) => {
                 let more = if files.len() > 3 { ", …" } else { "" };
-                Some(format!(
-                    "Ignored files: {}{more}",
-                    files[..files.len().min(3)].join(", ")
-                ))
+                Some(
+                    rust_i18n::t!(
+                        "cleanup.ignored",
+                        files = files[..files.len().min(3)].join(", "),
+                        more = more
+                    )
+                    .to_string(),
+                )
             }
-            None => Some("Couldn't check ignored files".into()),
+            None => Some(rust_i18n::t!("cleanup.cannot_check_ignored").into()),
         }
     }
 }
@@ -454,8 +470,10 @@ pub fn verdict(f: &Facts) -> Verdict {
         return Verdict::Keep;
     }
     let why = match f.merged_into() {
-        Some(b) => format!("Merged into {b}"),
-        None if f.age_days > STALE_DAYS => format!("Last commit {} days ago", f.age_days),
+        Some(b) => rust_i18n::t!("cleanup.merged", branch = b).to_string(),
+        None if f.age_days > STALE_DAYS => {
+            rust_i18n::t!("cleanup.last_commit", days = f.age_days).to_string()
+        }
         None => return Verdict::Keep,
     };
     Verdict::Stale {
@@ -602,14 +620,14 @@ fn repo(bin: &Path, any: &Path, live: bool, now_s: i64) -> Option<Repo> {
 /// Removes a linked worktree after checking again everything Check checked:
 /// a commit, a file or an agent may have appeared since. Ok is the bytes freed.
 fn remove(bin: &Path, main: &Path, path: &Path, live: &[String]) -> Result<u64, String> {
-    let list = list_worktrees(bin, main).ok_or("Couldn't list the worktrees")?;
+    let list = list_worktrees(bin, main).ok_or(rust_i18n::t!("cleanup.cannot_list"))?;
     let at = real(path);
     if list.first().is_none_or(|m| real(&m.path) == at) || real(main) == at {
-        return Err("The main worktree stays".into());
+        return Err(rust_i18n::t!("cleanup.main_stays").into());
     }
-    let common = common_dir(bin, main).ok_or("Couldn't find the repo")?;
+    let common = common_dir(bin, main).ok_or(rust_i18n::t!("cleanup.cannot_find_repo"))?;
     if live_repos(bin, live).contains(&common) {
-        return Err("An agent is working in this repo".into());
+        return Err(rust_i18n::t!("cleanup.repo_busy").into());
     }
     let paths: Vec<&Path> = list.iter().map(|w| w.path.as_path()).collect();
     if let Some(why) = safety(bin, path, &paths).blocker() {
@@ -748,7 +766,9 @@ pub enum Action {
 /// Runs a confirmed action. Ok is the bytes it freed, size before minus after.
 /// `live` are live sessions' projects as the window sees them now.
 pub fn act(a: &Action, live: &[String]) -> Result<u64, String> {
-    let need = |name: &str| tool(name).ok_or_else(|| format!("{name} not found"));
+    let need = |name: &str| {
+        tool(name).ok_or_else(|| rust_i18n::t!("cleanup.not_found", name = name).to_string())
+    };
     match a {
         Action::Clean(c) => clean_cache(*c),
         Action::Prune(main) => git(&need("git")?, main, &["worktree", "prune"]).map(|_| 0),

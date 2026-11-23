@@ -34,10 +34,25 @@ pub fn tokens(n: u64) -> String {
 pub fn duration(ms: u64) -> String {
     let s = ms / 1000;
     match s {
-        0..60 => format!("{s}s"),
-        60..3_600 => format!("{}m {:02}s", s / 60, s % 60),
-        3_600..86_400 => format!("{}h {:02}m", s / 3_600, s % 3_600 / 60),
-        _ => format!("{}d {:02}h", s / 86_400, s % 86_400 / 3_600),
+        0..60 => rust_i18n::t!("format.seconds", seconds = s).to_string(),
+        60..3_600 => rust_i18n::t!(
+            "format.minutes_seconds",
+            minutes = s / 60,
+            seconds = format!("{:02}", s % 60)
+        )
+        .to_string(),
+        3_600..86_400 => rust_i18n::t!(
+            "format.hours_minutes",
+            hours = s / 3_600,
+            minutes = format!("{:02}", s % 3_600 / 60)
+        )
+        .to_string(),
+        _ => rust_i18n::t!(
+            "format.days_hours",
+            days = s / 86_400,
+            hours = format!("{:02}", s % 86_400 / 3_600)
+        )
+        .to_string(),
     }
 }
 
@@ -84,7 +99,7 @@ where
     if t.date_naive() == now.date_naive() {
         t.format("%H:%M").to_string()
     } else {
-        t.format("%b %-d %H:%M").to_string()
+        t.format(&rust_i18n::t!("format.date")).to_string()
     }
 }
 

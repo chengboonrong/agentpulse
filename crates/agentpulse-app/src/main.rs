@@ -1,7 +1,10 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod cleanup;
 mod collector;
 mod format;
 mod hub;
+mod localization;
 mod menubar;
 mod phones;
 mod settings;
@@ -31,6 +34,7 @@ use tracing_subscriber::filter::LevelFilter;
 const USAGE: &str = "usage: agentpulse [--dump | --bench]";
 
 fn main() -> anyhow::Result<()> {
+    localization::initialize();
     let level = std::env::var("AGENTPULSE_LOG")
         .ok()
         .and_then(|v| v.parse::<LevelFilter>().ok())
@@ -71,7 +75,9 @@ fn open_collector() -> anyhow::Result<Collector> {
     let mut errors = Vec::new();
     let prices = PriceBook::load(&dir.join("pricing.toml")).unwrap_or_else(|e| {
         tracing::warn!(error = %format!("{e:#}"), "using built-in prices");
-        errors.push(format!("Price table ignored, using built-in prices: {e:#}"));
+        errors.push(
+            rust_i18n::t!("common.price_table_ignored", error = format!("{e:#}")).to_string(),
+        );
         PriceBook::builtin()
     });
     let root = ClaudeCodeAdapter::default_root().context("cannot locate ~/.claude")?;

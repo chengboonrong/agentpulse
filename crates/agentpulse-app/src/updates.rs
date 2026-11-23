@@ -50,7 +50,8 @@ struct Raw {
 
 /// Blocking: run it on a background thread.
 pub fn check() -> Result<Check, String> {
-    let body = agentpulse_platform_macos::fetch(URL, &format!("AgentPulse/{CURRENT}"), TIMEOUT_S)?;
+    let body = agentpulse_platform_macos::fetch(URL, &format!("AgentPulse/{CURRENT}"), TIMEOUT_S)
+        .map_err(crate::localization::network_error)?;
     parse(&body, CURRENT)
 }
 
@@ -101,9 +102,9 @@ fn version(tag: &str) -> Option<Version> {
 
 /// The newest usable release in GitHub's list, against `current`.
 pub fn parse(body: &[u8], current: &str) -> Result<Check, String> {
-    let list: Vec<Raw> =
-        serde_json::from_slice(body).map_err(|e| format!("unexpected reply from GitHub: {e}"))?;
-    let current = version(current).ok_or("this build's version is not a release")?;
+    let list: Vec<Raw> = serde_json::from_slice(body)
+        .map_err(|e| rust_i18n::t!("settings.update_reply", error = e).to_string())?;
+    let current = version(current).ok_or(rust_i18n::t!("settings.update_version"))?;
     let mut newest: Option<(Version, Raw)> = None;
     for r in list {
         let Some(v) = version(&r.tag_name) else {
