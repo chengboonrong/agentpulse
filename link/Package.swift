@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "AgentPulseLink",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "AgentPulseLink", targets: ["AgentPulseLink"]),
@@ -11,7 +12,7 @@ let package = Package(
     targets: [
         .target(name: "AgentPulseLink"),
         // The phone's side, shared by the iPhone app, its widgets and phone-sim.
-        .target(name: "AgentPulsePhone", dependencies: ["AgentPulseLink"]),
+        .target(name: "AgentPulsePhone", dependencies: ["AgentPulseLink"], resources: [.process("Resources")]),
         .testTarget(name: "AgentPulseLinkTests", dependencies: ["AgentPulseLink"]),
         .testTarget(name: "AgentPulsePhoneTests", dependencies: ["AgentPulsePhone"]),
         // scripts/e2e-phones.sh's phone.

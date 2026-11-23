@@ -3,6 +3,8 @@
 # AgentPulse.app itself, so no team id appears here.
 name: AgentPulseWidgets
 options:
+  developmentLanguage: en
+  knownRegions: [en, zh-Hans, zh-Hant, ja, ms]
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true

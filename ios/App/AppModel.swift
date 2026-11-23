@@ -87,7 +87,7 @@ final class AppModel {
     }
 
     struct StartError: LocalizedError {
-        var errorDescription: String? { "AgentPulse has no access to its App Group storage." }
+        var errorDescription: String? { String(localized: "AgentPulse has no access to its App Group storage.") }
     }
 
     static func make() throws -> AppModel {

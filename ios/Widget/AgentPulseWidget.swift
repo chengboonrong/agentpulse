@@ -69,7 +69,7 @@ private struct EntryView: View {
         if let state = entry.state {
             AgentPulseWidgetView(state: state, family: family)
         } else {
-            Text(entry.waitingFor.map { "Waiting for \($0)" } ?? "Pair a Mac in AgentPulse")
+            Text(entry.waitingFor.map { String(localized: "Waiting for \($0)") } ?? String(localized: "Pair a Mac in AgentPulse"))
                 .font(.headline)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .containerBackground(.background, for: .widget)

@@ -48,7 +48,11 @@ struct MacView: View {
                 } header: {
                     Text(AgentPulseWidgetView.headline(p.agents))
                 } footer: {
-                    Text("As of \(p.generatedAt, format: .dateTime.hour().minute()) · \(model.direct.contains(id) ? "Connected directly" : "Through the relay")")
+                    if model.direct.contains(id) {
+                        Text("As of \(p.generatedAt, format: .dateTime.hour().minute()) · Connected directly")
+                    } else {
+                        Text("As of \(p.generatedAt, format: .dateTime.hour().minute()) · Through the relay")
+                    }
                 }
                 Section("Sessions") {
                     if p.sessions.isEmpty {
@@ -63,12 +67,12 @@ struct MacView: View {
                 Section {
                     LabeledContent("Tokens", value: p.today.tokens)
                     LabeledContent("Cost", value: p.today.cost)
-                        .accessibilityLabel(p.today.cost == "—" ? "Cost unavailable" : "Cost \(p.today.cost), estimate")
-                    LabeledContent("Output rate", value: p.outputRate)
+                        .accessibilityLabel(p.today.cost == "—" ? String(localized: "Cost unavailable") : String(localized: "Cost \(p.today.cost), estimate"))
+                    LabeledContent("Output rate", value: p.localizedOutputRate)
                 } header: {
                     Text("Today")
                 } footer: {
-                    if !p.today.costNote.isEmpty { Text(p.today.costNote) }
+                    if !p.today.costNote.isEmpty { Text(p.today.localizedCostNote) }
                 }
             } else {
                 Section {
@@ -170,7 +174,7 @@ struct SessionView: View {
                     }
                     LabeledContent("Tokens", value: s.tokens)
                     LabeledContent("Cost", value: s.cost)
-                        .accessibilityLabel(s.cost == "—" ? "Cost unavailable" : "Cost \(s.cost), estimate")
+                        .accessibilityLabel(s.cost == "—" ? String(localized: "Cost unavailable") : String(localized: "Cost \(s.cost), estimate"))
                 } footer: {
                     if let p = payload {
                         Text("As of \(p.generatedAt, format: .dateTime.hour().minute())")
