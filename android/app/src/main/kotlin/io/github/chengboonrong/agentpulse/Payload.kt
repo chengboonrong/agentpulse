@@ -21,12 +21,11 @@ data class WidgetPayload(
 ) {
     @Serializable
     data class Agents(val active: Int, val waiting: Int, val idle: Int) {
-        val headline
-            get() = when (val n = active + waiting + idle) {
-                0 -> "No agents"
-                1 -> "1 agent"
-                else -> "$n agents"
-            }
+        fun headline(resources: android.content.res.Resources): String {
+            val n = active + waiting + idle
+            return if (n == 0) resources.getString(R.string.no_agents)
+            else resources.getQuantityString(R.plurals.agent_count, n, n)
+        }
     }
 
     @Serializable
@@ -69,3 +68,23 @@ data class WidgetPayload(
         }
     }
 }
+
+/** Translate display fields of the version 1 Mac payload; identifiers stay on the wire. */
+fun WidgetPayload.Today.localizedCostNote(resources: android.content.res.Resources): String = when {
+    costNote.isEmpty() -> ""
+    costNote == "Estimated from list prices." -> resources.getString(R.string.price_fixture)
+    costNote == "no price for today's models" -> resources.getString(R.string.price_none)
+    else -> resources.getString(R.string.price_estimate)
+}
+
+fun WidgetPayload.localizedOutputRate(resources: android.content.res.Resources) =
+    resources.getString(R.string.token_rate, outputRate.removeSuffix(" tok/s"))
+
+fun WidgetPayload.Cat.description(resources: android.content.res.Resources) = resources.getString(when (state) {
+    "sleeping" -> R.string.cat_sleeping
+    "sitting" -> R.string.cat_sitting
+    "looking_around" -> R.string.cat_looking_around
+    "running" -> R.string.cat_running
+    "sprinting" -> R.string.cat_sprinting
+    else -> R.string.cat_unknown
+})

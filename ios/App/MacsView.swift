@@ -41,6 +41,7 @@ struct MacsView: View {
             }
         }
         .sheet(item: $model.pairRequest) { PairView(request: $0) }
+        .sheet(isPresented: $model.settingsShown) { SettingsView() }
     }
 
     private func macs(selection: Binding<String?>?) -> some View {
@@ -69,6 +70,7 @@ struct MacsView: View {
         }
         .navigationTitle("Macs")
         .toolbar {
+            Button("Settings", systemImage: "gearshape") { model.settingsShown = true }
             if !model.pairings.isEmpty {
                 Button("Pair a Mac", systemImage: "plus") { model.pairRequest = PairRequest() }
             }

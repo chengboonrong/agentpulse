@@ -18,6 +18,8 @@ final class FakeRelay: URLProtocol, @unchecked Sendable {
         var up: [String] = []
         /// `POST up` answers 500.
         var failUp = false
+        var pushStatus = 204
+        var pushBody: [String: String]?
     }
 
     nonisolated(unsafe) private static var relays: [String: FakeRelay.State] = [:]
@@ -82,6 +84,9 @@ extension FakeRelay.State {
                 return (304, nil, etag)
             }
             return (200, ["seq": down.seq, "message": down.message], etag)
+        case "PUT push-tokens":
+            slot.pushBody = body as? [String: String]
+            return (slot.pushStatus, nil, [:])
         case "POST up":
             if slot.failUp { return (500, nil, [:]) }
             slot.up.append(body["message"] as! String)
@@ -355,5 +360,102 @@ struct PhoneTests {
         #expect(try store.pairings().first?.upSeq == 0)
         try Data("{".utf8).write(to: dir.appending(path: "pairings.json"))
         #expect(throws: (any Error).self) { try store.pairings() }
+    }
+}
+
+extension PhoneTests {
+    @Test func notificationRequests() async throws {
+        let (p, key) = try await paired()
+        try await phone.notify(.defaults, p)
+        let up = try #require(mac.up(key).last)
+        #expect(up["type"] as? String == "notify")
+        #expect(up["seq"] as? Int == 1)
+        #expect(up["waiting"] as? Bool == true)
+        #expect(up["finished"] as? Bool == false)
+        #expect(up["failed"] as? Bool == true)
+        #expect(up.count == 5)
+        #expect(NotifyChoices.defaults.any && !NotifyChoices.off.any)
+        for environment in [PhoneClient.PushEnvironment.development, .production] {
+            try await phone.putPushToken(Data([0, 10, 171, 255]), environment: environment, p)
+            #expect(mac.state.lock.withLock { mac.state.pairings[p.id]?.pushBody } ==
+                ["alert": "000aabff", "environment": environment.rawValue])
+        }
+        for status in [401, 404, 500] {
+            mac.state.lock.withLock { mac.state.pairings[p.id]!.pushStatus = status }
+            await #expect(throws: status == 500 ? PhoneError.badResponse(500) : .removed) {
+                try await phone.putPushToken(Data([1]), environment: .development, p)
+            }
+        }
+        mac.state.lock.withLock { mac.state.pairings[p.id]!.failUp = true }
+        await #expect(throws: PhoneError.badResponse(500)) { try await phone.notify(.off, p) }
+        mac.state.lock.withLock { mac.state.pairings = [:] }
+        await #expect(throws: PhoneError.removed) { try await phone.notify(.off, p) }
+    }
+
+    @Test func alerts() async throws {
+        let (p, key) = try await paired()
+        func seal(_ seq: UInt64, type: String = "alert", direction: Direction = .alert) throws -> String {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "seq": seq, "type": type,
+                "events": [["kind": "waiting", "agent": "Claude", "project": "agentpulse"]],
+            ])
+            return try RelayMessage.seal(data, to: key, from: mac.key, direction: direction, pairingId: mac.id)
+        }
+        #expect(phone.openAlert("broken") == nil)
+        for raw in [
+            #"{"seq":9,"type":"alert","events":[]}"#,
+            #"{"seq":9,"type":"alert","events":[{"kind":"unknown","agent":"x","project":"x"}]}"#,
+            #"{"seq":-1,"type":"alert","events":[{"kind":"waiting","agent":"x","project":"x"}]}"#,
+            #"{"type":"alert"}"#,
+        ] {
+            let message = try RelayMessage.seal(Data(raw.utf8), to: key, from: mac.key, direction: .alert, pairingId: mac.id)
+            #expect(phone.openAlert(message) == nil)
+        }
+        #expect(try phone.store.pairing(p.id)?.alertSeq == nil)
+        #expect(try phone.openAlert(seal(8, type: "state")) == nil)
+        #expect(try phone.openAlert(seal(8, direction: .down)) == nil)
+        #expect(try phone.openAlert(seal(2)) == AlertContent(
+            title: "Claude is waiting", subtitle: "", body: "agentpulse needs your answer.", thread: p.id))
+        #expect(try phone.openAlert(seal(2)) == nil)
+        #expect(try phone.openAlert(seal(1)) == nil)
+        let other = PhoneClient(store: PhoneStore(container: dir, secrets: secrets))
+        #expect(try other.store.pairing(p.id)?.alertSeq == 2)
+        #expect(try other.openAlert(seal(2)) == nil)
+        let second = Mac()
+        _ = try await phone.pair(link: second.link, phoneName: "iPhone")
+        let secondKey = try second.hello().phoneKey
+        let data = Data(#"{"seq":0,"type":"alert","events":[{"kind":"failed","agent":"Codex","project":"link"}]}"#.utf8)
+        let message = try RelayMessage.seal(data, to: secondKey, from: second.key, direction: .alert, pairingId: second.id)
+        let opened = phone.openAlert(message)
+        #expect(opened?.subtitle == "Studio")
+        #expect(opened?.thread == second.idText)
+        try phone.store.delete(second.idText)
+        #expect(phone.openAlert(message) == nil)
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appending(path: "pairings.json"))) as! [[String: Any]]
+        json[0].removeValue(forKey: "alertSeq")
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.appending(path: "pairings.json"))
+        #expect(try phone.store.pairing(p.id)?.alertSeq == nil)
+    }
+
+    @Test func alertText() {
+        for (kind, title, body) in [
+            ("waiting", "Claude is waiting", "app needs your answer."),
+            ("finished", "Claude finished", "app is ready for your next prompt."),
+            ("failed", "Claude failed", "app stopped with an error."),
+        ] {
+            #expect(PhoneClient.alertText(
+                events: [.init(kind: kind, agent: "Claude", project: "app")],
+                more: nil, macName: "Studio", pairingCount: 1, thread: "id") ==
+                AlertContent(title: title, subtitle: "", body: body, thread: "id"))
+        }
+        let events = [
+            PhoneClient.AlertEvent(kind: "finished", agent: "Claude", project: "app"),
+            PhoneClient.AlertEvent(kind: "failed", agent: "Codex", project: "link"),
+        ]
+        #expect(PhoneClient.alertText(events: events, more: 3, macName: "Studio", pairingCount: 2, thread: "id") ==
+            AlertContent(title: "5 agents updated", subtitle: "Studio",
+                body: "app: finished\nlink: failed\nand 3 more", thread: "id"))
+        #expect(PhoneClient.alertText(events: events + [.init(kind: "waiting", agent: "Codex", project: "x")],
+            more: nil, macName: "Studio", pairingCount: 1, thread: "id")?.title == "3 agents need you")
     }
 }

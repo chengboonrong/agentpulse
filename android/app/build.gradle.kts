@@ -13,6 +13,7 @@ val workspaceVersion = Regex("""(?m)^version = "([^"]+)"""")
 android {
     namespace = "io.github.chengboonrong.agentpulse"
     compileSdk = 37
+    androidResources { generateLocaleConfig = true }
     defaultConfig {
         applicationId = "io.github.chengboonrong.agentpulse"
         minSdk = 26

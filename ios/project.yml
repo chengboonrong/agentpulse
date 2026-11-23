@@ -48,6 +48,7 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: AgentPulse uses the camera to scan the pairing code your Mac shows.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: AgentPulse connects directly to your paired Macs on the same network.
     dependencies:
+      - target: AgentPulseNotifications
       - target: AgentPulseWidget
       - package: AgentPulseLink
         product: AgentPulseLink
@@ -75,4 +76,25 @@ targets:
         product: AgentPulsePhone
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+    scheme: {}
+  AgentPulseNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Notifications
+        excludes: [Info.plist, AgentPulseNotifications.entitlements]
+    settings:
+      base:
+        PRODUCT_NAME: AgentPulseNotifications
+        TARGETED_DEVICE_FAMILY: "1,2"
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengboonrong.AgentPulse.phone.Notifications
+        INFOPLIST_FILE: Notifications/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Notifications/AgentPulseNotifications.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: AgentPulse
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: AgentPulseLink
+        product: AgentPulsePhone
+      - package: AgentPulseLink
+        product: AgentPulseLink
     scheme: {}

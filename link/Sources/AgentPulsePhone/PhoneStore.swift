@@ -8,7 +8,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
     /// The pairing id, base64url.
     public let id: String
     public let relay: URL
-    public let macName: String
+    public internal(set) var macName: String
     /// The Mac's raw 32-byte public key.
     public let macKey: Data
     /// The latest accepted state's `payload` (widget.json version 1), as JSON.
@@ -17,6 +17,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
     public var lastStateAt: Date?
     /// The `down` `SeqGuard` record: the last accepted state's seq.
     public internal(set) var downSeq: UInt64?
+    public internal(set) var alertSeq: UInt64?
     /// The last `up` seq sent; the hello is 0.
     public internal(set) var upSeq: UInt64 = 0
 
@@ -37,6 +38,7 @@ public struct Pairing: Codable, Hashable, Identifiable, Sendable {
         lastState = try c.decodeIfPresent(Data.self, forKey: .lastState)
         lastStateAt = try c.decodeIfPresent(Date.self, forKey: .lastStateAt)
         downSeq = try c.decodeIfPresent(UInt64.self, forKey: .downSeq)
+        alertSeq = try c.decodeIfPresent(UInt64.self, forKey: .alertSeq)
         upSeq = try c.decodeIfPresent(UInt64.self, forKey: .upSeq) ?? 0
     }
 }
@@ -166,6 +168,15 @@ public struct PhoneStore: Sendable {
             if all[i] != before { try save(all) }
             return (all[i], result)
         }
+    }
+
+    /// A name kept only on this phone. Returns the renamed pairing; nil for a blank name or
+    /// a pairing that is gone.
+    @discardableResult
+    public func rename(_ id: String, to name: String) throws -> Pairing? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return try update(id) { $0.macName = name }?.0
     }
 
     /// Deletes a pairing and its secrets.

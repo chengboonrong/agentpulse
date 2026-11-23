@@ -43,7 +43,7 @@ data class PairRequest(val link: String? = null, val step: PairStep? = null, val
  * Mac on start, then a direct connection to each Mac found on the network ([finder]),
  * else `GET down` every 10 s through the relay.
  */
-class AppModel(val client: PhoneClient, val offline: Boolean = false, private val finder: MacFinder? = null) : ViewModel() {
+class AppModel(val client: PhoneClient, val offline: Boolean = false, private val finder: MacFinder? = null, private val context: android.content.Context) : ViewModel() {
     var pairings by mutableStateOf(emptyList<Pairing>())
     /** Pairing ids connected directly. */
     var direct by mutableStateOf(emptySet<String>())
@@ -74,6 +74,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         if (!offline) reload()
     }
 
+    private fun display(id: Int) = context.getString(id)
+
     fun pairing(id: String) = pairings.firstOrNull { it.id == id }
 
     /** A scanned or pasted link: confirm the Mac. */
@@ -82,7 +84,7 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         val step = try {
             PairStep.Confirm(PairingLink.parse(s), s)
         } catch (_: LinkException) {
-            pairRequest = pairRequest?.copy(error = "That isn't an AgentPulse pairing link.")
+            pairRequest = pairRequest?.copy(error = display(R.string.invalid_link))
             return
         }
         pairRequest = pairRequest?.copy(step = step, error = null)
@@ -103,7 +105,7 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (pairRequest == request) pairRequest = request.copy(error = problem(e))
+                if (pairRequest == request) pairRequest = request.copy(error = problem(e, context))
             } finally {
                 sendingHello = false
             }
@@ -185,7 +187,7 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
             pairings = client.store.pairings()
             loadError = null
         } catch (e: Exception) {
-            loadError = e.message ?: "The stored Macs couldn't be read."
+            loadError = errorDetail(e, context, R.string.stored_error)
         }
     }
 
@@ -265,13 +267,33 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (pairing(id) != null) problems = problems + (id to problem(e))
+            if (pairing(id) != null) problems = problems + (id to problem(e, context))
         }
     }
 }
 
 /** What to tell the user about an error. */
-fun problem(e: Exception): String =
-    if (e is IOException) "Couldn't reach the relay." else e.message ?: "Something went wrong."
+fun problem(e: Exception, context: android.content.Context): String {
+    if (e is io.github.chengboonrong.agentpulse.link.PhoneException) {
+        val id = when (e.reason) {
+            io.github.chengboonrong.agentpulse.link.PhoneException.Reason.REMOVED -> R.string.removed_error
+            io.github.chengboonrong.agentpulse.link.PhoneException.Reason.TAKEN -> R.string.taken_error
+            io.github.chengboonrong.agentpulse.link.PhoneException.Reason.EXPIRED -> R.string.expired_error
+            io.github.chengboonrong.agentpulse.link.PhoneException.Reason.BUSY -> R.string.busy_error
+            io.github.chengboonrong.agentpulse.link.PhoneException.Reason.BAD_RESPONSE -> R.string.http_error
+        }
+        return context.getString(id, e.status)
+    }
+    return if (e is IOException) context.getString(R.string.relay_error)
+    else errorDetail(e, context, R.string.generic_error)
+}
+
+/** Keep existing English diagnostics; library/system messages have no translation contract. */
+private fun errorDetail(e: Exception, context: android.content.Context, fallback: Int): String {
+    val language = context.resources.configuration.locales[0].language
+    return if (language !in setOf("zh", "ja", "ms") && e.message != null)
+        context.getString(R.string.error_detail, e.message)
+    else context.getString(fallback)
+}
 
 suspend fun <T> io(body: () -> T): T = withContext(Dispatchers.IO) { body() }
