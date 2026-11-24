@@ -24,7 +24,7 @@ Claude Code 2.1.322 and Codex CLI 0.164.0 on macOS 27.0.
 
 ## Transcript cursors
 
-Claude Code, Codex, Grok and Qwen save each transcript's path, byte offset and Unix
+Claude Code, Codex, Grok, Qwen and Gemini save each transcript's path, byte offset and Unix
 file identity (`ino`, optional birth time in milliseconds since the Unix epoch). Birth time survives remounts; when unavailable, identity uses inode alone.
 Non-live legacy cursors at EOF learn identity without reading. Files are statted
 and filtered before opening with nonblocking, no-follow flags; symlinked transcript
@@ -375,6 +375,55 @@ which has no list price. No charge or price is supplied; cost is unavailable, ne
 - Plan limits are not read.
 - As with Grok, a component swapped for a symlink between its check and opening the file
   could still be followed.
+
+## Gemini CLI
+
+Format supplied from Gemini CLI 0.70's installed bundle; real-session reading is built,
+not exercised (this Mac has no signed-in sessions).
+
+### Source files and privacy
+- Root: `$GEMINI_CLI_HOME/.gemini` when set and non-empty, else `~/.gemini`.
+  A missing root or `tmp/` folder is an empty poll.
+- Only `tmp/*/chats/*.jsonl`, `tmp/*/chats/*/*.jsonl` and `tmp/*/.project_root`
+  are opened. The project marker's first 4096 bytes, trimmed, supply the path; missing
+  or unreadable means no path. Symlinked roots are followed, nothing below them is,
+  including on cached reads; final opens refuse symlinks as in the shared tailer.
+- Append-only records name only `sessionId`, `startTime`, `id`, `timestamp`,
+  `type`, `model` and token counts (`input`, `output`, `cached`, `thoughts`, `tool`).
+  serde skips content; no line text is stored or logged. Malformed lines are skipped.
+- Metadata supplies the session id (fallback: file stem) and start time. Every message
+  timestamp is activity; the newest main-file Gemini message supplies the model. Files under
+  `chats/<parent>/` contribute usage and activity to that parent session.
+- Shared Tailer budgets and since window apply. Stored offsets resume incremental
+  reads; incomplete final lines wait for the next poll. On restart, only the first
+  line (at most 64 KiB) is read to restore the source session id.
+
+### Token accounting
+- One event per `gemini` message with non-null tokens, keyed by
+  `gemini:<source session id>:<message id>`. The source session id is the subagent’s
+  own id for subagent files.
+  Re-appends are deduplicated within each batch; storage deduplicates ids across polls.
+- Cache read = cached; input = input + tool − cached (saturating); output = output +
+  thoughts; cache writes = zero. Gemini candidates exclude thoughts. Total is unused.
+- `$set`, `$patch`, `$rewindTo`, user, info, warning and error records add no usage.
+
+### Live sessions and cost
+No live sessions or process resources: Gemini runs as `node`. Transcript-age status
+is Active within 30 seconds and Completed after 5 minutes of silence; never Waiting
+or Failed. Unpriced (OAuth free tier); cost is unavailable, never $0. No Gemini rows
+are added to the price table.
+
+### Known gaps
+- Tokens queued when the last message already has tokens attach to the next `gemini`
+  message and are lost if none follows. API calls the CLI does not record in the chat
+  file are not seen.
+- Legacy whole-session `.json` is skipped until Gemini converts it to JSONL on resume.
+  `.unreadable-*` and `.tmp-*` files are ignored.
+- No process match, CPU, memory or orphan cleanup. Silent permission prompts eventually
+  show Completed; Waiting is never reported.
+- API-key users remain unpriced; plan limits are not read.
+- As with Qwen, a directory swapped to a symlink between its check and opening can
+  still be followed.
 
 ## OpenCode
 

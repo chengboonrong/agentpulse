@@ -737,6 +737,7 @@ impl Look {
             Provider::OpenCode => "cloud",
             Provider::Grok => "silver-tabby",
             Provider::Qwen => "lilac",
+            Provider::Gemini => "galaxy",
         };
         Look {
             coat: find_coat(id).expect("default coat exists"),
@@ -1074,6 +1075,10 @@ mod tests {
 
     #[test]
     fn default_looks_paint_exactly_like_the_old_palettes() {
+        // Galaxy adds a star pattern; only its base palette should match the flat colours.
+        let gemini = Look::default_for(Provider::Gemini);
+        assert_eq!(gemini.coat.id, "galaxy");
+        assert_eq!(gemini.palette(), palette(Provider::Gemini));
         for p in [
             Provider::ClaudeCode,
             Provider::Codex,

@@ -27,16 +27,18 @@ pub enum Provider {
     OpenCode,
     Grok,
     Qwen,
+    Gemini,
 }
 
 impl Provider {
     /// Every supported agent, in the order lists of agents show them.
-    pub const ALL: [Provider; 5] = [
+    pub const ALL: [Provider; 6] = [
         Provider::ClaudeCode,
         Provider::Codex,
         Provider::Grok,
         Provider::OpenCode,
         Provider::Qwen,
+        Provider::Gemini,
     ];
 
     /// Stable key used in the database.
@@ -47,6 +49,7 @@ impl Provider {
             Provider::OpenCode => "opencode",
             Provider::Grok => "grok",
             Provider::Qwen => "qwen-code",
+            Provider::Gemini => "gemini-cli",
         }
     }
 
@@ -62,6 +65,7 @@ impl Provider {
             Provider::OpenCode => "OpenCode",
             Provider::Grok => "Grok",
             Provider::Qwen => "Qwen Code",
+            Provider::Gemini => "Gemini CLI",
         }
     }
 }
@@ -460,6 +464,7 @@ mod tests {
             Provider::OpenCode,
             Provider::Grok,
             Provider::Qwen,
+            Provider::Gemini,
         ] {
             assert_eq!(Provider::parse(p.as_str()), Some(p));
         }

@@ -42,7 +42,7 @@ not been measured.
   Space to open it).
 - Not started: Agents and Insights screens.
 
-## Phase 2 — Agent monitoring: Claude Code, Codex, Grok, OpenCode and Qwen Code done
+## Phase 2 — Agent monitoring: Claude Code, Codex, Grok, OpenCode, Qwen Code and Gemini CLI done
 - Done: sessions and subagents, tokens, duration, status, estimated cost, SQLite history.
 - Done: Claude Code's own recorded session cost (`cost-state`) beside the estimate, in the
   Sessions table and under the estimate in Overview rows; "—" until Claude Code writes one,
@@ -62,6 +62,10 @@ not been measured.
   4.6 s over 11 budgeted polls. An unchanged repeat poll took 2.4 ms and read nothing.
 - Built, not exercised: reading uncompressed rollouts from `archived_sessions` and
   plain/compressed twin handling (no plain archived rollouts or twins exist locally).
+- Done: Gemini CLI adapter. Metadata-only JSONL tailing under `$GEMINI_CLI_HOME/.gemini`
+  (or `~/.gemini`), deduplicated token buckets, subagents toward their parent, project paths
+  from `.project_root`, transcript-age status and an unpriced galaxy cat.
+- Built, not exercised: Gemini real-session reading; this Mac has no signed-in Gemini sessions.
 - Done: Qwen Code adapter. Read-only JSONL tailing under `$QWEN_RUNTIME_DIR` (or `~/.qwen`),
   metadata-only parsing, disjoint token buckets, transcript-age status and an unpriced lilac cat.
 - Done: Grok CLI adapter. Sessions under `$GROK_HOME` (or `~/.grok`): tokens and Grok's own
