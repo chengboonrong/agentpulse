@@ -168,7 +168,8 @@ not been measured.
   saving an independent Python computation, on the development machine.
 - Built, not exercised: the day tooltips (no pointer was used; only stills were captured),
   a secondary Codex limit window and the out-of-date state (local readings had neither).
-- Next: usage by model and project; trends beyond 30 days.
+- Usage includes ranked model and project breakdowns for the last 30 days, with tokens, estimated cost and unpriced requests. Full project paths stay local.
+- Next: trends beyond 30 days.
 - Retention setting and pruning.
 - Done: Settings screen. Animation on or off and its speed (0.5× to 2×), saved in
   `settings.json` beside the coats; the `AGENTPULSE_ANIMATION` variables still win, and

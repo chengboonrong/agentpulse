@@ -3,9 +3,10 @@
 //! canvas. Unknown is never drawn as zero: days before an agent's first stored
 //! event are "no data", unpriced requests are counted beside the estimates.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use agentpulse_core::{Provider, RateLimits, RateWindow};
+use agentpulse_storage::UsageGroup;
 use chrono::{DateTime, Local, Offset, TimeZone};
 use gpui::{
     Bounds, Div, Pixels, canvas, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
@@ -243,8 +244,143 @@ pub(super) fn usage(
             .child(card(t).mt(px(sp::XL)).child(daily_cost(u, t)))
             .child(card(t).mt(px(sp::L)).child(cache(u, t)))
             .child(card(t).mt(px(sp::L)).child(timeline(u, s.taken_at_ms, t)))
-            .children(limits(s, hidden, t).map(|l| card(t).mt(px(sp::L)).child(l))),
+            .children(limits(s, hidden, t).map(|l| card(t).mt(px(sp::L)).child(l)))
+            .children(u.breakdown.as_ref().map(|b| {
+                div()
+                    .child(
+                        card(t).mt(px(sp::L)).child(breakdown_list(
+                            rust_i18n::t!("usage.models").to_string(),
+                            &b.models,
+                            b.models
+                                .iter()
+                                .map(|r| r.key.clone().unwrap_or_default())
+                                .collect(),
+                            t,
+                        )),
+                    )
+                    .child(card(t).mt(px(sp::L)).child(breakdown_list(
+                        rust_i18n::t!("usage.projects").to_string(),
+                        &b.projects,
+                        project_labels(&b.projects),
+                        t,
+                    )))
+            })),
     }
+}
+
+/// Shortest distinguishing folder suffix, stopping at the home-folder alias.
+fn project_labels(rows: &[UsageGroup]) -> Vec<String> {
+    let mut parents: Vec<_> = rows
+        .iter()
+        .map(|r| r.key.as_deref().map(std::path::Path::new))
+        .collect();
+    let mut labels: Vec<_> = rows
+        .iter()
+        .map(|r| match r.key.as_deref() {
+            Some(path) => format::project_name(Some(path)).to_string(),
+            None => rust_i18n::t!("usage.no_project").to_string(),
+        })
+        .collect();
+    loop {
+        let mut counts = HashMap::new();
+        for label in &labels {
+            *counts.entry(label.clone()).or_insert(0) += 1;
+        }
+        let mut changed = false;
+        for (i, label) in labels.iter_mut().enumerate() {
+            if counts[label] <= 1 {
+                continue;
+            }
+            if let Some(path) = parents[i] {
+                parents[i] = if format::project_name(path.to_str()) == "~" {
+                    None
+                } else {
+                    path.parent()
+                        .filter(|p| !p.as_os_str().is_empty() && p.parent().is_some())
+                };
+                if let Some(parent) = parents[i] {
+                    *label = format!("{}/{label}", format::project_name(parent.to_str()));
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Reserve natural labels so generated numbers cannot collide with them.
+    let mut used: BTreeSet<_> = labels.iter().cloned().collect();
+    let mut counts = HashMap::new();
+    for label in &labels {
+        *counts.entry(label.clone()).or_insert(0) += 1;
+    }
+    let mut order: Vec<_> = (0..rows.len()).collect();
+    order.sort_by(|&a, &b| rows[a].key.cmp(&rows[b].key));
+    let mut numbers = HashMap::new();
+    for i in order {
+        if counts[&labels[i]] > 1 {
+            let n = numbers.entry(labels[i].clone()).or_insert(0);
+            loop {
+                *n += 1;
+                let candidate = format!("{} ({n})", labels[i]);
+                if used.insert(candidate.clone()) {
+                    labels[i] = candidate;
+                    break;
+                }
+            }
+        }
+    }
+    labels
+}
+
+fn ranked_rows(rows: &[UsageGroup], labels: Vec<String>) -> Vec<(String, UsageGroup)> {
+    let mut shown: Vec<_> = labels
+        .into_iter()
+        .zip(rows.iter().cloned())
+        .take(8)
+        .collect();
+    if rows.len() > 8 {
+        let mut other = UsageGroup::default();
+        for row in &rows[8..] {
+            other.tokens += row.tokens;
+            other.cost_usd += row.cost_usd;
+            other.unpriced_events += row.unpriced_events;
+        }
+        shown.push((rust_i18n::t!("usage.other").to_string(), other));
+    }
+    shown
+}
+
+fn breakdown_list(title: String, rows: &[UsageGroup], labels: Vec<String>, t: Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(sp::S))
+        .child(section_label(title, t))
+        .children(
+            rows.is_empty()
+                .then(|| secondary(rust_i18n::t!("usage.no_data_stored").as_ref(), t)),
+        )
+        .children(ranked_rows(rows, labels).into_iter().map(|(label, row)| {
+            let mut value = format!(
+                "{} · {}",
+                rust_i18n::t!("usage.tokens", n = format::tokens(row.tokens)),
+                approx(row.cost_usd)
+            );
+            if row.unpriced_events > 0 {
+                value.push_str(&rust_i18n::t!(
+                    "usage.unpriced_suffix",
+                    n = row.unpriced_events
+                ));
+            }
+            div()
+                .flex()
+                .items_center()
+                .gap(px(sp::S))
+                .text_size(px(ty::LABEL))
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .child(secondary(&value, t).flex_shrink_0())
+        }))
 }
 
 /// Today's tokens by kind, all agents: one line under the title.
@@ -1089,6 +1225,91 @@ mod tests {
             cache_write: write,
             cache_read: read,
         })
+    }
+
+    #[test]
+    fn project_labels_disambiguate_and_other_preserves_totals() {
+        use agentpulse_storage::UsageGroup;
+        let rows: Vec<_> = (0..11)
+            .map(|i| UsageGroup {
+                key: Some(format!("/parent{i}/app")),
+                tokens: 100 - i,
+                cost_usd: i as f64,
+                unpriced_events: i,
+            })
+            .collect();
+        let labels = project_labels(&rows);
+        assert_eq!(labels[0], "parent0/app");
+        assert_eq!(labels.iter().collect::<BTreeSet<_>>().len(), 11);
+        assert!(labels.iter().all(|s| !s.starts_with('/')));
+        let shown = ranked_rows(&rows, labels);
+        assert_eq!(shown.len(), 9);
+        assert_eq!(shown[8].1.tokens, 92 + 91 + 90);
+        assert_eq!(shown[8].1.cost_usd, 8. + 9. + 10.);
+        assert_eq!(shown[8].1.unpriced_events, 27);
+        assert_eq!(
+            shown.iter().map(|r| r.1.tokens).sum::<u64>(),
+            rows.iter().map(|r| r.tokens).sum::<u64>()
+        );
+        let missing = vec![UsageGroup {
+            key: None,
+            ..Default::default()
+        }];
+        assert!(!project_labels(&missing)[0].is_empty());
+        assert_eq!(ranked_rows(&rows[..8], project_labels(&rows[..8])).len(), 8);
+    }
+
+    #[test]
+    fn project_labels_handle_path_edges_and_collisions() {
+        let home = std::env::var("HOME").unwrap();
+        let keys = [
+            "/a/x/app (1)".to_string(),
+            "/b/y/app (1)".into(),
+            "/c/x/app".into(),
+            "/d/x/app".into(),
+            "/".into(),
+            home.clone(),
+            "/trailing/slash/".into(),
+            format!("{home}/app"),
+            "/elsewhere/app".into(),
+        ];
+        let mut rows: Vec<_> = keys
+            .into_iter()
+            .map(|key| UsageGroup {
+                key: Some(key),
+                tokens: 1,
+                ..Default::default()
+            })
+            .collect();
+        let labels = project_labels(&rows);
+        assert_eq!(labels.iter().collect::<BTreeSet<_>>().len(), rows.len());
+        assert_eq!(&labels[2..4], &["c/x/app", "d/x/app"]);
+        assert_eq!(labels[4], format::project_name(Some("/")));
+        assert_eq!(labels[5], "~");
+        assert_eq!(labels[6], "slash");
+        assert_eq!(labels[7], "~/app");
+        let shown = ranked_rows(&rows, labels.clone());
+        assert_eq!(shown.len(), 9);
+        assert_eq!(shown[8].1.tokens, 1);
+        rows.reverse();
+        let mut reversed = project_labels(&rows);
+        reversed.reverse();
+        assert_eq!(labels, reversed);
+
+        // Different full keys can normalize to the same folder suffix.
+        let mut aliases: Vec<_> = ["/same/app", "/same/app/", "/same/app (1)"]
+            .into_iter()
+            .map(|key| UsageGroup {
+                key: Some(key.into()),
+                ..Default::default()
+            })
+            .collect();
+        let labels = project_labels(&aliases);
+        assert_eq!(labels.iter().collect::<BTreeSet<_>>().len(), 3);
+        aliases.reverse();
+        let mut reversed = project_labels(&aliases);
+        reversed.reverse();
+        assert_eq!(labels, reversed);
     }
 
     #[test]
