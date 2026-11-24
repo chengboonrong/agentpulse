@@ -63,7 +63,9 @@ struct MacsView: View {
             } else {
                 List(model.pairings, selection: selection) { p in
                     NavigationLink(value: p.id) {
-                        MacRow(pairing: p, direct: model.direct.contains(p.id), problem: model.problems[p.id])
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            MacRow(pairing: p, direct: model.direct.contains(p.id), problem: model.problems[p.id], failed: model.stateTransportFailed.contains(p.id), removed: model.removedPairings.contains(p.id), now: context.date)
+                        }
                     }
                 }
             }
@@ -82,6 +84,9 @@ private struct MacRow: View {
     let pairing: Pairing
     let direct: Bool
     let problem: String?
+    let failed: Bool
+    let removed: Bool
+    let now: Date
 
     var body: some View {
         let payload = pairing.lastState.flatMap(WidgetPayload.decode)
@@ -89,6 +94,14 @@ private struct MacRow: View {
             Text(pairing.macName)
                 .font(.headline)
             if let payload {
+                let freshness = SnapshotFreshness.evaluate(generatedAt: payload.generatedAt, now: now, failed: failed, directOpen: direct, removed: removed)
+                if freshness != .fresh {
+                    Text("Last known").font(.caption)
+                    if !removed {
+                        SnapshotNotice(freshness: freshness, name: pairing.macName, generatedAt: payload.generatedAt, now: now)
+                            .font(.footnote)
+                    }
+                }
                 HStack(spacing: 6) {
                     Text(AgentPulseWidgetView.headline(payload.agents))
                     if payload.agents.waiting > 0 {

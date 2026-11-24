@@ -13,7 +13,7 @@ import java.net.InetSocketAddress
 
 /**
  * Debug builds only (the release source set has a no-op). Intent extras, as `am start -e`:
- * - `fixture` `macs|mac|session|pair-confirm|pair-code|empty`: a screen from fixture data
+ * - `fixture` `macs|mac|mac-stale|mac-unreachable|session|pair-confirm|pair-code|empty`: a screen from fixture data
  *   without network, for screenshots and android/e2e (ios/App/Fixtures.swift's set).
  * - `e2eLink <link>` pairs with that link, `e2eAutoConfirm true` without the Pair tap,
  *   `e2eRemove true` removes every Mac on start, and `e2eMac <ip>:<port>` is a Mac found on
@@ -35,6 +35,15 @@ object DebugHooks {
             "mac" -> {
                 model.pairings = listOf(studio)
                 model.show = studio.id
+            }
+            "mac-stale", "mac-unreachable" -> {
+                val mac = pairing("Studio", minutesAgo = 42, payload = ::busy)
+                model.pairings = listOf(mac)
+                model.show = mac.id
+                if (name == "mac-unreachable") {
+                    model.stateTransportFailed = setOf(mac.id)
+                    model.problems = mapOf(mac.id to context.getString(R.string.relay_error))
+                }
             }
             "session" -> {
                 model.pairings = listOf(studio)

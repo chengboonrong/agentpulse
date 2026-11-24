@@ -310,6 +310,23 @@ pushes only go through the relay. Widgets use the relay only.
 - While open: a direct connection to each paired Mac on the same network, else fetches
   `down` every 10 s; widgets (small, medium) fetch in their timeline
   provider and show "as of".
+- Foreground freshness (iOS and Android): only a state fetch transport failure
+  (`URLError` on iOS, `IOException` on Android) makes the cached snapshot
+  **unreachable**. HTTP errors (including relay 429/5xx), decryption errors and
+  failures in other operations do not. Successful state fetches and direct state
+  messages clear the per-pairing transport flag. An open direct connection is
+  **fresh**. A removed pairing is never unreachable and shows its removal error
+  instead of a freshness notice; its counts still say "Last known" once old.
+  Otherwise a snapshot age of at most **10 minutes** is **fresh**; older is
+  **macQuiet**: “<name> last updated <relative>. It may be asleep or offline.”
+  The Rust direct listener sends state on changes and resends it every five minutes;
+  the collector supplies fresh `generated_at` values even when idle. It also sends
+  heartbeats every 30 seconds. Both phone views treat an open direct connection as
+  reachable and fresh, including between state messages.
+  The Mac detail and Macs list mark cached counts as “Last known” and show the
+  snapshot's relative age beside them; both re-evaluate every 30 seconds.
+  Debug fixtures `mac-stale` and `mac-unreachable` show a 42-minute-old snapshot with
+  a nonzero Needs you count, respectively without and with a state-fetch transport error.
 - Notifications: one set of choices for all Macs, stored as JSON in the phone's
   `notifyChoices` UserDefaults. Waiting and failed default on; finished defaults off.
   Settings shows the effective choices. Unless permission is authorized, provisional

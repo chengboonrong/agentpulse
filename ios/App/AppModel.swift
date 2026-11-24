@@ -66,6 +66,8 @@ final class AppModel {
     var direct: Set<String> = []
     /// Pairing id to the last error, such as "This Mac removed the pairing."
     var problems: [String: String] = [:]
+    var stateTransportFailed: Set<String> = []
+    var removedPairings: Set<String> = []
     /// The stored pairings couldn't be read.
     var loadError: String?
 
@@ -167,6 +169,8 @@ final class AppModel {
         connections.removeValue(forKey: p.id)?.close()
         direct.remove(p.id)
         problems[p.id] = nil
+        stateTransportFailed.remove(p.id)
+        removedPairings.remove(p.id)
         await client.remove(p)
         reload()
         WidgetCenter.shared.reloadAllTimelines()
@@ -281,7 +285,21 @@ final class AppModel {
 
     private func fetch(_ id: String) async {
         guard let p = pairing(id) else { return }
-        await report(id) { self.replace(try await self.client.fetchDown(p)) }
+        await report(id) {
+            do {
+                let fetched = try await self.client.fetchDown(p)
+                self.stateTransportFailed.remove(id)
+                self.removedPairings.remove(id)
+                if !self.direct.contains(id) { self.replace(fetched) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if let urlError = error as? URLError, urlError.code == .cancelled { throw error }
+                if SnapshotFreshness.stateFetchFailedInTransport(error) { self.stateTransportFailed.insert(id) }
+                else { self.stateTransportFailed.remove(id) }
+                throw error
+            }
+        }
     }
 
     /// Tries each AgentPulse service found; a Mac that doesn't know the pairing closes.
@@ -307,7 +325,11 @@ final class AppModel {
     private func listen(_ id: String, _ c: DirectConnection) async {
         do {
             for try await m in c.messages {
-                if case .state(let p) = m { replace(p) }
+                if case .state(let p) = m {
+                    stateTransportFailed.remove(id)
+                    removedPairings.remove(id)
+                    replace(p)
+                }
             }
         } catch {
             // Closed: back to the relay on the next tick.
@@ -329,6 +351,7 @@ final class AppModel {
         } catch is CancellationError {
         } catch let error as URLError where error.code == .cancelled {
         } catch {
+            if (error as? PhoneError) == .removed { removedPairings.insert(id) }
             problems[id] = error.localizedDescription
         }
     }
