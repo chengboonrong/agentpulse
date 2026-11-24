@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use agentpulse_core::{AgentAdapter, LiveState, PollBatch, Provider, TokenUsage};
+use agentpulse_core::{AgentAdapter, FileCursor, LiveState, PollBatch, Provider, TokenUsage};
 use agentpulse_telemetry::ClaudeCodeAdapter;
 
 fn asst(ts: &str, msg_id: &str, model: &str, out: u64) -> String {
@@ -38,8 +38,11 @@ fn setup() -> (tempfile::TempDir, ClaudeCodeAdapter, PathBuf) {
     (d, a, proj)
 }
 
-fn offsets(b: &PollBatch) -> HashMap<String, u64> {
-    b.files.iter().map(|f| (f.path.clone(), f.offset)).collect()
+fn offsets(b: &PollBatch) -> HashMap<String, FileCursor> {
+    b.files
+        .iter()
+        .map(|f| (f.path.clone(), f.clone()))
+        .collect()
 }
 
 const T1: &str = "2026-11-13T02:00:01.000Z";
@@ -138,7 +141,10 @@ fn malformed_and_partial_lines() {
     assert_eq!(b.events.len(), 2, "bad line skipped, later lines parse");
     let off = offsets(&b);
     let consumed = fs::read(&path).unwrap().len() - head.len();
-    assert_eq!(off[&path.to_string_lossy().to_string()], consumed as u64);
+    assert_eq!(
+        off[&path.to_string_lossy().to_string()].offset,
+        consumed as u64
+    );
 
     append(&path, &format!("{tail}\n"));
     let b2 = a.poll(&off, 0).unwrap();
@@ -380,8 +386,7 @@ fn cold_file_append_is_found_by_next_full_scan() {
         .unwrap()
         .set_modified(old)
         .unwrap();
-    let size = fs::metadata(&path).unwrap().len();
-    let off = HashMap::from([(path.to_string_lossy().to_string(), size)]);
+    let off = offsets(&a.poll(&HashMap::new(), 0).unwrap());
     assert!(a.poll(&off, 0).unwrap().is_empty());
     append(&path, &format!("{}\n", asst(T2, "msg_2", "m-a", 2)));
     assert!(
@@ -679,4 +684,118 @@ fn plan_limits_come_from_the_saved_status_line_payload() {
         fs::write(&file, junk).unwrap();
         assert_eq!(poll(), None, "{junk}");
     }
+}
+
+#[test]
+fn atomic_replacements_read_from_zero() {
+    for larger in [false, true] {
+        let (_d, mut a, proj) = setup();
+        let path = proj.join("s1.jsonl");
+        write(&path, &[asst(T1, "msg_1", "m-a", 5)]);
+        let first = a.poll(&HashMap::new(), 0).unwrap();
+        let mut lines = vec![asst(T2, "msg_2", "m-a", 7)];
+        if larger {
+            lines.push(asst(T3, "msg_3", "m-a", 9));
+        }
+        let replacement = proj.join("replacement");
+        write(&replacement, &lines);
+        if !larger {
+            assert_eq!(
+                fs::metadata(&path).unwrap().len(),
+                fs::metadata(&replacement).unwrap().len()
+            );
+        }
+        fs::rename(replacement, &path).unwrap();
+        let next = a.poll(&offsets(&first), 0).unwrap();
+        assert_eq!(next.events.len(), lines.len());
+        assert_eq!(next.events[0].event_id, "msg_2");
+    }
+}
+
+#[test]
+fn replacement_after_restart_preserves_totals_and_session_fields() {
+    use agentpulse_storage::Store;
+
+    let (dir, mut a, proj) = setup();
+    let path = proj.join("s1.jsonl");
+    let lines = vec![
+        asst(T1, "msg_1", "m-a", 5),
+        asst(T2, "msg_2", "m-a", 7),
+        cost_state("s1", 1.25, 1000, 2000, false),
+    ];
+    write(&path, &lines);
+    let db = dir.path().join("usage.db");
+    let mut store = Store::open(&db).unwrap();
+    let price = |_: &agentpulse_core::UsageEvent| Some(0.5);
+    store
+        .apply(&a.poll(&HashMap::new(), 0).unwrap(), &price)
+        .unwrap();
+    let before = store
+        .sessions_since(Provider::ClaudeCode, 0)
+        .unwrap()
+        .remove(0);
+    assert_eq!(before.active_ms, 1000);
+    assert_eq!(before.recorded_cost.unwrap().usd, 1.25);
+    drop(store);
+
+    let replacement = proj.join("replacement");
+    write(&replacement, &lines);
+    fs::rename(&replacement, &path).unwrap();
+    let mut store = Store::open(&db).unwrap();
+    let mut restarted = ClaudeCodeAdapter::new(dir.path().to_path_buf());
+    let saved = store.offsets().unwrap();
+    let replay = restarted.poll(&saved, 0).unwrap();
+    assert_eq!(replay.events.len(), 2);
+    assert_ne!(
+        replay.files[0].identity,
+        saved[&replay.files[0].path].identity
+    );
+    store.apply(&replay, &price).unwrap();
+    let after = store
+        .sessions_since(Provider::ClaudeCode, 0)
+        .unwrap()
+        .remove(0);
+    assert_eq!(after, before);
+    assert!(
+        restarted
+            .poll(&store.offsets().unwrap(), 0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn legacy_cursor_resumes_and_learns_identity_even_at_eof() {
+    let (_dir, mut a, proj) = setup();
+    let path = proj.join("s1.jsonl");
+    write(&path, &[asst(T1, "msg_1", "m-a", 5)]);
+    let first = a.poll(&HashMap::new(), 0).unwrap();
+    let mut legacy = offsets(&first);
+    for cursor in legacy.values_mut() {
+        cursor.identity = None;
+    }
+    let learned = a.poll(&legacy, 0).unwrap();
+    assert!(learned.events.is_empty());
+    assert_eq!(learned.files[0], first.files[0]);
+    append(&path, &format!("{}\n", asst(T2, "msg_2", "m-a", 7)));
+    let suffix = a.poll(&legacy, 0).unwrap();
+    assert_eq!(suffix.events.len(), 1);
+    assert_eq!(suffix.events[0].event_id, "msg_2");
+    assert!(suffix.files[0].identity.is_some());
+}
+
+#[test]
+fn empty_truncation_resets_cursor_before_regrowth() {
+    let (_dir, mut a, proj) = setup();
+    let path = proj.join("s1.jsonl");
+    write(&path, &[asst(T1, "msg_1", "m-a", 5)]);
+    let first = a.poll(&HashMap::new(), 0).unwrap();
+    fs::write(&path, "").unwrap();
+    let empty = a.poll(&offsets(&first), 0).unwrap();
+    assert_eq!(empty.files.len(), 1);
+    assert_eq!(empty.files[0].offset, 0);
+    write(&path, &[asst(T2, "msg_2", "m-a", 7)]);
+    let next = a.poll(&offsets(&empty), 0).unwrap();
+    assert_eq!(next.events.len(), 1);
+    assert_eq!(next.events[0].event_id, "msg_2");
 }

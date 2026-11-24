@@ -6,7 +6,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agentpulse_core::{AgentAdapter, LiveState, PollBatch, Provider, TokenUsage, UsageEvent};
+use agentpulse_core::{
+    AgentAdapter, FileCursor, LiveState, PollBatch, Provider, TokenUsage, UsageEvent,
+};
 use agentpulse_process::OpenFiles;
 use agentpulse_telemetry::GrokAdapter;
 
@@ -119,8 +121,11 @@ impl Fixture {
     }
 }
 
-fn offsets(b: &PollBatch) -> HashMap<String, u64> {
-    b.files.iter().map(|f| (f.path.clone(), f.offset)).collect()
+fn offsets(b: &PollBatch) -> HashMap<String, FileCursor> {
+    b.files
+        .iter()
+        .map(|f| (f.path.clone(), f.clone()))
+        .collect()
 }
 
 fn session<'a>(b: &'a PollBatch, sid: &str) -> &'a agentpulse_core::SessionDelta {
@@ -270,7 +275,7 @@ fn status_follows_turns_and_permissions() {
     );
     let mut a = f.adapter();
     f.hold(42, &[&p]);
-    let state = |a: &mut GrokAdapter, off: &mut HashMap<String, u64>| {
+    let state = |a: &mut GrokAdapter, off: &mut HashMap<String, FileCursor>| {
         off.extend(offsets(&a.poll(off, 0).unwrap()));
         let live = a.live_sessions().unwrap();
         assert_eq!(live.len(), 1);
@@ -452,4 +457,40 @@ fn a_session_without_an_event_log_still_has_activity() {
     f.usage(SID, &[turn(1, T2, &[("grok-a", 10, 0, 1, Some(1))])]);
     let b = f.adapter().poll(&HashMap::new(), 0).unwrap();
     assert_eq!(session(&b, SID).timestamps_ms, vec![1_794_906_002_000]);
+}
+
+#[test]
+fn atomic_replacement_recovers_usage_and_event_log() {
+    let f = Fixture::new();
+    let mut a = f.adapter();
+    let path = f.events(SID);
+    write(&path, &[event(T1, "turn_started")]);
+    let usage = f.usage(SID, &[turn(1, T2, &[("grok-a", 10, 0, 2, Some(100))])]);
+    f.hold(1, &[&path]);
+    let off = offsets(&a.poll(&HashMap::new(), 0).unwrap());
+    for (p, text) in [
+        (&path, format!("{}\n", event(T3, "turn_started"))),
+        (
+            &usage,
+            usage_json(&[turn(2, T4, &[("grok-b", 10, 0, 2, Some(100))])]),
+        ),
+    ] {
+        let replacement = p.with_extension("replacement");
+        fs::write(&replacement, text).unwrap();
+        assert_eq!(
+            fs::metadata(p).unwrap().len(),
+            fs::metadata(&replacement).unwrap().len()
+        );
+        fs::rename(replacement, p).unwrap();
+    }
+    let b = a.poll(&off, 0).unwrap();
+    assert_eq!(b.events.len(), 1);
+    assert_eq!(b.events[0].event_id, format!("{SID}:2:grok-b"));
+    assert!(
+        session(&b, SID).timestamps_ms.contains(
+            &chrono::DateTime::parse_from_rfc3339(T3)
+                .unwrap()
+                .timestamp_millis()
+        )
+    );
 }

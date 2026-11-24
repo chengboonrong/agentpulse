@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    ActivityMeter, AgentAdapter, AgentSession, LiveSession, ProcessIdentity, Provider, RateLimits,
-    Reading, SessionStatus, TokenUsage, resolve_status,
+    ActivityMeter, AgentAdapter, AgentSession, FileCursor, LiveSession, ProcessIdentity, Provider,
+    RateLimits, Reading, SessionStatus, TokenUsage, resolve_status,
 };
 use agentpulse_cost::PriceBook;
 use agentpulse_platform_macos::gpu_utilization;
@@ -175,7 +175,7 @@ pub struct Collector {
     store: Store,
     prices: PriceBook,
     sampler: Sampler,
-    offsets: HashMap<String, u64>,
+    offsets: HashMap<String, FileCursor>,
     /// Per agent, so a hidden agent's output leaves the rate.
     meters: BTreeMap<Provider, ActivityMeter>,
     session_meters: HashMap<Key, ActivityMeter>,
@@ -335,10 +335,19 @@ impl Collector {
                                 src.apply_error = None;
                                 changed = true;
                                 for f in &batch.files {
-                                    let old = self.offsets.insert(f.path.clone(), f.offset);
-                                    self.ingested.bytes +=
-                                        f.offset.saturating_sub(old.unwrap_or(0));
-                                    self.ingested.files += 1;
+                                    let old = self.offsets.insert(f.path.clone(), f.clone());
+                                    let previous = old.as_ref().map_or(0, |c| c.offset);
+                                    self.ingested.bytes += if old.as_ref().is_some_and(|c| {
+                                        c.identity.is_some_and(|i| Some(i) != f.identity)
+                                            || f.offset < c.offset
+                                    }) {
+                                        f.offset
+                                    } else {
+                                        f.offset - previous
+                                    };
+                                    if f.offset != previous {
+                                        self.ingested.files += 1;
+                                    }
                                 }
                                 self.ingested.events += batch.events.len() as u64;
                                 // Backfilled history is older than the window and never counts as live output.
@@ -1166,7 +1175,7 @@ mod tests {
             self.provider
         }
 
-        fn poll(&mut self, _: &HashMap<String, u64>, _: i64) -> anyhow::Result<PollBatch> {
+        fn poll(&mut self, _: &HashMap<String, FileCursor>, _: i64) -> anyhow::Result<PollBatch> {
             self.polls.lock().unwrap().pop_front().unwrap_or_else(|| {
                 let mut b = batch(vec![], vec![]);
                 b.provider = self.provider;
@@ -1206,6 +1215,7 @@ mod tests {
             files: vec![FileCursor {
                 path: "/synthetic/a.jsonl".into(),
                 offset: 1,
+                identity: None,
             }],
             events,
             sessions,

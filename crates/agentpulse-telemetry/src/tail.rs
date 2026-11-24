@@ -3,12 +3,13 @@
 //! rescan at most every [`RESCAN_INTERVAL`], and a read budget per poll.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use agentpulse_core::FileCursor;
+use agentpulse_core::{FileCursor, FileIdentity};
 use chrono::DateTime;
 
 const READ_BUDGET: u64 = 64 * 1024 * 1024;
@@ -64,17 +65,19 @@ impl Tailer {
 
     /// Reads what was appended to each file since `offsets`. Groups in `live`
     /// are polled every time and read however old their files are; a live id
-    /// no scan has seen forces one rescan. `read(group, file, start)` consumes
-    /// complete lines from `start` and returns the offset past the last one.
+    /// no scan has seen forces one rescan. `read` receives the verified handle,
+    /// start offset and size, consumes complete lines, and returns the offset
+    /// past the last one. Unchanged live files are passed through for state recovery.
     /// Returns the advanced cursors and whether the read budget cut the poll
     /// short. A missing root (discovery's `NotFound`) is an empty poll.
     pub fn poll(
         &mut self,
         live: &HashSet<String>,
-        offsets: &HashMap<String, u64>,
+        offsets: &HashMap<String, FileCursor>,
         since_ms: i64,
         discover: impl FnOnce() -> std::io::Result<Groups>,
-        mut read: impl FnMut(&str, &TranscriptFile, u64) -> std::io::Result<u64>,
+        allowed: impl Fn(&TranscriptFile) -> bool,
+        mut read: impl FnMut(&str, &TranscriptFile, &mut File, u64, u64) -> std::io::Result<u64>,
     ) -> anyhow::Result<(Vec<FileCursor>, bool)> {
         if let Some(s) = &mut self.scan {
             s.missing.retain(|i| live.contains(i));
@@ -116,10 +119,13 @@ impl Tailer {
         for (sid, files) in groups {
             for f in files {
                 let key = f.path.to_string_lossy().into_owned();
-                let Ok(meta) = fs::metadata(&f.path) else {
-                    tracing::warn!(path = %key, "cannot stat transcript");
+                // Symlinked transcripts are not read (the open refuses them too).
+                let Ok(meta) = fs::symlink_metadata(&f.path) else {
                     continue;
                 };
+                if !meta.is_file() {
+                    continue;
+                }
                 let size = meta.len();
                 let mtime = meta
                     .modified()
@@ -137,24 +143,59 @@ impl Tailer {
                         file: f.clone(),
                     });
                 }
-                let start = match offsets.get(&key) {
-                    Some(&o) if o == size => continue,
-                    Some(&o) if o < size => o,
-                    Some(_) => 0, // truncated or replaced
-                    None => {
-                        let mtime = mtime.map_or(0, |d| d.as_millis() as i64);
-                        if mtime < since_ms && !live.contains(&sid) {
-                            continue;
-                        }
-                        0
+                if !offsets.contains_key(&key) {
+                    let mtime = mtime.map_or(0, |d| d.as_millis() as i64);
+                    if mtime < since_ms && !live.contains(&sid) {
+                        continue;
                     }
+                }
+                let identity = Some(identity_of(&meta));
+                // Live adapters may need to rebuild parser state after a restart,
+                // even when no new bytes are available.
+                if !live.contains(&sid)
+                    && offsets
+                        .get(&key)
+                        .is_some_and(|c| c.offset == size && c.identity == identity)
+                {
+                    continue;
+                }
+                // After the cheap skips: an adapter's own check may cost several lstats.
+                if !allowed(&f) {
+                    continue;
+                }
+                if !live.contains(&sid)
+                    && offsets
+                        .get(&key)
+                        .is_some_and(|c| c.identity.is_none() && c.offset == size)
+                {
+                    cursors.push(FileCursor {
+                        path: key,
+                        offset: size,
+                        identity,
+                    });
+                    continue;
+                }
+                let Ok((mut handle, meta, start)) = open_transcript(&f.path, offsets.get(&key))
+                else {
+                    tracing::warn!(path = %key, "cannot open transcript");
+                    continue;
                 };
-                match read(&sid, &f, start) {
-                    Ok(end) if end > start => {
+                let size = meta.len();
+                let identity = Some(identity_of(&meta));
+                match read(&sid, &f, &mut handle, start, size) {
+                    Ok(end)
+                        if end > start
+                            || (end == start
+                                && start == size
+                                && offsets.get(&key).is_some_and(|c| {
+                                    c.identity != identity || c.offset != end
+                                })) =>
+                    {
                         bytes += end - start;
                         cursors.push(FileCursor {
                             path: key,
                             offset: end,
+                            identity,
                         });
                     }
                     Ok(_) => {}
@@ -184,12 +225,11 @@ impl Tailer {
 /// Calls `each` with every complete, non-blank line from `start` up to `end`
 /// (or the end of the file); returns the offset past the last one.
 pub(crate) fn read_lines(
-    path: &Path,
+    f: &mut File,
     start: u64,
     end: Option<u64>,
     mut each: impl FnMut(&[u8]),
 ) -> std::io::Result<u64> {
-    let mut f = File::open(path)?;
     f.seek(SeekFrom::Start(start))?;
     let limit = end.map_or(u64::MAX, |e| e.saturating_sub(start));
     let mut r = BufReader::with_capacity(256 * 1024, f.take(limit));
@@ -213,4 +253,116 @@ pub(crate) fn ts_ms(s: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|d| d.timestamp_millis())
+}
+
+fn identity_of(meta: &Metadata) -> FileIdentity {
+    FileIdentity {
+        birth: meta
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64),
+        ino: meta.ino(),
+    }
+}
+
+/// Verify and read the same open file, even if its path is renamed meanwhile.
+/// In-place rewrites that keep the inode are outside this cursor's scope.
+pub(crate) fn open_transcript(
+    path: &Path,
+    cursor: Option<&FileCursor>,
+) -> std::io::Result<(File, Metadata, u64)> {
+    // A FIFO must not block the collector, and a symlink swapped in after the
+    // checks must not be followed.
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let start = cursor.map_or(0, |c| {
+        if c.identity.is_some_and(|i| i != identity_of(&meta)) || meta.len() < c.offset {
+            0
+        } else {
+            c.offset
+        }
+    });
+    Ok((file, meta, start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_regular_transcripts_are_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo.jsonl");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut tail = Tailer::new();
+        let (cursors, more) = tail
+            .poll(
+                &HashSet::new(),
+                &HashMap::new(),
+                0,
+                || {
+                    Ok(vec![(
+                        "session".into(),
+                        vec![TranscriptFile {
+                            path: fifo.clone(),
+                            is_main: true,
+                        }],
+                    )])
+                },
+                |_| true,
+                |_, _, _, _, _| panic!("non-regular file was read"),
+            )
+            .unwrap();
+        assert!(cursors.is_empty());
+        assert!(!more);
+        assert!(open_transcript(&fifo, None).is_err());
+        let target = dir.path().join("target");
+        fs::write(&target, b"line\n").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        assert!(open_transcript(&link, None).is_err());
+    }
+
+    #[test]
+    fn rename_after_open_reads_the_verified_file_and_bounds_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript");
+        std::fs::write(&path, b"old\n").unwrap();
+        let (mut file, meta, start) = open_transcript(&path, None).unwrap();
+        // An append after metadata is left for the next poll.
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"later\n")
+            .unwrap();
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, b"new\n").unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        let mut lines = vec![];
+        let end = read_lines(&mut file, start, Some(meta.len()), |l| {
+            lines.push(l.to_vec())
+        })
+        .unwrap();
+        assert_eq!(lines, [b"old".to_vec()]);
+        assert_eq!(end, 4);
+        assert_ne!(
+            identity_of(&meta),
+            identity_of(&File::open(path).unwrap().metadata().unwrap())
+        );
+    }
 }

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
+    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
     SessionDelta, TokenUsage, UsageEvent,
 };
 use agentpulse_process::OpenFiles;
@@ -436,7 +436,11 @@ impl AgentAdapter for CodexAdapter {
         Provider::Codex
     }
 
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch> {
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch> {
         let mut batch = PollBatch {
             provider: Provider::Codex,
             files: vec![],
@@ -460,25 +464,6 @@ impl AgentAdapter for CodexAdapter {
             .flat_map(|o| &o.paths)
             .filter_map(|p| thread_id(p))
             .collect();
-        // An open rollout read to its end before this run started is not read
-        // again: learn its session, start, cwd, models and task state from
-        // the lines already consumed.
-        for path in self.open.iter().flat_map(|o| &o.paths) {
-            let (false, Some(&end)) = (self.files.contains_key(path), offsets.get(path)) else {
-                continue;
-            };
-            let thread = thread_id(path).unwrap_or_default();
-            let st = self.files.entry(path.clone()).or_default();
-            match read_lines(Path::new(path), 0, Some(end), |l| {
-                fold_line(l, &thread, st, None)
-            }) {
-                Ok(o) => st.offset = o,
-                Err(_) => {
-                    self.files.remove(path);
-                    tracing::warn!(path = %path, "cannot read rollout");
-                }
-            }
-        }
         let (mut accs, mut events) = (BTreeMap::new(), HashMap::new());
         let mut out = Out {
             accs: &mut accs,
@@ -491,7 +476,8 @@ impl AgentAdapter for CodexAdapter {
             offsets,
             since_ms,
             || discover(root),
-            |thread, f, start| {
+            |_| true,
+            |thread, f, handle, start, size| {
                 let key = f.path.to_string_lossy().into_owned();
                 // State read past `start` (a failed read, or a batch the store
                 // did not keep) would price the re-read lines with later
@@ -505,9 +491,9 @@ impl AgentAdapter for CodexAdapter {
                 if seed {
                     // Resuming mid-file: learn the session, models, tier and
                     // task state from the lines before the offset.
-                    read_lines(&f.path, 0, Some(start), |l| fold_line(l, thread, st, None))?;
+                    read_lines(handle, 0, Some(start), |l| fold_line(l, thread, st, None))?;
                 }
-                let end = read_lines(&f.path, start, None, |l| {
+                let end = read_lines(handle, start, Some(size), |l| {
                     fold_line(l, thread, st, Some(&mut out))
                 })?;
                 st.offset = end;
@@ -610,6 +596,41 @@ impl AgentAdapter for CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_eof_without_process_learns_identity_without_seeding() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("archived_sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let path =
+            sessions.join("rollout-2026-11-12T17-38-01-01a1cf1f-0cba-7370-8553-6b299fb729e3.jsonl");
+        std::fs::write(&path, b"{}\n").unwrap();
+        let key = fs::canonicalize(&path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let offsets = HashMap::from([(
+            key.clone(),
+            FileCursor {
+                path: key.clone(),
+                offset: 3,
+                identity: None,
+            },
+        )]);
+        let mut adapter = CodexAdapter::new(dir.path().to_owned()).with_open_files(Vec::new);
+        let batch = adapter.poll(&offsets, 0).unwrap();
+        assert!(adapter.files.is_empty());
+        assert_eq!(batch.files.len(), 1);
+        assert_eq!(batch.files[0].offset, 3);
+        assert!(batch.files[0].identity.is_some());
+        assert!(
+            adapter
+                .poll(&HashMap::from([(key, batch.files[0].clone())]), 0)
+                .unwrap()
+                .files
+                .is_empty()
+        );
+    }
 
     #[test]
     fn thread_id_from_file_name() {

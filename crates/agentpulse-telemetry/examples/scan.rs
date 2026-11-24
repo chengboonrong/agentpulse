@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use agentpulse_core::{AgentAdapter, TokenUsage};
+use agentpulse_core::{AgentAdapter, FileCursor, TokenUsage};
 use agentpulse_telemetry::ClaudeCodeAdapter;
 
 fn main() -> anyhow::Result<()> {
@@ -20,15 +20,17 @@ fn main() -> anyhow::Result<()> {
     let since = now_ms - (days * 86_400_000.0) as i64;
 
     let start = Instant::now();
-    let mut offsets: HashMap<String, u64> = HashMap::new();
+    let mut offsets: HashMap<String, FileCursor> = HashMap::new();
     let (mut bytes, mut sessions, mut events, mut polls) = (0u64, 0usize, 0usize, 0);
     let mut tokens = TokenUsage::default();
     loop {
         let b = adapter.poll(&offsets, since)?;
         polls += 1;
         for f in &b.files {
-            bytes += f.offset - offsets.get(&f.path).copied().unwrap_or(0);
-            offsets.insert(f.path.clone(), f.offset);
+            bytes += f
+                .offset
+                .saturating_sub(offsets.get(&f.path).map_or(0, |c| c.offset));
+            offsets.insert(f.path.clone(), f.clone());
         }
         sessions += b.sessions.len();
         events += b.events.len();
@@ -61,7 +63,7 @@ fn main() -> anyhow::Result<()> {
         let b = adapter.poll(&offsets, since)?;
         times.push(t.elapsed().as_micros());
         for f in &b.files {
-            offsets.insert(f.path.clone(), f.offset);
+            offsets.insert(f.path.clone(), f.clone());
         }
     }
     let full = adapter.full_scans() - scans_before;

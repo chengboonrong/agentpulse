@@ -121,7 +121,7 @@ impl OpenCodeAdapter {
     fn read(
         &mut self,
         conn: &Connection,
-        offsets: &HashMap<String, u64>,
+        offsets: &HashMap<String, FileCursor>,
         since_ms: i64,
         batch: &mut PollBatch,
     ) -> rusqlite::Result<()> {
@@ -129,7 +129,7 @@ impl OpenCodeAdapter {
         self.live = live(conn, &procs)?;
         let key = self.db.to_string_lossy().into_owned();
         let stamp = stamp(&self.db);
-        let cursor = offsets.get(&key).copied();
+        let cursor = offsets.get(&key).map(|c| c.offset);
         if self.last == Some((stamp, cursor)) {
             return Ok(());
         }
@@ -153,6 +153,7 @@ impl OpenCodeAdapter {
             batch.files.push(FileCursor {
                 path: key,
                 offset: wm as u64,
+                identity: None,
             });
         }
         let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
@@ -415,7 +416,11 @@ impl AgentAdapter for OpenCodeAdapter {
         Provider::OpenCode
     }
 
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch> {
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch> {
         let mut batch = PollBatch {
             provider: Provider::OpenCode,
             files: vec![],

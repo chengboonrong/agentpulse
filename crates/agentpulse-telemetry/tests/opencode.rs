@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agentpulse_core::{
-    AgentAdapter, LiveState, PollBatch, ProcessIdentity, Provider, SessionDelta, TokenUsage,
+    AgentAdapter, FileCursor, LiveState, PollBatch, ProcessIdentity, Provider, SessionDelta,
+    TokenUsage,
 };
 use agentpulse_telemetry::OpenCodeAdapter;
 use rusqlite::{Connection, params};
@@ -121,8 +122,11 @@ fn user() -> Value {
     json!({"role": "user", "time": {"created": T}, "summary": {"title": MARKER}})
 }
 
-fn offsets(b: &PollBatch) -> HashMap<String, u64> {
-    b.files.iter().map(|f| (f.path.clone(), f.offset)).collect()
+fn offsets(b: &PollBatch) -> HashMap<String, FileCursor> {
+    b.files
+        .iter()
+        .map(|f| (f.path.clone(), f.clone()))
+        .collect()
 }
 
 fn delta<'a>(b: &'a PollBatch, sid: &str) -> &'a SessionDelta {

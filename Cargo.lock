@@ -166,8 +166,10 @@ version = "0.0.11"
 dependencies = [
  "agentpulse-core",
  "agentpulse-process",
+ "agentpulse-storage",
  "anyhow",
  "chrono",
+ "libc",
  "percent-encoding",
  "rusqlite",
  "serde",

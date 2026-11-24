@@ -7,8 +7,8 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 use agentpulse_core::{
-    ACTIVE_GAP_MS, PollBatch, ProcessIdentity, Provider, RecordedCost, TokenUsage, UsageEvent,
-    fold_active,
+    ACTIVE_GAP_MS, FileCursor, PollBatch, ProcessIdentity, Provider, RecordedCost, TokenUsage,
+    UsageEvent, fold_active,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -61,6 +61,8 @@ CREATE TABLE cleanup_log (
   id INTEGER PRIMARY KEY, at_ms INTEGER NOT NULL, name TEXT NOT NULL,
   provider TEXT, session_id TEXT, rss_bytes INTEGER NOT NULL, automatic INTEGER NOT NULL);
 ",
+    "ALTER TABLE ingest_files ADD COLUMN birth INTEGER;
+     ALTER TABLE ingest_files ADD COLUMN ino INTEGER;",
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -440,9 +442,28 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn offsets(&self) -> Result<HashMap<String, u64>> {
-        let mut stmt = self.conn.prepare("SELECT path, offset FROM ingest_files")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)))?;
+    pub fn offsets(&self) -> Result<HashMap<String, FileCursor>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, offset, birth, ino FROM ingest_files")?;
+        let rows = stmt.query_map([], |r| {
+            let path: String = r.get(0)?;
+            let birth = r.get::<_, Option<i64>>(2)?.map(|b| b as u64);
+            let identity = r
+                .get::<_, Option<i64>>(3)?
+                .map(|ino| agentpulse_core::FileIdentity {
+                    birth,
+                    ino: ino as u64,
+                });
+            Ok((
+                path.clone(),
+                FileCursor {
+                    path,
+                    offset: r.get::<_, i64>(1)? as u64,
+                    identity,
+                },
+            ))
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -550,9 +571,15 @@ impl Store {
 
         for f in &batch.files {
             tx.execute(
-                "INSERT INTO ingest_files (path, offset) VALUES (?1, ?2)
-                 ON CONFLICT (path) DO UPDATE SET offset = excluded.offset",
-                params![f.path, f.offset as i64],
+                "INSERT INTO ingest_files (path, offset, birth, ino) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (path) DO UPDATE SET offset = excluded.offset,
+                    birth = excluded.birth, ino = excluded.ino",
+                params![
+                    f.path,
+                    f.offset as i64,
+                    f.identity.and_then(|i| i.birth.map(|b| b as i64)),
+                    f.identity.map(|i| i.ino as i64)
+                ],
             )?;
         }
 
@@ -850,11 +877,15 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn, &MIGRATIONS[..3]).unwrap();
         let mut old = Store { conn };
-        old.apply(
-            &batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]),
-            &flat,
-        )
-        .unwrap();
+        let mut seed = batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]);
+        seed.files.clear();
+        old.apply(&seed, &flat).unwrap();
+        old.conn
+            .execute(
+                "INSERT INTO ingest_files (path, offset) VALUES ('/a.jsonl', 42)",
+                [],
+            )
+            .unwrap();
         migrate(&mut old.conn, MIGRATIONS).unwrap();
         assert_eq!(old.sessions_since(P, 0).unwrap().len(), 1);
         assert!(old.tracked_processes().unwrap().is_empty());
@@ -896,6 +927,7 @@ mod tests {
             files: vec![FileCursor {
                 path: "/a.jsonl".into(),
                 offset: 42,
+                identity: None,
             }],
             events,
             sessions,
@@ -1219,6 +1251,40 @@ mod tests {
     }
 
     #[test]
+    fn identity_migration_preserves_existing_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.db");
+        let mut conn = Connection::open(&path).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..4]).unwrap();
+        conn.execute(
+            "INSERT INTO ingest_files (path, offset) VALUES ('/legacy', 123)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut store = Store::open(&path).unwrap();
+        let cursor = store.offsets().unwrap().remove("/legacy").unwrap();
+        assert_eq!(cursor.offset, 123);
+        assert_eq!(cursor.identity, None);
+        let mut b = batch(vec![], vec![]);
+        b.files = vec![FileCursor {
+            identity: Some(agentpulse_core::FileIdentity {
+                birth: Some(7),
+                ino: u64::MAX,
+            }),
+            ..cursor
+        }];
+        store.apply(&b, &flat).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.offsets().unwrap()["/legacy"], b.files[0]);
+        let mut store = store;
+        b.files[0].identity.as_mut().unwrap().birth = None;
+        store.apply(&b, &flat).unwrap();
+        assert_eq!(store.offsets().unwrap()["/legacy"], b.files[0]);
+    }
+
+    #[test]
     fn offsets_round_trip() {
         let mut s = Store::open_in_memory().unwrap();
         let mut b = batch(vec![], vec![]);
@@ -1226,22 +1292,35 @@ mod tests {
             FileCursor {
                 path: "/a".into(),
                 offset: 1,
+                identity: None,
             },
             FileCursor {
                 path: "/b".into(),
                 offset: 2,
+                identity: None,
             },
         ];
         s.apply(&b, &flat).unwrap();
         b.files = vec![FileCursor {
             path: "/a".into(),
             offset: 9,
+            identity: None,
         }];
         s.apply(&b, &flat).unwrap();
         let o = s.offsets().unwrap();
         assert_eq!(
             o,
-            HashMap::from([("/a".to_string(), 9), ("/b".to_string(), 2)])
+            HashMap::from([
+                ("/a".to_string(), b.files[0].clone()),
+                (
+                    "/b".to_string(),
+                    FileCursor {
+                        path: "/b".into(),
+                        offset: 2,
+                        identity: None
+                    }
+                )
+            ])
         );
     }
 
@@ -1351,12 +1430,22 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn, &MIGRATIONS[..1]).unwrap();
         let mut old = Store { conn };
-        old.apply(
-            &batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]),
-            &flat,
-        )
-        .unwrap();
-        assert_eq!(old.offsets().unwrap().len(), 1);
+        let mut seed = batch(vec![ev("e", "s", 1, tokens(3, 4))], vec![delta("s", &[1])]);
+        seed.files.clear();
+        old.apply(&seed, &flat).unwrap();
+        old.conn
+            .execute(
+                "INSERT INTO ingest_files (path, offset) VALUES ('/a.jsonl', 42)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            old.conn
+                .query_row("SELECT offset FROM ingest_files", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            42
+        );
 
         migrate(&mut old.conn, MIGRATIONS).unwrap();
         assert_eq!(

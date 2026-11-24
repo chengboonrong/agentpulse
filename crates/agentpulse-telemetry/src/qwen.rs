@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, PollBatch, Provider, SessionDelta, TokenUsage, UsageEvent,
+    AgentAdapter, FileCursor, LiveSession, PollBatch, Provider, SessionDelta, TokenUsage,
+    UsageEvent,
 };
 use serde::Deserialize;
 
@@ -156,7 +157,11 @@ impl AgentAdapter for QwenAdapter {
         Provider::Qwen
     }
 
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch> {
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch> {
         let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
         let mut events = vec![];
         // A symlinked root is followed (as Grok does); nothing below it is.
@@ -166,11 +171,9 @@ impl AgentAdapter for QwenAdapter {
             offsets,
             since_ms,
             || discover(root),
-            |sid, f, start| {
-                if !allowed(root, &f.path) {
-                    return Ok(start);
-                }
-                read_lines(&f.path, start, None, |line| {
+            |f| allowed(root, &f.path),
+            |sid, _, handle, start, size| {
+                read_lines(handle, start, Some(size), |line| {
                     let Ok(r) = serde_json::from_slice::<Record>(line) else {
                         return;
                     };
