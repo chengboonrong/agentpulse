@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
+    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
     RecordedCost, SessionDelta, TokenUsage, UsageEvent,
 };
 use chrono::NaiveDateTime;
@@ -362,7 +362,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Provider::ClaudeCode
     }
 
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch> {
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch> {
         let mut batch = PollBatch {
             provider: Provider::ClaudeCode,
             files: vec![],
@@ -388,8 +392,9 @@ impl AgentAdapter for ClaudeCodeAdapter {
             offsets,
             since_ms,
             || discover(&projects),
-            |sid, f, start| {
-                read_lines(&f.path, start, None, |line| {
+            |_| true,
+            |sid, f, handle, start, size| {
+                read_lines(handle, start, Some(size), |line| {
                     fold_line(line, sid, f.is_main, &mut accs, &mut events, &mut skipped)
                 })
             },

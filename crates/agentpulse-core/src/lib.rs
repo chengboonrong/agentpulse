@@ -253,11 +253,20 @@ pub struct SessionDelta {
     pub recorded_cost: Option<RecordedCost>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileIdentity {
+    pub birth: Option<u64>,
+    pub ino: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileCursor {
     pub path: String,
     /// Byte offset just past the last complete line consumed.
     pub offset: u64,
+    /// Unknown for legacy cursors and database watermarks.
+    #[serde(default)]
+    pub identity: Option<FileIdentity>,
 }
 
 /// Everything an adapter read in one poll. Applied atomically by storage.
@@ -332,10 +341,14 @@ pub struct LiveSession {
 pub trait AgentAdapter: Send {
     fn provider(&self) -> Provider;
 
-    /// Read what was appended since `offsets` (path → byte offset). Files with
+    /// Read what was appended since `offsets` (path → cursor with file identity). Files with
     /// no offset are read from the start if modified at or after `since_ms`
     /// and ignored otherwise.
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch>;
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch>;
 
     /// Sessions the agent reports as running. Empty for agents that keep no
     /// such record; their sessions then have no process and no live state.

@@ -22,6 +22,22 @@ Claude Code 2.1.322 and Codex CLI 0.164.0 on macOS 27.0.
 | Per-agent GPU | **Unavailable** | No documented macOS API |
 | Waiting time, idle time as separate totals | **Unavailable** | Only the current state is observable |
 
+## Transcript cursors
+
+Claude Code, Codex, Grok and Qwen save each transcript's path, byte offset and Unix
+file identity (`ino`, optional birth time in milliseconds since the Unix epoch). Birth time survives remounts; when unavailable, identity uses inode alone.
+Non-live legacy cursors at EOF learn identity without reading. Files are statted
+and filtered before opening with nonblocking, no-follow flags; symlinked transcript
+files are skipped. Each read takes identity and size from an open file
+handle and reads through that handle, bounded by that size. A changed identity or a
+size below the saved offset restarts reading at zero; otherwise reading resumes at
+the offset. Legacy cursors with unknown identity resume as before and learn the
+identity, including at EOF. Only complete newline-terminated JSONL records advance
+the offset. Usage, session updates and cursors commit together; replayed event IDs,
+activity timestamps and cumulative recorded costs do not add to totals again.
+In-place rewrites that preserve the inode are outside this check's scope.
+OpenCode's cursor remains a database timestamp watermark rather than a file offset.
+
 ## Claude Code
 
 Root: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.

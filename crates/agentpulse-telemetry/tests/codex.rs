@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agentpulse_core::{AgentAdapter, LiveState, PollBatch, Provider, TokenUsage};
+use agentpulse_core::{AgentAdapter, FileCursor, LiveState, PollBatch, Provider, TokenUsage};
 use agentpulse_process::OpenFiles;
 use agentpulse_telemetry::CodexAdapter;
 
@@ -178,8 +178,11 @@ impl Fixture {
     }
 }
 
-fn offsets(b: &PollBatch) -> HashMap<String, u64> {
-    b.files.iter().map(|f| (f.path.clone(), f.offset)).collect()
+fn offsets(b: &PollBatch) -> HashMap<String, FileCursor> {
+    b.files
+        .iter()
+        .map(|f| (f.path.clone(), f.clone()))
+        .collect()
 }
 
 fn session<'a>(b: &'a PollBatch, sid: &str) -> &'a agentpulse_core::SessionDelta {
@@ -510,7 +513,7 @@ fn status_follows_tasks_of_open_rollouts() {
     write(&p, &[meta(ROOT_T, ROOT_T), task(T1, "task_started")]);
     let mut a = f.adapter();
     f.hold(42, &[&p]);
-    let state = |a: &mut CodexAdapter, off: &mut HashMap<String, u64>| {
+    let state = |a: &mut CodexAdapter, off: &mut HashMap<String, FileCursor>| {
         off.extend(offsets(&a.poll(off, 0).unwrap()));
         let live = a.live_sessions().unwrap();
         assert_eq!(live.len(), 1);
@@ -801,7 +804,19 @@ fn plan_limits_take_the_newest_reading_and_survive_a_restart() {
     let mut stored = offsets(&b);
     stored.insert(
         other.to_string_lossy().into_owned(),
-        fs::metadata(&other).unwrap().len(),
+        FileCursor {
+            path: other.to_string_lossy().into_owned(),
+            offset: fs::metadata(&other).unwrap().len(),
+            identity: Some(agentpulse_core::FileIdentity {
+                birth: fs::metadata(&other)
+                    .unwrap()
+                    .created()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64),
+                ino: std::os::unix::fs::MetadataExt::ino(&fs::metadata(&other).unwrap()),
+            }),
+        },
     );
     f.hold(3, &[&other]);
     let mut a = f.adapter();
@@ -843,4 +858,45 @@ fn malformed_rate_limits_never_drop_the_line() {
         (l.ts_ms, l.primary.unwrap().used_percent),
         (1_794_535_202_000, 40.0)
     );
+}
+
+#[test]
+fn replacement_rebuilds_rollout_state() {
+    for restart in [false, true] {
+        let f = Fixture::new();
+        let path = f.rollout(ROOT_T);
+        write(
+            &path,
+            &[
+                meta(ROOT_T, "s-old"),
+                turn(T1, "turn-1", "model-old"),
+                usage(T2, "resp-1", ROOT_T, "s-old", "turn-1", 10, 0, 2),
+            ],
+        );
+        f.hold(1, &[&path]);
+        let mut a = f.adapter();
+        let off = offsets(&a.poll(&HashMap::new(), 0).unwrap());
+        let replacement = path.with_extension("replacement");
+        write(
+            &replacement,
+            &[
+                meta(ROOT_T, "s-new"),
+                turn(T1, "turn-1", "model-new"),
+                usage(T2, "resp-2", ROOT_T, "s-new", "turn-1", 10, 0, 2),
+            ],
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            fs::metadata(&replacement).unwrap().len()
+        );
+        fs::rename(replacement, &path).unwrap();
+        if restart {
+            a = f.adapter();
+        }
+        let b = a.poll(&off, 0).unwrap();
+        assert_eq!(b.events.len(), 1);
+        assert_eq!(b.events[0].session_id, "s-new");
+        assert_eq!(b.events[0].model, "model-new");
+        assert!(a.poll(&offsets(&b), 0).unwrap().is_empty());
+    }
 }

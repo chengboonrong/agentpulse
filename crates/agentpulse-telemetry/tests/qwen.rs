@@ -4,14 +4,17 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::Duration;
 
-use agentpulse_core::{AgentAdapter, PollBatch, Provider, TokenUsage};
+use agentpulse_core::{AgentAdapter, FileCursor, PollBatch, Provider, TokenUsage};
 use agentpulse_telemetry::QwenAdapter;
 
 const FIXTURE: &str = include_str!("fixtures/qwen/projects/-synthetic-proj/chats/session-a.jsonl");
 const PATH: &str = "projects/-synthetic-proj/chats/session-a.jsonl";
 
-fn offsets(b: &PollBatch) -> HashMap<String, u64> {
-    b.files.iter().map(|f| (f.path.clone(), f.offset)).collect()
+fn offsets(b: &PollBatch) -> HashMap<String, FileCursor> {
+    b.files
+        .iter()
+        .map(|f| (f.path.clone(), f.clone()))
+        .collect()
 }
 
 #[test]
@@ -162,4 +165,31 @@ fn read_budget_continues_on_next_poll() {
     let next = a.poll(&offsets(&first), 0).unwrap();
     assert_eq!(next.files.len(), 1);
     assert_ne!(first.files[0].path, next.files[0].path);
+}
+
+#[test]
+fn equal_size_replacement_recovers_new_answers_after_restart() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join(PATH);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, FIXTURE).unwrap();
+    let mut a = QwenAdapter::new(d.path().to_path_buf());
+    let first = a.poll(&HashMap::new(), 0).unwrap();
+    let replacement = path.with_extension("replacement");
+    fs::write(
+        &replacement,
+        FIXTURE
+            .replace("answer-1", "answer-3")
+            .replace("answer-2", "answer-4"),
+    )
+    .unwrap();
+    fs::rename(replacement, &path).unwrap();
+    let mut a = QwenAdapter::new(d.path().to_path_buf());
+    let next = a.poll(&offsets(&first), 0).unwrap();
+    assert_eq!(next.events.len(), first.events.len());
+    assert!(
+        next.events
+            .iter()
+            .any(|e| e.event_id == "session-a:answer-3")
+    );
 }

@@ -14,11 +14,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    AgentAdapter, LiveSession, LiveState, PollBatch, Provider, SessionDelta, TokenUsage, UsageEvent,
+    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, SessionDelta,
+    TokenUsage, UsageEvent,
 };
 use agentpulse_process::OpenFiles;
 use serde::Deserialize;
@@ -321,7 +323,11 @@ impl AgentAdapter for GrokAdapter {
         Provider::Grok
     }
 
-    fn poll(&mut self, offsets: &HashMap<String, u64>, since_ms: i64) -> anyhow::Result<PollBatch> {
+    fn poll(
+        &mut self,
+        offsets: &HashMap<String, FileCursor>,
+        since_ms: i64,
+    ) -> anyhow::Result<PollBatch> {
         let mut batch = PollBatch {
             provider: Provider::Grok,
             files: vec![],
@@ -345,22 +351,6 @@ impl AgentAdapter for GrokAdapter {
             .flat_map(|o| &o.paths)
             .filter_map(|p| session_id(Path::new(p)))
             .collect();
-        // An open event log read to its end before this run started is not
-        // read again: learn its start and turn state from the lines already
-        // consumed.
-        for path in self.open.iter().flat_map(|o| &o.paths) {
-            let (false, Some(&end)) = (self.files.contains_key(path), offsets.get(path)) else {
-                continue;
-            };
-            let st = self.files.entry(path.clone()).or_default();
-            match read_lines(Path::new(path), 0, Some(end), |l| fold_event(l, st, None)) {
-                Ok(o) => st.offset = o,
-                Err(_) => {
-                    self.files.remove(path);
-                    tracing::warn!(path = %path, "cannot read event log");
-                }
-            }
-        }
         let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
         let mut events: Vec<UsageEvent> = vec![];
         let files = &mut self.files;
@@ -370,21 +360,21 @@ impl AgentAdapter for GrokAdapter {
             offsets,
             since_ms,
             || discover(root),
-            |sid, f, start| {
+            |f| is_file(&f.path),
+            |sid, f, handle, start, size| {
                 let acc = |accs: &mut BTreeMap<String, Acc>| {
                     let a = accs.entry(sid.to_string()).or_default();
                     a.cwd = a.cwd.take().or_else(|| project_path(&f.path));
                 };
-                // Discovery skipped symlinks, but the file may have been
-                // replaced by one since: check again just before opening.
-                if !is_file(&f.path) {
-                    return Ok(start);
-                }
                 if f.path.ends_with(USAGE) {
+                    if start == size && start > 0 {
+                        return Ok(start);
+                    }
                     // Rewritten whole at each turn's end: always read it all.
                     // A file caught mid-write does not parse; leaving the
                     // cursor where it was makes the next poll retry.
-                    let bytes = fs::read(&f.path)?;
+                    let mut bytes = Vec::new();
+                    handle.take(size).read_to_end(&mut bytes)?;
                     let Ok(u) = serde_json::from_slice::<UsageFile>(&bytes) else {
                         return Ok(start);
                     };
@@ -410,10 +400,12 @@ impl AgentAdapter for GrokAdapter {
                 if seed {
                     // Resuming mid-file: learn the start and turn state from
                     // the lines before the offset.
-                    read_lines(&f.path, 0, Some(start), |l| fold_event(l, st, None))?;
+                    read_lines(handle, 0, Some(start), |l| fold_event(l, st, None))?;
                 }
                 let mut ts = vec![];
-                let end = read_lines(&f.path, start, None, |l| fold_event(l, st, Some(&mut ts)))?;
+                let end = read_lines(handle, start, Some(size), |l| {
+                    fold_event(l, st, Some(&mut ts))
+                })?;
                 st.offset = end;
                 if end > start {
                     acc(&mut accs);
