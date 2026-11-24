@@ -669,8 +669,6 @@ fn moving_a_rollout_to_the_archive_rereads_the_same_events() {
     ));
     fs::create_dir_all(archived.parent().unwrap()).unwrap();
     fs::rename(&p, &archived).unwrap();
-    // A compressed archive is not read.
-    fs::write(archived.with_extension("jsonl.zst"), b"\x28\xb5\x2f\xfd").unwrap();
     let mut a = f.adapter();
     let b2 = a.poll(&offsets(&b1), 0).unwrap();
     assert_eq!(b2.files.len(), 1);
@@ -898,5 +896,307 @@ fn replacement_rebuilds_rollout_state() {
         assert_eq!(b.events[0].session_id, "s-new");
         assert_eq!(b.events[0].model, "model-new");
         assert!(a.poll(&offsets(&b), 0).unwrap().is_empty());
+    }
+}
+
+// ruzstd's encoder keeps these fixtures synthetic and independent of a system CLI.
+fn compress(path: &Path) -> PathBuf {
+    let archive = path.with_extension("jsonl.zst");
+    let bytes = fs::read(path).unwrap();
+    fs::write(
+        &archive,
+        ruzstd::encoding::compress_to_vec(&bytes[..], ruzstd::encoding::CompressionLevel::Fastest),
+    )
+    .unwrap();
+    archive
+}
+
+fn archive_lines() -> Vec<String> {
+    vec![
+        meta(ROOT_T, ROOT_T),
+        turn(T1, "turn-1", "gpt-6.1-sol"),
+        usage(T2, "resp_1", ROOT_T, ROOT_T, "turn-1", 30, 10, 3),
+    ]
+}
+
+#[test]
+fn archive_forms_and_twins_choose_one_rollout() {
+    for mode in [
+        "plain",
+        "compressed",
+        "twins",
+        "newer-plain",
+        "empty-compressed",
+        "empty-newer-plain",
+    ] {
+        let f = Fixture::new();
+        let plain = f.root.join(format!(
+            "archived_sessions/rollout-2026-11-13T02-00-00-{ROOT_T}.jsonl"
+        ));
+        write(&plain, &archive_lines());
+        let archive = compress(&plain);
+        let equal_time = fs::metadata(&plain).unwrap().modified().unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&archive)
+            .unwrap()
+            .set_modified(equal_time)
+            .unwrap();
+        match mode {
+            "plain" => fs::remove_file(&archive).unwrap(),
+            "compressed" => fs::remove_file(&plain).unwrap(),
+            "newer-plain" => {
+                append(
+                    &plain,
+                    &[usage(T3, "resp_2", ROOT_T, ROOT_T, "turn-1", 40, 20, 4)],
+                );
+                fs::File::options()
+                    .write(true)
+                    .open(&plain)
+                    .unwrap()
+                    .set_modified(equal_time + std::time::Duration::from_secs(1))
+                    .unwrap();
+            }
+            "empty-newer-plain" => {
+                fs::write(&plain, []).unwrap();
+                fs::File::open(&plain)
+                    .unwrap()
+                    .set_modified(equal_time + std::time::Duration::from_secs(1))
+                    .unwrap();
+            }
+            "empty-compressed" => fs::write(&archive, []).unwrap(),
+            _ => {}
+        }
+        let batch = f.adapter().poll(&HashMap::new(), 0).unwrap();
+        assert_eq!(batch.files.len(), 1, "{mode}");
+        let compressed = matches!(mode, "compressed" | "twins" | "empty-newer-plain");
+        let selected = if compressed { &archive } else { &plain };
+        assert_eq!(batch.files[0].path, selected.to_string_lossy(), "{mode}");
+        assert_eq!(batch.files[0].offset, fs::metadata(selected).unwrap().len());
+        assert_eq!(
+            batch.events.len(),
+            if mode == "newer-plain" { 2 } else { 1 }
+        );
+        assert_eq!(batch.events[0].usage.total(), 33);
+        assert_eq!(batch.events[0].model, "gpt-6.1-sol");
+        assert_eq!(batch.events[0].session_id, ROOT_T);
+        assert_eq!(
+            batch.events.iter().map(|e| e.usage.total()).sum::<u64>(),
+            if mode == "newer-plain" { 77 } else { 33 }
+        );
+    }
+}
+
+#[test]
+fn compressed_archive_skips_unchanged_and_rebuilds_on_size_change() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let archive = compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    let mut adapter = f.adapter();
+    let first = adapter.poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(first.events.len(), 1);
+    let saved = offsets(&first);
+    // Same inode and size, but no longer decodable: any reopen would fail.
+    let size = fs::metadata(&archive).unwrap().len() as usize;
+    fs::write(&archive, vec![0; size]).unwrap();
+    assert!(adapter.poll(&saved, 0).unwrap().is_empty());
+    assert!(f.adapter().poll(&saved, 0).unwrap().is_empty());
+    write(&plain, &archive_lines());
+    append(
+        &plain,
+        &[usage(T3, "resp_2", ROOT_T, ROOT_T, "turn-1", 40, 20, 4)],
+    );
+    compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    let changed = adapter.poll(&saved, 0).unwrap();
+    assert_eq!(changed.events.len(), 2);
+    assert_eq!(changed.events[0].model, "gpt-6.1-sol");
+    assert_eq!(
+        changed.files[0].offset,
+        fs::metadata(&archive).unwrap().len()
+    );
+}
+
+#[test]
+fn switching_archive_forms_through_storage_is_idempotent() {
+    use agentpulse_storage::Store;
+    for compressed_first in [false, true] {
+        let f = Fixture::new();
+        let plain = f.rollout(ROOT_T);
+        write(&plain, &archive_lines());
+        let archive = compress(&plain);
+        let compressed_bytes = fs::read(&archive).unwrap();
+        fs::remove_file(if compressed_first { &plain } else { &archive }).unwrap();
+        let mut store = Store::open(&f.root.join("usage.db")).unwrap();
+        let price = |_: &agentpulse_core::UsageEvent| Some(0.5);
+        let first = f.adapter().poll(&HashMap::new(), 0).unwrap();
+        assert_eq!(first.events.len(), 1);
+        store.apply(&first, &price).unwrap();
+        let before = store.sessions_since(Provider::Codex, 0).unwrap();
+        if compressed_first {
+            fs::remove_file(&archive).unwrap();
+            write(&plain, &archive_lines());
+        } else {
+            fs::remove_file(&plain).unwrap();
+            fs::write(&archive, compressed_bytes).unwrap();
+        }
+        let replay = f.adapter().poll(&store.offsets().unwrap(), 0).unwrap();
+        assert_eq!(replay.events, first.events);
+        store.apply(&replay, &price).unwrap();
+        assert_eq!(store.sessions_since(Provider::Codex, 0).unwrap(), before);
+        assert!(
+            f.adapter()
+                .poll(&store.offsets().unwrap(), 0)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn compressed_partial_line_is_ignored_and_corruption_keeps_cursor() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    OpenOptions::new()
+        .append(true)
+        .open(&plain)
+        .unwrap()
+        .write_all(usage(T3, "partial", ROOT_T, ROOT_T, "turn-1", 5, 0, 1).as_bytes())
+        .unwrap();
+    let archive = compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    let first = f.adapter().poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(first.events.len(), 1);
+    assert_eq!(first.files[0].offset, fs::metadata(&archive).unwrap().len());
+    fs::write(&archive, b"corrupt").unwrap();
+    let failed = f.adapter().poll(&offsets(&first), 0).unwrap();
+    assert!(failed.files.is_empty());
+}
+
+#[test]
+fn compressed_checksum_corruption_keeps_cursor() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let archive = compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    let mut bytes = fs::read(&archive).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    fs::write(&archive, bytes).unwrap();
+    let batch = f.adapter().poll(&HashMap::new(), 0).unwrap();
+    assert!(batch.files.is_empty());
+    assert!(batch.events.is_empty());
+    assert!(batch.sessions.is_empty());
+}
+
+#[test]
+fn compressed_multiple_frames_and_truncated_second_frame() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let archive = compress(&plain);
+    let mut bytes = fs::read(&archive).unwrap();
+    write(
+        &plain,
+        &[usage(T3, "resp_2", ROOT_T, ROOT_T, "turn-1", 40, 20, 4)],
+    );
+    compress(&plain);
+    bytes.extend(fs::read(&archive).unwrap());
+    fs::remove_file(&plain).unwrap();
+    fs::write(&archive, &bytes).unwrap();
+    let batch = f.adapter().poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(batch.events.len(), 2);
+    bytes.truncate(bytes.len() - 5);
+    fs::write(&archive, bytes).unwrap();
+    let batch = f.adapter().poll(&offsets(&batch), 0).unwrap();
+    assert!(batch.events.is_empty());
+    assert!(batch.sessions.is_empty());
+    assert!(batch.files.is_empty());
+}
+
+#[test]
+fn compressed_line_split_across_frames_is_read() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let text = fs::read(&plain).unwrap();
+    // Cut mid-way through the usage line, as parallel compressors may.
+    let cut = text.len() - 20;
+    let frame = |b: &[u8]| {
+        ruzstd::encoding::compress_to_vec(b, ruzstd::encoding::CompressionLevel::Fastest)
+    };
+    let mut bytes = frame(&text[..cut]);
+    bytes.extend(frame(&text[cut..]));
+    fs::remove_file(&plain).unwrap();
+    fs::write(plain.with_extension("jsonl.zst"), bytes).unwrap();
+    let batch = f.adapter().poll(&HashMap::new(), 0).unwrap();
+    assert_eq!(batch.events.len(), 1);
+    assert_eq!(batch.files.len(), 1);
+}
+
+#[test]
+fn old_archive_without_cursor_is_not_read() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let archive = compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    fs::File::open(&archive)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    let mut adapter = f.adapter();
+    assert!(adapter.poll(&HashMap::new(), 2000).unwrap().is_empty());
+}
+
+#[test]
+fn open_archive_does_not_make_a_thread_live_or_bypass_since() {
+    let f = Fixture::new();
+    let plain = f.rollout(ROOT_T);
+    write(&plain, &archive_lines());
+    let archive = compress(&plain);
+    fs::remove_file(&plain).unwrap();
+    fs::File::open(&archive)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    f.hold(42, &[&archive]);
+    let mut adapter = f.adapter();
+    assert!(adapter.poll(&HashMap::new(), 2000).unwrap().is_empty());
+    assert!(adapter.live_sessions().unwrap().is_empty());
+}
+
+#[test]
+fn broken_archive_is_skipped_until_size_or_identity_changes() {
+    for change_identity in [false, true] {
+        let f = Fixture::new();
+        let plain = f.rollout(ROOT_T);
+        write(&plain, &archive_lines());
+        let archive = compress(&plain);
+        let good = fs::read(&archive).unwrap();
+        fs::remove_file(&plain).unwrap();
+        fs::write(&archive, vec![0; good.len()]).unwrap();
+        let mut adapter = f.adapter().with_rescan_interval(std::time::Duration::ZERO);
+        assert!(adapter.poll(&HashMap::new(), 0).unwrap().is_empty());
+        // Same identity and size: even replacing the bytes with a valid frame must
+        // not cause another decode on the next poll.
+        fs::write(&archive, &good).unwrap();
+        assert!(adapter.poll(&HashMap::new(), 0).unwrap().is_empty());
+        if change_identity {
+            let replacement = archive.with_extension("replacement");
+            fs::write(&replacement, &good).unwrap();
+            fs::rename(replacement, &archive).unwrap();
+        } else {
+            OpenOptions::new()
+                .append(true)
+                .open(&archive)
+                .unwrap()
+                .write_all(&good)
+                .unwrap();
+        }
+        assert_eq!(adapter.poll(&HashMap::new(), 0).unwrap().events.len(), 1);
     }
 }

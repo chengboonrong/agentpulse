@@ -36,6 +36,14 @@ identity, including at EOF. Only complete newline-terminated JSONL records advan
 the offset. Usage, session updates and cursors commit together; replayed event IDs,
 activity timestamps and cumulative recorded costs do not add to totals again.
 In-place rewrites that preserve the inode are outside this check's scope.
+Codex `.jsonl.zst` archives use the compressed file size as their offset. An unchanged
+identity and size skips opening and decompression, even for a live thread. Any other
+archive read starts at zero, rebuilds parser state, and decodes all frames as one
+stream, so a line may span frames; a trailing partial line is ignored. Frame checksums,
+when present, are validated before any output is accepted. A corrupt stream emits no
+events or session updates, logs one warning and leaves the cursor unchanged; it is not
+retried until its identity or size changes (a transient read error is retried).
+Skippable frames are not supported. The read budget counts compressed bytes.
 OpenCode's cursor remains a database timestamp watermark rather than a file offset.
 
 ## Claude Code
@@ -148,7 +156,18 @@ sessions.
   one file per thread. The thread id is the last 36 characters of the file name.
 - Moving a rollout to the archive re-reads it under its new path; events are keyed by
   response id, so the totals do not change.
-- Compressed archives (`.jsonl.zst`) are not read.
+- Compressed archives (`.jsonl.zst`) are decoded with ruzstd and read through the same
+  metadata parser. The thread id is the same as in the plain filename.
+- Archives follow the same backfill window as plain rollouts: a file with no cursor
+  and an mtime older than the collector's `since_ms` (midnight or 1 day back) is not
+  read unless its thread is live. Only open plain `.jsonl` rollouts establish live
+  threads. Codex compresses rollouts after about 7 days cold and preserves mtime.
+  History already ingested from the plain form stays; event ids dedupe across forms.
+  Archives fill in only eligible history inside that window or never seen plain;
+  previously unseen archives still follow the same mtime gate.
+- For plain/compressed twins in the same directory, only one is discovered per scan:
+  compressed wins unless it is empty or a non-empty plain file's mtime is strictly newer.
+  Switching forms replays the same response ids, so usage is not counted twice.
 
 Rollout lines carry prompts, responses, reasoning, tool calls and file contents. The record
 type sits in a line's first 256 bytes and is matched there before any parsing. Only these
