@@ -15,7 +15,9 @@ use agentpulse_core::{
 use agentpulse_cost::PriceBook;
 use agentpulse_platform_macos::gpu_utilization;
 use agentpulse_process::{ProcTable, Sampler, attribute, verify};
-use agentpulse_storage::{DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals};
+use agentpulse_storage::{
+    DayUsage, Lane, ModelCacheReads, Request, SessionRow, Store, Totals, UsageBreakdown,
+};
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 
 use crate::cleanup::{CleanupView, Host, SWEEP_INTERVAL, Tracker};
@@ -84,6 +86,9 @@ pub enum Command {
 /// What the Usage screen draws.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct UsageCharts {
+    /// Local-only full project keys; never included in serialized snapshots.
+    #[serde(skip)]
+    pub breakdown: Option<UsageBreakdown>,
     /// The last [`USAGE_DAYS`] local days, oldest first, today last.
     pub days: Vec<Day>,
     /// Estimated net USD caching saved over those days: cache reads' saving
@@ -121,6 +126,7 @@ struct History {
     /// Per source: past days' usage and the agent's first stored event.
     days: Vec<(Vec<DayUsage>, Option<i64>)>,
     cache_reads: Vec<ModelCacheReads>,
+    breakdown: Vec<UsageBreakdown>,
 }
 
 /// Today's part of the Usage charts, queried with the session rows.
@@ -129,6 +135,7 @@ struct Today {
     midnight: i64,
     days: Vec<Vec<DayUsage>>,
     cache_reads: Vec<ModelCacheReads>,
+    breakdown: Vec<UsageBreakdown>,
     lanes: Vec<(Provider, Lane)>,
 }
 
@@ -674,10 +681,13 @@ impl Collector {
             days: Vec::new(),
             cache_reads: self.store.cache_reads_by_model(midnight, i64::MAX)?,
             lanes: Vec::new(),
+            breakdown: Vec::new(),
         };
         for s in &self.sources {
             let p = s.adapter.provider();
             t.days.push(self.store.daily_usage(p, midnight, i64::MAX)?);
+            t.breakdown
+                .push(self.store.usage_breakdown(p, midnight, i64::MAX)?);
             t.lanes.extend(
                 self.store
                     .lanes_since(p, midnight)?
@@ -706,6 +716,14 @@ impl Collector {
                 })
                 .collect::<anyhow::Result<_>>()?,
             cache_reads: self.store.cache_reads_by_model(from, midnight)?,
+            breakdown: self
+                .sources
+                .iter()
+                .map(|s| {
+                    self.store
+                        .usage_breakdown(s.adapter.provider(), from, midnight)
+                })
+                .collect::<anyhow::Result<_>>()?,
         })
     }
 
@@ -755,6 +773,16 @@ impl Collector {
             &self.prices,
         );
         Some(UsageCharts {
+            breakdown: (h.midnight == t.midnight).then(|| {
+                UsageBreakdown::merge(
+                    self.sources
+                        .iter()
+                        .zip(&h.breakdown)
+                        .zip(&t.breakdown)
+                        .filter(|((s, _), _)| !self.hidden.contains(&s.adapter.provider()))
+                        .flat_map(|((_, past), today)| [past.clone(), today.clone()]),
+                )
+            }),
             days,
             // History must end where today starts, or a day is missing or counted twice.
             cache_saved_usd: (h.midnight == t.midnight).then_some(saved),
@@ -1868,6 +1896,46 @@ mod tests {
         assert!((u.cache_saved_usd.unwrap() - 30.0 * 1.9 / 1e6).abs() < 1e-12);
         assert_eq!(u.cache_saved_unpriced, 0);
         assert_eq!(u.today.len(), 2);
+        let breakdown = u.breakdown.as_ref().unwrap();
+        let totals = c.store.totals_by_provider(days[0].1).unwrap();
+        for rows in [&breakdown.models, &breakdown.projects] {
+            assert_eq!(
+                rows.iter().map(|r| r.tokens).sum::<u64>(),
+                totals[&P].tokens.total()
+            );
+            assert!(
+                (rows.iter().map(|r| r.cost_usd).sum::<f64>()
+                    - u.days
+                        .iter()
+                        .flat_map(|d| &d.agents)
+                        .filter_map(|(_, d)| d.as_ref())
+                        .map(|d| d.cost_usd)
+                        .sum::<f64>())
+                .abs()
+                    < 1e-9
+            );
+            assert_eq!(rows.iter().map(|r| r.unpriced_events).sum::<u64>(), 1);
+        }
+        let mut local_only = u.clone();
+        local_only.breakdown.as_mut().unwrap().projects[0].key =
+            Some("/private/never-export".into());
+        assert!(
+            !serde_json::to_string(&local_only)
+                .unwrap()
+                .contains("never-export")
+        );
+        c.set_hidden(BTreeSet::from([P]));
+        let hidden = c.usage_charts(now).unwrap();
+        assert!(hidden.breakdown.unwrap().models.is_empty());
+        c.set_hidden(BTreeSet::new());
+        assert_eq!(
+            c.usage_charts(now).unwrap().breakdown.as_ref().unwrap(),
+            breakdown
+        );
+        c.history.as_mut().unwrap().midnight -= DAY_MS;
+        assert!(c.usage_charts(now).unwrap().breakdown.is_none());
+        c.history.as_mut().unwrap().midnight += DAY_MS;
+
         assert_eq!(s.limits[&Provider::Codex].ts_ms, 200);
         assert!(!s.limits.contains_key(&Provider::ClaudeCode));
 
@@ -2025,6 +2093,7 @@ mod tests {
             midnight: NOW,
             days: vec![],
             cache_reads: vec![],
+            breakdown: vec![],
         };
         assert!(!history_due(Some(&h), None, NOW));
         assert!(history_due(Some(&h), None, NOW + DAY_MS));

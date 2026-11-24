@@ -88,6 +88,20 @@ pub struct CleanupLogEntry {
 
 const CLEANUP_LOG_KEEP: i64 = 100;
 
+const USAGE_BREAKDOWN_SQL: &str = "WITH events AS (
+                SELECT e.model, s.project_path,
+                    e.input + e.output + e.cache_write_5m + e.cache_write_1h + e.cache_read AS tokens,
+                    e.cost_usd
+                FROM usage_events e
+                LEFT JOIN sessions s ON s.provider = e.provider AND s.session_id = e.session_id
+                WHERE e.provider = ?1 AND e.ts >= ?2 AND e.ts < ?3
+            )
+            SELECT 0, model, SUM(tokens), COALESCE(SUM(cost_usd), 0.0), COUNT(*) - COUNT(cost_usd)
+            FROM events GROUP BY model
+            UNION ALL
+            SELECT 1, project_path, SUM(tokens), COALESCE(SUM(cost_usd), 0.0), COUNT(*) - COUNT(cost_usd)
+            FROM events GROUP BY project_path";
+
 const DAILY_USAGE_SQL: &str = "SELECT date(ts / 1000, 'unixepoch', 'localtime') AS day,
         COALESCE(SUM(cost_usd), 0.0), COUNT(cost_usd), COUNT(*) - COUNT(cost_usd),
         SUM(input), SUM(cache_write_5m + cache_write_1h), SUM(cache_read)
@@ -115,6 +129,51 @@ pub struct SessionRow {
     pub unpriced_events: u64,
     /// The agent's own latest cost record for the session.
     pub recorded_cost: Option<RecordedCost>,
+}
+
+/// A local Usage dimension; project keys are full paths and must not be exported.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UsageGroup {
+    pub key: Option<String>,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    pub unpriced_events: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UsageBreakdown {
+    pub models: Vec<UsageGroup>,
+    pub projects: Vec<UsageGroup>,
+}
+
+impl UsageBreakdown {
+    /// Combine cached ranges/providers, retaining full keys and ranking by tokens.
+    pub fn merge(parts: impl IntoIterator<Item = Self>) -> Self {
+        let mut models = BTreeMap::<Option<String>, UsageGroup>::new();
+        let mut projects = BTreeMap::<Option<String>, UsageGroup>::new();
+        for part in parts {
+            for (map, rows) in [(&mut models, part.models), (&mut projects, part.projects)] {
+                for row in rows {
+                    let sum = map.entry(row.key.clone()).or_insert_with(|| UsageGroup {
+                        key: row.key.clone(),
+                        ..Default::default()
+                    });
+                    sum.tokens += row.tokens;
+                    sum.cost_usd += row.cost_usd;
+                    sum.unpriced_events += row.unpriced_events;
+                }
+            }
+        }
+        let rank = |map: BTreeMap<_, UsageGroup>| {
+            let mut rows: Vec<_> = map.into_values().collect();
+            rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.key.cmp(&b.key)));
+            rows
+        };
+        Self {
+            models: rank(models),
+            projects: rank(projects),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -573,6 +632,32 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Both ranked dimensions for the same half-open range as daily Usage.
+    pub fn usage_breakdown(
+        &self,
+        provider: Provider,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<UsageBreakdown> {
+        let mut stmt = self.conn.prepare(USAGE_BREAKDOWN_SQL)?;
+        let mut result = UsageBreakdown::default();
+        let mut rows = stmt.query(params![provider.as_str(), from_ms, to_ms])?;
+        while let Some(r) = rows.next()? {
+            let group = UsageGroup {
+                key: r.get(1)?,
+                tokens: r.get::<_, i64>(2)? as u64,
+                cost_usd: r.get(3)?,
+                unpriced_events: r.get::<_, i64>(4)? as u64,
+            };
+            if r.get::<_, i64>(0)? == 0 {
+                result.models.push(group);
+            } else {
+                result.projects.push(group);
+            }
+        }
+        Ok(result)
     }
 
     /// Time of `provider`'s oldest stored event.
@@ -1320,6 +1405,76 @@ mod tests {
     }
 
     #[test]
+    fn breakdown_reconciles_and_splits_event_models_without_merging_projects() {
+        let mut s = Store::open_in_memory().unwrap();
+        let mut switched = ev("b", "s", 11, full(10, 2, 3, 4));
+        switched.model = "other".into();
+        let mut a = delta("s", &[10, 11]);
+        a.project_path = Some("/one/app".into());
+        let mut b = delta("t", &[12]);
+        b.project_path = Some("/two/app".into());
+        s.apply(
+            &batch(
+                vec![
+                    ev("a", "s", 10, full(1, 2, 3, 4)),
+                    switched,
+                    ev("c", "t", 12, tokens(3, 4)),
+                    ev("u", "missing", 13, tokens(5, 6)),
+                    ev("excluded", "s", 9, tokens(100, 100)),
+                ],
+                vec![a, b],
+            ),
+            &|e| (e.event_id != "u").then_some(1.5),
+        )
+        .unwrap();
+        let result = s.usage_breakdown(P, 10, i64::MAX).unwrap();
+        let totals = &s.totals_by_provider(10).unwrap()[&P];
+        for rows in [&result.models, &result.projects] {
+            assert_eq!(
+                rows.iter().map(|r| r.tokens).sum::<u64>(),
+                totals.tokens.total()
+            );
+            assert_eq!(
+                rows.iter().map(|r| r.cost_usd).sum::<f64>(),
+                totals.cost_usd
+            );
+            assert_eq!(rows.iter().map(|r| r.unpriced_events).sum::<u64>(), 1);
+        }
+        assert_eq!(result.models.len(), 2);
+        assert_eq!(result.projects.len(), 3);
+        let project = result
+            .projects
+            .iter()
+            .find(|r| r.key.as_deref() == Some("/one/app"))
+            .unwrap();
+        assert_eq!(
+            project.tokens,
+            full(1, 2, 3, 4).total() + full(10, 2, 3, 4).total()
+        );
+        assert_eq!(
+            result
+                .projects
+                .iter()
+                .find(|r| r.key.is_none())
+                .unwrap()
+                .unpriced_events,
+            1
+        );
+        assert!(
+            s.usage_breakdown(Provider::Codex, 10, i64::MAX)
+                .unwrap()
+                .models
+                .is_empty()
+        );
+        assert_eq!(
+            s.usage_breakdown(P, 11, 12).unwrap().models[0]
+                .key
+                .as_deref(),
+            Some("other")
+        );
+    }
+
+    #[test]
     fn daily_usage_groups_by_local_day_and_keeps_unpriced_apart() {
         let mut s = Store::open_in_memory().unwrap();
         let late = local(2026, 11, 10, 23, 30);
@@ -1426,7 +1581,12 @@ mod tests {
     #[test]
     fn per_provider_range_queries_use_the_provider_ts_index() {
         let s = Store::open_in_memory().unwrap();
-        for sql in [DAILY_USAGE_SQL, FIRST_EVENT_SQL, LANES_SQL] {
+        for sql in [
+            DAILY_USAGE_SQL,
+            FIRST_EVENT_SQL,
+            LANES_SQL,
+            USAGE_BREAKDOWN_SQL,
+        ] {
             let mut stmt = s
                 .conn
                 .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
@@ -1438,9 +1598,9 @@ mod tests {
                 .unwrap()
                 .map(Result::unwrap)
                 .collect();
-            let first = &plan[0];
             assert!(
-                first.contains("INDEX usage_events_provider_ts (provider=?"),
+                plan.iter()
+                    .any(|step| step.contains("INDEX usage_events_provider_ts (provider=?")),
                 "{sql}\n{plan:#?}"
             );
         }
