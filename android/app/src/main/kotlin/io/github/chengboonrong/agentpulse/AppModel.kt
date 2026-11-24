@@ -49,6 +49,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
     var direct by mutableStateOf(emptySet<String>())
     /** Pairing id to the last error, such as "This Mac removed the pairing." */
     var problems by mutableStateOf(emptyMap<String, String>())
+    var stateTransportFailed by mutableStateOf(emptySet<String>())
+    var removedPairings by mutableStateOf(emptySet<String>())
     /** The stored pairings couldn't be read. */
     var loadError by mutableStateOf<String?>(null)
     var pairRequest by mutableStateOf<PairRequest?>(null)
@@ -173,6 +175,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
     fun remove(p: Pairing): Job {
         pairings = pairings.filter { it.id != p.id }
         problems = problems - p.id
+        stateTransportFailed = stateTransportFailed - p.id
+        removedPairings = removedPairings - p.id
         connections.remove(p.id)?.close()
         direct = direct - p.id
         generation++
@@ -235,6 +239,8 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         try {
             while (true) {
                 val p = io { c.next() }
+                stateTransportFailed = stateTransportFailed - id
+                removedPairings = removedPairings - id
                 if (pairing(id) != null) pairings = pairings.map { if (it.id == id) p else it }
             }
         } catch (e: CancellationException) {
@@ -254,7 +260,17 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
     private suspend fun fetch(id: String) {
         val p = pairing(id) ?: return
         report(id) {
-            val fetched = io { client.fetchDown(p) }
+            val fetched = try {
+                io { client.fetchDown(p) }.also {
+                    stateTransportFailed = stateTransportFailed - id
+                    removedPairings = removedPairings - id
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stateTransportFailed = if (stateFetchFailedInTransport(e)) stateTransportFailed + id else stateTransportFailed - id
+                throw e
+            }
             // Unless it was removed, or connected directly (newer), meanwhile.
             if (pairing(id) != null && id !in direct) pairings = pairings.map { if (it.id == id) fetched else it }
         }
@@ -267,7 +283,13 @@ class AppModel(val client: PhoneClient, val offline: Boolean = false, private va
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (pairing(id) != null) problems = problems + (id to problem(e, context))
+            if (pairing(id) != null) {
+                if (e is io.github.chengboonrong.agentpulse.link.PhoneException &&
+                    e.reason == io.github.chengboonrong.agentpulse.link.PhoneException.Reason.REMOVED) {
+                    removedPairings = removedPairings + id
+                }
+                problems = problems + (id to problem(e, context))
+            }
         }
     }
 }

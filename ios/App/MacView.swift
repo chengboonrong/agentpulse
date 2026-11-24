@@ -12,13 +12,15 @@ struct MacView: View {
 
     var body: some View {
         if let pairing = model.pairing(id) {
-            content(pairing)
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                content(pairing, now: context.date)
+            }
         } else {
             ContentUnavailableView("Removed", systemImage: "laptopcomputer.slash")
         }
     }
 
-    private func content(_ pairing: Pairing) -> some View {
+    private func content(_ pairing: Pairing, now: Date) -> some View {
         let payload = pairing.lastState.flatMap(WidgetPayload.decode)
         let palette = Palette(scheme)
         return List(selection: session) {
@@ -35,7 +37,11 @@ struct MacView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                let freshness = SnapshotFreshness.evaluate(generatedAt: p.generatedAt, now: now, failed: model.stateTransportFailed.contains(id), directOpen: model.direct.contains(id), removed: model.removedPairings.contains(id))
                 Section {
+                    if freshness != .fresh && !model.removedPairings.contains(id) {
+                        SnapshotNotice(freshness: freshness, name: pairing.macName, generatedAt: p.generatedAt, now: now)
+                    }
                     CatView(cat: p.cat, silhouette: false)
                         .frame(height: 120)
                         .frame(maxWidth: .infinity)
@@ -46,7 +52,8 @@ struct MacView: View {
                     LabeledContent("Working", value: p.agents.active, format: .number)
                     LabeledContent("Idle", value: p.agents.idle, format: .number)
                 } header: {
-                    Text(AgentPulseWidgetView.headline(p.agents))
+                    Text(freshness == .fresh ? AgentPulseWidgetView.headline(p.agents) :
+                        String(format: String(localized: "last_known_counts"), AgentPulseWidgetView.headline(p.agents)))
                 } footer: {
                     if model.direct.contains(id) {
                         Text("As of \(p.generatedAt, format: .dateTime.hour().minute()) · Connected directly")
@@ -184,6 +191,31 @@ struct SessionView: View {
             .navigationTitle(s.project)
         } else {
             ContentUnavailableView("Session Ended", systemImage: "terminal")
+        }
+    }
+}
+
+/// Beside the cached counts, using the snapshot time rather than the last relay fetch.
+@MainActor
+struct SnapshotNotice: View {
+    let freshness: SnapshotFreshness
+    let name: String
+    let generatedAt: Date
+    let now: Date
+
+    private static let relativeFormatter = RelativeDateTimeFormatter()
+
+    var body: some View {
+        let relative = Self.relativeFormatter.localizedString(for: generatedAt, relativeTo: now)
+        switch freshness {
+        case .fresh:
+            EmptyView()
+        case .macQuiet:
+            Text("\(name) last updated \(relative). It may be asleep or offline.")
+                .foregroundStyle(.secondary)
+        case .unreachable:
+            Text("Can't reach \(name). Showing its last known status from \(relative).")
+                .foregroundStyle(.secondary)
         }
     }
 }

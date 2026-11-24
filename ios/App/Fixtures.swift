@@ -4,7 +4,7 @@ import AgentPulsePhone
 import CryptoKit
 import Foundation
 
-/// `-AgentPulseFixture <macs|mac|mac-old-format|mac-new-format|mac-update|session|settings|notifications|notifications-denied|notifications-undetermined|pair-confirm|pair-code|empty>`: each screen from fixture
+/// `-AgentPulseFixture <macs|mac|mac-stale|mac-unreachable|mac-old-format|mac-new-format|mac-update|session|settings|notifications|notifications-denied|notifications-undetermined|pair-confirm|pair-code|empty>`: each screen from fixture
 /// data, without network, for screenshots. Debug builds only.
 @MainActor
 enum Fixtures {
@@ -33,6 +33,14 @@ enum Fixtures {
             model.pairings = [studio]
             model.direct = [studio.id]
             model.path = [studio.id]
+        case "mac-stale", "mac-unreachable":
+            let mac = pairing("Studio", minutesAgo: 42, payload: busy)
+            model.pairings = [mac]
+            model.path = [mac.id]
+            if name == "mac-unreachable" {
+                model.stateTransportFailed.insert(mac.id)
+                model.problems[mac.id] = URLError(.notConnectedToInternet).localizedDescription
+            }
         case "mac-old-format", "mac-new-format", "mac-update":
             let mac = pairing("Studio", minutesAgo: 1) { ms in
                 payload(ms, agents: (0, 0, 0), sessions: "",

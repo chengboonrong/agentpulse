@@ -93,4 +93,8 @@
     <string name="price_fixture">根据标价预估。</string>
     <string name="completed_lower">已完成</string>
     <string name="failed_lower">失败</string>
+    <string name="last_known">上次已知状态</string>
+    <string name="mac_quiet">%1$s 上次更新于 %2$s。它可能已休眠或离线。</string>
+    <string name="mac_unreachable">无法连接到 %1$s。正在显示 %2$s的上次已知状态。</string>
+    <string name="last_known_counts">上次已知状态 · %1$s</string>
 </resources>

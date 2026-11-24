@@ -190,7 +190,7 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
             }
             else -> LazyColumn(contentPadding = padding) {
                 items(model.pairings, key = { it.id }) { p ->
-                    MacRow(p, model.problems[p.id], p.id in model.direct, selected = p.id == selected, onClick = { onPick(p.id) })
+                    MacRow(p, model.problems[p.id], p.id in model.direct, p.id in model.stateTransportFailed, p.id in model.removedPairings, selected = p.id == selected, onClick = { onPick(p.id) })
                     HorizontalDivider()
                 }
             }
@@ -199,7 +199,7 @@ fun MacsPane(model: AppModel, selected: String?, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, failed: Boolean, removed: Boolean, selected: Boolean, onClick: () -> Unit) {
     val payload = WidgetPayload.decode(pairing.lastState)
     val now by rememberNow(30_000)
     Column(
@@ -212,6 +212,11 @@ private fun MacRow(pairing: Pairing, problem: String?, direct: Boolean, selected
     ) {
         Text(pairing.macName, style = MaterialTheme.typography.titleMedium)
         if (payload != null) {
+            val freshness = snapshotFreshness(payload.generatedAtMs, now, failed, direct, removed)
+            if (freshness != SnapshotFreshness.Fresh) {
+                Text(stringResource(R.string.last_known), style = MaterialTheme.typography.labelMedium)
+                if (!removed) SnapshotNotice(freshness, pairing.macName, payload.generatedAtMs, now)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(payload.agents.headline(LocalResources.current), style = MaterialTheme.typography.bodyMedium)
                 if (payload.agents.waiting > 0) Chip(stringResource(R.string.need_count, payload.agents.waiting), Palette.need)
@@ -239,6 +244,7 @@ private fun MacPane(model: AppModel, id: String, selected: String?, back: (() ->
     var confirming by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val resources = LocalResources.current
+    val now by rememberNow(30_000)
     Scaffold(topBar = { Bar(pairing?.macName ?: stringResource(R.string.removed), back) }) { padding ->
         if (pairing == null) {
             Message(padding, stringResource(R.string.removed), "")
@@ -252,7 +258,16 @@ private fun MacPane(model: AppModel, id: String, selected: String?, back: (() ->
             if (payload == null) {
                 item { Text(stringResource(R.string.first_update), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                header(payload.agents.headline(resources))
+                val freshness = snapshotFreshness(payload.generatedAtMs, now, id in model.stateTransportFailed, id in model.direct, id in model.removedPairings)
+                header(if (freshness == SnapshotFreshness.Fresh) payload.agents.headline(resources)
+                    else resources.getString(R.string.last_known_counts, payload.agents.headline(resources)))
+                if (freshness != SnapshotFreshness.Fresh && id !in model.removedPairings) {
+                    item {
+                        Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            SnapshotNotice(freshness, pairing.macName, payload.generatedAtMs, now)
+                        }
+                    }
+                }
                 item {
                     CatView(
                         payload.cat,
@@ -361,6 +376,17 @@ private fun SessionPane(model: AppModel, mac: String, key: String?, back: (() ->
             }
         }
     }
+}
+
+@Composable
+private fun SnapshotNotice(freshness: SnapshotFreshness, name: String, generatedAtMs: Long, now: Long) {
+    val relative = DateUtils.getRelativeTimeSpanString(generatedAtMs, now, DateUtils.MINUTE_IN_MILLIS).toString()
+    val message = when (freshness) {
+        SnapshotFreshness.Fresh -> return
+        SnapshotFreshness.MacQuiet -> stringResource(R.string.mac_quiet, name, relative)
+        SnapshotFreshness.Unreachable -> stringResource(R.string.mac_unreachable, name, relative)
+    }
+    Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 // MARK: Parts

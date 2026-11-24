@@ -98,4 +98,8 @@
     <string name="pairing_url" translatable="false">agentpulse://pair?…</string>
     <string name="pairing_code" translatable="false">%1$s %2$s</string>
     <string name="error_detail" translatable="false">%1$s</string>
+    <string name="last_known">Last known</string>
+    <string name="mac_quiet">%1$s last updated %2$s. It may be asleep or offline.</string>
+    <string name="mac_unreachable">Can\'t reach %1$s. Showing its last known status from %2$s.</string>
+    <string name="last_known_counts">Last known · %1$s</string>
 </resources>

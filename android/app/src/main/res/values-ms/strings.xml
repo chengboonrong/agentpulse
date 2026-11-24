@@ -93,4 +93,8 @@
     <string name="price_fixture">Dianggarkan daripada harga senarai.</string>
     <string name="completed_lower">selesai</string>
     <string name="failed_lower">gagal</string>
+    <string name="last_known">Status terakhir diketahui</string>
+    <string name="mac_quiet">%1$s kali terakhir dikemas kini %2$s. Mac mungkin dalam mod tidur atau di luar talian.</string>
+    <string name="mac_unreachable">Tidak dapat menghubungi %1$s. Memaparkan status terakhir yang diketahui dari %2$s.</string>
+    <string name="last_known_counts">Status terakhir diketahui · %1$s</string>
 </resources>

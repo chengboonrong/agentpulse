@@ -93,4 +93,8 @@
     <string name="price_fixture">公示価格による推定。</string>
     <string name="completed_lower">完了</string>
     <string name="failed_lower">失敗</string>
+    <string name="last_known">最後に確認した状態</string>
+    <string name="mac_quiet">%1$s の最終更新は %2$sです。スリープ中かオフラインの可能性があります。</string>
+    <string name="mac_unreachable">%1$s に接続できません。%2$sの最後に確認した状態を表示しています。</string>
+    <string name="last_known_counts">最後に確認した状態 · %1$s</string>
 </resources>
