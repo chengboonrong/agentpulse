@@ -54,8 +54,14 @@ not been measured.
   are keyed by provider and id (the schema already had a provider column, so no
   migration). Rows name their agent ("Codex · ~/project"), as does the menu bar.
 - Built, not exercised: the Active state of a Codex session (no Codex task ran while it was
-  checked), reading uncompressed rollouts from `archived_sessions` (the local archives are
-  all `.jsonl.zst`, which are not read), and cache writes (every local record had 0).
+  checked), and cache writes (every local record had 0).
+- Done: compressed Codex archives (`.jsonl.zst`) are read with plain/compressed twin
+  selection, compressed-size cursors and replay deduplication. Synthetic archive and
+  storage tests cover both forms. With `since_ms = 0`, the real `~/.codex` yielded
+  1028 rollout files (768 `.jsonl.zst`), 15,726 events and 1.55B tokens, read in
+  4.6 s over 11 budgeted polls. An unchanged repeat poll took 2.4 ms and read nothing.
+- Built, not exercised: reading uncompressed rollouts from `archived_sessions` and
+  plain/compressed twin handling (no plain archived rollouts or twins exist locally).
 - Done: Qwen Code adapter. Read-only JSONL tailing under `$QWEN_RUNTIME_DIR` (or `~/.qwen`),
   metadata-only parsing, disjoint token buckets, transcript-age status and an unpriced lilac cat.
 - Done: Grok CLI adapter. Sessions under `$GROK_HOME` (or `~/.grok`): tokens and Grok's own
@@ -284,7 +290,15 @@ not been measured.
   open. Those sessions have no CPU or memory figure, and such a process is counted for no
   session.
 - A Codex session is seen starting or ending up to 5 s late.
-- Compressed Codex archives (`.jsonl.zst`) are not read.
+- Compressed Codex archives are read once per file identity and size; changed archives
+  are replayed from the beginning. Corrupt archives emit no events, keep their cursor
+  and are not retried until identity or size changes.
+- Archives use the same backfill window as plain rollouts: without a cursor, files
+  older than the collector's `since_ms` (midnight or 1 day back) are skipped unless
+  their thread is live. Open archives do not establish liveness. Codex compresses
+  rollouts after about 7 days cold and keeps mtime. Previously ingested plain history
+  stays, with event ids deduplicated across forms; archives fill in eligible history
+  inside that window or never seen plain, subject to the same mtime gate.
 - The widget's data file has no agent field; its contract is unchanged, so widgets do not
   say which agent a session belongs to.
 

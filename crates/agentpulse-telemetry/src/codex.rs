@@ -10,17 +10,18 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agentpulse_core::{
-    AgentAdapter, FileCursor, LiveSession, LiveState, PollBatch, Provider, RateLimits, RateWindow,
-    SessionDelta, TokenUsage, UsageEvent,
+    AgentAdapter, FileCursor, FileIdentity, LiveSession, LiveState, PollBatch, Provider,
+    RateLimits, RateWindow, SessionDelta, TokenUsage, UsageEvent,
 };
 use agentpulse_process::OpenFiles;
 use serde::Deserialize;
 
-use crate::tail::{Groups, Tailer, TranscriptFile, read_lines, ts_ms};
+use crate::tail::{Groups, Tailer, TranscriptFile, read_lines, read_stream, ts_ms};
 
 /// The record type and an event's subtype sit in a line's first bytes.
 const HEAD: usize = 256;
@@ -42,6 +43,8 @@ pub struct CodexAdapter {
     tail: Tailer,
     /// Per rollout path: what its lines so far established.
     files: HashMap<String, FileState>,
+    failed_archives: HashMap<String, (FileIdentity, u64)>,
+    archive_limits: Option<RateLimits>,
     open_files: OpenFilesFn,
     /// Rollouts open per `codex` process, as of the last poll.
     open: Vec<OpenFiles>,
@@ -80,6 +83,8 @@ impl CodexAdapter {
             root,
             tail: Tailer::new(),
             files: HashMap::new(),
+            failed_archives: HashMap::new(),
+            archive_limits: None,
             open_files: Box::new(open_rollouts()),
             open: Vec::new(),
         }
@@ -121,7 +126,7 @@ fn open_rollouts() -> impl FnMut() -> Vec<OpenFiles> + Send {
         {
             let open = agentpulse_process::processes_named("codex")
                 .into_iter()
-                .filter_map(|p| agentpulse_process::open_files(p, is_rollout))
+                .filter_map(|p| agentpulse_process::open_files(p, is_open_rollout))
                 .collect();
             last = Some((Instant::now(), open));
         }
@@ -129,14 +134,22 @@ fn open_rollouts() -> impl FnMut() -> Vec<OpenFiles> + Send {
     }
 }
 
+fn is_open_rollout(path: &str) -> bool {
+    is_rollout(path) && path.ends_with(".jsonl")
+}
+
 fn is_rollout(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    name.starts_with("rollout-") && name.ends_with(".jsonl")
+    name.starts_with("rollout-") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
 }
 
 /// `rollout-<timestamp>-<thread id>.jsonl` → the thread id (a 36-char UUID).
 fn thread_id(path: &str) -> Option<String> {
-    let stem = path.rsplit('/').next()?.strip_suffix(".jsonl")?;
+    let name = path.rsplit('/').next()?;
+    let stem = name
+        .strip_suffix(".zst")
+        .unwrap_or(name)
+        .strip_suffix(".jsonl")?;
     let id = stem.get(stem.len().checked_sub(36)?..)?;
     (stem.starts_with("rollout-") && id.bytes().filter(|&b| b == b'-').count() == 4)
         .then(|| id.to_string())
@@ -389,6 +402,80 @@ fn to_event(p: &Payload, st: &FileState, session_id: &str, ts: i64) -> Option<Us
     })
 }
 
+/// Every zstd frame of an archive as one byte stream, so a line may span
+/// frames. Each frame's checksum, when present, is checked as it ends.
+/// Skippable frames are not supported (Codex writes none).
+struct Frames<'a> {
+    input: Option<&'a mut std::io::Take<&'a mut fs::File>>,
+    frame: Option<
+        ruzstd::decoding::StreamingDecoder<
+            &'a mut std::io::Take<&'a mut fs::File>,
+            ruzstd::decoding::FrameDecoder,
+        >,
+    >,
+}
+
+impl<'a> Frames<'a> {
+    fn new(input: &'a mut std::io::Take<&'a mut fs::File>) -> Self {
+        Self {
+            input: Some(input),
+            frame: None,
+        }
+    }
+}
+
+impl Read for Frames<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let invalid = |e| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+        loop {
+            if let Some(d) = &mut self.frame {
+                let n = d.read(buf).map_err(|e| invalid(e.to_string()))?;
+                if n > 0 || buf.is_empty() {
+                    return Ok(n);
+                }
+                let d = self.frame.take().expect("frame is open");
+                let sum = d.decoder.get_checksum_from_data();
+                if sum.is_some_and(|s| Some(s) != d.decoder.get_calculated_checksum()) {
+                    return Err(invalid("archive checksum mismatch".into()));
+                }
+                self.input = Some(d.into_inner());
+            }
+            let Some(input) = self.input.take() else {
+                return Ok(0);
+            };
+            if input.limit() == 0 {
+                return Ok(0);
+            }
+            let frame = ruzstd::decoding::StreamingDecoder::new(input)
+                .map_err(|e| invalid(e.to_string()))?;
+            self.frame = Some(frame);
+        }
+    }
+}
+
+/// Only one of a directory's plain/compressed twins is discovered. Codex
+/// preserves mtime when compressing; a strictly newer plain file has appends.
+fn selected_rollout(path: &Path) -> bool {
+    let compressed = path.extension().is_some_and(|e| e == "zst");
+    let plain = if compressed {
+        path.with_extension("")
+    } else {
+        path.to_path_buf()
+    };
+    let archive = plain.with_extension("jsonl.zst");
+    let regular = |p: &Path| fs::symlink_metadata(p).ok().filter(|m| m.is_file());
+    let (Some(p), Some(z)) = (regular(&plain), regular(&archive)) else {
+        return true;
+    };
+    let prefer_compressed = z.len() > 0
+        && !(p.len() > 0
+            && p.modified()
+                .ok()
+                .zip(z.modified().ok())
+                .is_some_and(|(p, z)| p > z));
+    compressed == prefer_compressed
+}
+
 /// Errors below `dir` are logged and skipped. Symlinked folders are not
 /// followed (no loops).
 fn walk(dir: &Path, out: &mut Groups) -> std::io::Result<()> {
@@ -399,6 +486,9 @@ fn walk(dir: &Path, out: &mut Groups) -> std::io::Result<()> {
                 tracing::warn!(path = %p.display(), "cannot read rollout folder");
             }
         } else if let Some(id) = p.to_str().filter(|s| is_rollout(s)).and_then(thread_id) {
+            if !selected_rollout(&p) {
+                continue;
+            }
             out.push((
                 id,
                 vec![TranscriptFile {
@@ -412,7 +502,7 @@ fn walk(dir: &Path, out: &mut Groups) -> std::io::Result<()> {
 }
 
 /// Every rollout under `sessions/` and `archived_sessions/`, one group per
-/// thread file. Compressed archives (`.jsonl.zst`) are not read.
+/// thread file, including `.jsonl.zst` archives with only the selected twin.
 fn discover(root: &Path) -> std::io::Result<Groups> {
     // Open-file paths from the kernel are canonical; keys must match them.
     let root = fs::canonicalize(root)?;
@@ -454,7 +544,8 @@ impl AgentAdapter for CodexAdapter {
         // Only rollouts under this adapter's root: another `CODEX_HOME` is not ours.
         let root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
         for o in &mut self.open {
-            o.paths.retain(|p| Path::new(p).starts_with(&root));
+            o.paths
+                .retain(|p| Path::new(p).starts_with(&root) && is_open_rollout(p));
         }
         self.open.retain(|o| !o.paths.is_empty());
         // A thread whose rollout is open keeps its whole history, however old.
@@ -470,6 +561,8 @@ impl AgentAdapter for CodexAdapter {
             events: &mut events,
         };
         let files = &mut self.files;
+        let failed_archives = &mut self.failed_archives;
+        let archive_limits = &mut self.archive_limits;
         let root = &self.root;
         (batch.files, batch.more) = self.tail.poll(
             &live,
@@ -479,6 +572,67 @@ impl AgentAdapter for CodexAdapter {
             |_| true,
             |thread, f, handle, start, size| {
                 let key = f.path.to_string_lossy().into_owned();
+                if f.path.extension().is_some_and(|e| e == "zst") {
+                    let fingerprint = (crate::tail::identity_of(&handle.metadata()?), size);
+                    if failed_archives.get(&key) == Some(&fingerprint) {
+                        return Ok(0);
+                    }
+                    let mut st = FileState::default();
+                    let (mut accs, mut events) = (BTreeMap::new(), HashMap::new());
+                    let result = (|| {
+                        handle.rewind()?;
+                        let mut input = handle.take(size);
+                        read_stream(Frames::new(&mut input), |l| {
+                            fold_line(
+                                l,
+                                thread,
+                                &mut st,
+                                Some(&mut Out {
+                                    accs: &mut accs,
+                                    events: &mut events,
+                                }),
+                            )
+                        })
+                    })();
+                    if let Err(e) = result {
+                        // A transient I/O error is retried; a bad archive waits for a change.
+                        if e.kind() == std::io::ErrorKind::InvalidData {
+                            failed_archives.insert(key, fingerprint);
+                        }
+                        return Err(e);
+                    }
+                    failed_archives.remove(&key);
+                    files.remove(&key);
+                    if let Some(limits) = st.rate_limits
+                        && archive_limits
+                            .as_ref()
+                            .is_none_or(|r| limits.ts_ms >= r.ts_ms)
+                    {
+                        *archive_limits = Some(limits);
+                    }
+                    for (sid, acc) in accs {
+                        let dest = out.accs.entry(sid).or_default();
+                        dest.timestamps.extend(acc.timestamps);
+                        if dest.cwd.is_none() {
+                            dest.cwd = acc.cwd;
+                        }
+                        if acc.model.as_ref().is_some_and(|(ts, _)| {
+                            dest.model.as_ref().is_none_or(|(old, _)| ts >= old)
+                        }) {
+                            dest.model = acc.model;
+                        }
+                    }
+                    for (id, event) in events {
+                        if out
+                            .events
+                            .get(&id)
+                            .is_none_or(|old| old.usage.total() < event.usage.total())
+                        {
+                            out.events.insert(id, event);
+                        }
+                    }
+                    return Ok(size);
+                }
                 // State read past `start` (a failed read, or a batch the store
                 // did not keep) would price the re-read lines with later
                 // settings: rebuild it.
@@ -520,6 +674,7 @@ impl AgentAdapter for CodexAdapter {
             .files
             .values()
             .filter_map(|s| s.rate_limits.as_ref())
+            .chain(self.archive_limits.as_ref())
             .max_by_key(|r| r.ts_ms)
             .cloned();
         batch
@@ -633,6 +788,36 @@ mod tests {
     }
 
     #[test]
+    fn successful_archive_drops_parser_state_but_keeps_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sessions")).unwrap();
+        let path = dir.path().join(
+            "sessions/rollout-2026-11-12T17-38-01-01a1cf1f-0cba-7370-8553-6b299fb729e3.jsonl.zst",
+        );
+        let line = b"{\"timestamp\":\"2026-11-13T02:00:01.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"plan_type\":\"pro\"}}}\n";
+        fs::write(
+            path,
+            ruzstd::encoding::compress_to_vec(
+                &line[..],
+                ruzstd::encoding::CompressionLevel::Fastest,
+            ),
+        )
+        .unwrap();
+        let mut adapter = CodexAdapter::new(dir.path().to_owned()).with_open_files(Vec::new);
+        let batch = adapter.poll(&HashMap::new(), 0).unwrap();
+        assert_eq!(batch.files.len(), 1);
+        assert!(adapter.files.is_empty());
+        assert_eq!(batch.rate_limits.unwrap().plan_type.as_deref(), Some("pro"));
+        assert!(
+            adapter
+                .poll(&HashMap::new(), 0)
+                .unwrap()
+                .rate_limits
+                .is_some()
+        );
+    }
+
+    #[test]
     fn thread_id_from_file_name() {
         assert_eq!(
             thread_id("/x/rollout-2026-11-12T17-38-01-01a1cf1f-0cba-7370-8553-6b299fb729e3.jsonl")
@@ -644,7 +829,16 @@ mod tests {
             thread_id("/x/other-2026-11-12T17-38-01-01a1cf1f-0cba-7370-8553-6b299fb729e3.jsonl"),
             None
         );
-        assert!(!is_rollout("/x/rollout-a.jsonl.zst"));
+        assert!(is_rollout("/x/rollout-a.jsonl.zst"));
+        assert!(!is_open_rollout("/x/rollout-a.jsonl.zst"));
+        assert!(is_open_rollout("/x/rollout-a.jsonl"));
+        assert_eq!(
+            thread_id(
+                "/x/rollout-2026-11-12T17-38-01-01a1cf1f-0cba-7370-8553-6b299fb729e3.jsonl.zst"
+            )
+            .as_deref(),
+            Some("01a1cf1f-0cba-7370-8553-6b299fb729e3")
+        );
     }
 
     #[test]

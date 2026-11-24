@@ -126,6 +126,9 @@ impl Tailer {
                 if !meta.is_file() {
                     continue;
                 }
+                // Compressed rollouts are immutable, including when their
+                // thread also has an open plain rollout.
+                let immutable = f.path.extension().is_some_and(|e| e == "zst");
                 let size = meta.len();
                 let mtime = meta
                     .modified()
@@ -152,7 +155,7 @@ impl Tailer {
                 let identity = Some(identity_of(&meta));
                 // Live adapters may need to rebuild parser state after a restart,
                 // even when no new bytes are available.
-                if !live.contains(&sid)
+                if (immutable || !live.contains(&sid))
                     && offsets
                         .get(&key)
                         .is_some_and(|c| c.offset == size && c.identity == identity)
@@ -163,7 +166,7 @@ impl Tailer {
                 if !allowed(&f) {
                     continue;
                 }
-                if !live.contains(&sid)
+                if (immutable || !live.contains(&sid))
                     && offsets
                         .get(&key)
                         .is_some_and(|c| c.identity.is_none() && c.offset == size)
@@ -182,6 +185,9 @@ impl Tailer {
                 };
                 let size = meta.len();
                 let identity = Some(identity_of(&meta));
+                // Any archive read starts over and charges its full compressed
+                // size to the budget, even if the saved offset was nonzero.
+                let start = if immutable { 0 } else { start };
                 match read(&sid, &f, &mut handle, start, size) {
                     Ok(end)
                         if end > start
@@ -228,13 +234,18 @@ pub(crate) fn read_lines(
     f: &mut File,
     start: u64,
     end: Option<u64>,
-    mut each: impl FnMut(&[u8]),
+    each: impl FnMut(&[u8]),
 ) -> std::io::Result<u64> {
     f.seek(SeekFrom::Start(start))?;
     let limit = end.map_or(u64::MAX, |e| e.saturating_sub(start));
-    let mut r = BufReader::with_capacity(256 * 1024, f.take(limit));
+    read_stream(f.take(limit), each).map(|bytes| start + bytes)
+}
+
+/// The complete-line loop for plain transcripts and decoded archive streams.
+pub(crate) fn read_stream(reader: impl Read, mut each: impl FnMut(&[u8])) -> std::io::Result<u64> {
+    let mut r = BufReader::with_capacity(256 * 1024, reader);
     let mut buf = Vec::new();
-    let mut offset = start;
+    let mut offset = 0;
     loop {
         buf.clear();
         let n = r.read_until(b'\n', &mut buf)?;
@@ -255,7 +266,7 @@ pub(crate) fn ts_ms(s: &str) -> Option<i64> {
         .map(|d| d.timestamp_millis())
 }
 
-fn identity_of(meta: &Metadata) -> FileIdentity {
+pub(crate) fn identity_of(meta: &Metadata) -> FileIdentity {
     FileIdentity {
         birth: meta
             .created()
@@ -295,6 +306,49 @@ pub(crate) fn open_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immutable_archive_skips_callback_and_restarts_with_full_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl.zst");
+        fs::write(&path, b"archive").unwrap();
+        let mut tail = Tailer::new();
+        let live = HashSet::from(["thread".to_string()]);
+        let mut reads = 0;
+        let mut poll = |tail: &mut Tailer, offsets: &HashMap<String, FileCursor>| {
+            tail.poll(
+                &live,
+                offsets,
+                0,
+                || {
+                    Ok(vec![(
+                        "thread".into(),
+                        vec![TranscriptFile {
+                            path: path.clone(),
+                            is_main: true,
+                        }],
+                    )])
+                },
+                |_| true,
+                |_, _, _, start, size| {
+                    reads += 1;
+                    assert_eq!(start, 0);
+                    Ok(size)
+                },
+            )
+            .unwrap()
+        };
+        let (first, _) = poll(&mut tail, &HashMap::new());
+        let offsets = HashMap::from([(first[0].path.clone(), first[0].clone())]);
+        fs::write(&path, b"corrupt").unwrap(); // Same identity and size.
+        assert!(poll(&mut tail, &offsets).0.is_empty());
+        fs::write(&path, b"larger archive").unwrap();
+        tail.read_budget = 10; // Full compressed size exceeds it; the delta does not.
+        let (changed, more) = poll(&mut tail, &offsets);
+        assert_eq!(changed[0].offset, 14);
+        assert!(more);
+        assert_eq!(reads, 2);
+    }
 
     #[test]
     fn non_regular_transcripts_are_never_read() {
