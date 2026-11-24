@@ -149,6 +149,15 @@ pub fn palette(provider: Provider) -> Palette {
             accent: PINK,
             dust: DUST,
         },
+        Provider::Gemini => Palette {
+            outline: [154, 134, 240, 255],
+            body: [42, 30, 90, 255],
+            shade: [30, 22, 64, 255],
+            belly: [58, 42, 116, 255],
+            eye: [246, 224, 94, 255],
+            accent: PINK,
+            dust: DUST,
+        },
         Provider::Qwen => Palette {
             outline: [120, 106, 112, 255],
             body: [194, 178, 182, 255],

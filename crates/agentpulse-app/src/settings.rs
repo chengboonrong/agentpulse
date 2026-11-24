@@ -54,6 +54,7 @@ pub struct Looks {
     open_code: Look,
     grok: Look,
     qwen: Look,
+    gemini: Look,
 }
 
 impl Default for Looks {
@@ -64,6 +65,7 @@ impl Default for Looks {
             open_code: Look::default_for(Provider::OpenCode),
             grok: Look::default_for(Provider::Grok),
             qwen: Look::default_for(Provider::Qwen),
+            gemini: Look::default_for(Provider::Gemini),
         }
     }
 }
@@ -76,6 +78,7 @@ impl Looks {
             Provider::OpenCode => self.open_code,
             Provider::Grok => self.grok,
             Provider::Qwen => self.qwen,
+            Provider::Gemini => self.gemini,
         }
     }
 
@@ -86,6 +89,7 @@ impl Looks {
             Provider::OpenCode => self.open_code = look,
             Provider::Grok => self.grok = look,
             Provider::Qwen => self.qwen = look,
+            Provider::Gemini => self.gemini = look,
         }
     }
 }
@@ -700,7 +704,7 @@ mod tests {
     #[test]
     fn each_agent_keeps_its_own_look() {
         let mut looks = Looks::default();
-        let coats = ["calico", "tuxedo", "van", "black", "lilac"];
+        let coats = ["calico", "tuxedo", "van", "black", "lilac", "galaxy"];
         for (p, id) in Provider::ALL.into_iter().zip(coats) {
             looks.set(
                 p,
@@ -725,6 +729,7 @@ mod tests {
         assert_eq!(v["cats"]["codex"]["coat"], "codex-night");
         assert_eq!(v["cats"]["opencode"]["eye"], Value::Null);
         assert_eq!(v["cats"]["qwen-code"]["coat"], "lilac");
+        assert_eq!(v["cats"]["gemini-cli"]["coat"], "galaxy");
         assert_eq!(state(&v.to_string()), State::default());
     }
 

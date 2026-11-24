@@ -4,7 +4,7 @@
 
 use agentpulse_platform_macos::reduce_motion;
 use agentpulse_telemetry::{
-    ClaudeCodeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter, QwenAdapter,
+    ClaudeCodeAdapter, CodexAdapter, GeminiAdapter, GrokAdapter, OpenCodeAdapter, QwenAdapter,
 };
 use gpui::ClickEvent;
 
@@ -147,6 +147,7 @@ fn detected(p: Provider) -> bool {
         Provider::OpenCode => OpenCodeAdapter::default_root(),
         Provider::Grok => GrokAdapter::default_root(),
         Provider::Qwen => QwenAdapter::default_root(),
+        Provider::Gemini => GeminiAdapter::default_root(),
     }
     .is_some_and(|root| root.exists())
 }
